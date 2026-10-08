@@ -799,6 +799,101 @@ definition invariants_error :: "CoreValue list \<Rightarrow> InterpError option"
      else None)"
 
 (* ========================================================================== *)
+(* Decreases-terms of loops *)
+(* ========================================================================== *)
+
+(* The value of a decreases-term is checked whenever it is evaluated: it must
+   be a bool, an integer (finite or mathematical), or a record of such values,
+   and every mathematical integer in it must be non-negative. (The mathematical
+   integers are not well-ordered, so this is the convention under which a
+   decreases-value is bounded below.) A negative mathematical integer is a
+   RuntimeError. A value of any other shape is a TypeError, which cannot arise
+   in a well-typed program, since a decreases-term has a valid decreases type. *)
+function decreases_value_error :: "CoreValue \<Rightarrow> InterpError option"
+and decreases_fields_error :: "(string \<times> CoreValue) list \<Rightarrow> InterpError option" where
+  "decreases_value_error (CV_Bool _) = None"
+| "decreases_value_error (CV_FiniteInt _ _ _) = None"
+| "decreases_value_error (CV_Int i) = (if i < 0 then Some RuntimeError else None)"
+| "decreases_value_error (CV_Record flds) = decreases_fields_error flds"
+| "decreases_value_error (CV_Variant _ _) = Some TypeError"
+| "decreases_value_error (CV_Array _ _) = Some TypeError"
+| "decreases_value_error (CV_Real _) = Some TypeError"
+
+| "decreases_fields_error [] = None"
+| "decreases_fields_error ((_, v) # flds) =
+    (case decreases_value_error v of
+       Some err \<Rightarrow> Some err
+     | None \<Rightarrow> decreases_fields_error flds)"
+  by pat_completeness auto
+
+termination decreases_value_error
+  by (relation "measure (case_sum (\<lambda>v. Suc (size v)) (\<lambda>flds. size (CV_Record flds)))") auto
+
+(* The strict ordering on decreases-values: false is below true; integers are
+   ordered as usual; records are ordered lexicographically, field by field.
+   Values of different shapes are never ordered (this cannot arise in a
+   well-typed program, where the two values compared have the same type). *)
+function (sequential) decreases_lt :: "CoreValue \<Rightarrow> CoreValue \<Rightarrow> bool"
+and decreases_fields_lt :: "(string \<times> CoreValue) list \<Rightarrow> (string \<times> CoreValue) list \<Rightarrow> bool" where
+  "decreases_lt (CV_Bool a) (CV_Bool b) = (\<not> a \<and> b)"
+| "decreases_lt (CV_FiniteInt _ _ a) (CV_FiniteInt _ _ b) = (a < b)"
+| "decreases_lt (CV_Int a) (CV_Int b) = (a < b)"
+| "decreases_lt (CV_Record flds1) (CV_Record flds2) = decreases_fields_lt flds1 flds2"
+| "decreases_lt _ _ = False"
+
+| "decreases_fields_lt ((_, a) # flds1) ((_, b) # flds2) =
+    (decreases_lt a b \<or> (a = b \<and> decreases_fields_lt flds1 flds2))"
+| "decreases_fields_lt _ _ = False"
+  by pat_completeness auto
+
+termination decreases_lt
+  by (relation "measure (case_sum (\<lambda>(a, b). Suc (size a))
+                                  (\<lambda>(flds1, flds2). size (CV_Record flds1)))") auto
+
+(* Compare the values of a loop's decreases-term from before and after a run of
+   the loop body: the loop may continue only if the value strictly decreased.
+   A loop without a decreases-term has nothing to check. (The two values are
+   both present or both absent, so the last clause cannot arise.) *)
+fun decreases_error :: "CoreValue option \<Rightarrow> CoreValue option \<Rightarrow> InterpError option" where
+  "decreases_error None None = None"
+| "decreases_error (Some oldVal) (Some newVal) =
+    (if decreases_lt newVal oldVal then None else Some RuntimeError)"
+| "decreases_error _ _ = Some TypeError"
+
+(* Evaluate a loop's optional decreases-term with the given term evaluator, and
+   check its value (see decreases_value_error).
+   (This was not included in the main interpreter mutual induction because doing
+   so would have impacted a lot of existing proofs.) *)
+fun eval_decreases :: "(CoreTerm \<Rightarrow> InterpError + CoreValue) \<Rightarrow> CoreTerm option
+    \<Rightarrow> InterpError + CoreValue option" where
+  "eval_decreases ev None = Inr None"
+| "eval_decreases ev (Some decrTm) =
+    (case ev decrTm of
+       Inl err \<Rightarrow> Inl err
+     | Inr v \<Rightarrow> (case decreases_value_error v of
+                  Some err \<Rightarrow> Inl err
+                | None \<Rightarrow> Inr (Some v)))"
+
+(* The evaluator is only ever applied to the decreases-term itself. This
+   congruence rule lets the interpreter below pass itself, partially applied,
+   to eval_decreases. *)
+lemma eval_decreases_cong [fundef_cong]:
+  assumes "decr = decr'"
+    and "\<And>tm. decr' = Some tm \<Longrightarrow> ev tm = ev' tm"
+  shows "eval_decreases ev decr = eval_decreases ev' decr'"
+  using assms by (cases decr') simp_all
+
+lemma eval_decreases_shape:
+  "eval_decreases ev decr = Inr v \<Longrightarrow> (v = None) = (decr = None)"
+  by (cases decr) (auto split: sum.splits option.splits)
+
+lemma eval_decreases_Inl:
+  "eval_decreases ev decr = Inl err \<Longrightarrow>
+   \<exists>tm. decr = Some tm
+        \<and> (ev tm = Inl err \<or> (\<exists>v. ev tm = Inr v \<and> decreases_value_error v = Some err))"
+  by (cases decr) (auto split: sum.splits option.splits)
+
+(* ========================================================================== *)
 (* The main intepreter definitions *)
 (* ========================================================================== *)
 
@@ -1134,10 +1229,14 @@ where
       Inr val \<Rightarrow> Inr (Return state val)
     | Inl err \<Rightarrow> Inl err)"
 
-  (* While. Each time the condition is about to be tested (including the last
-     time, when it is false), the invariants are evaluated first, and it is a
-     RuntimeError if one of them is false. The decreases-term is not
-     evaluated. *)
+  (* While.
+      - Each time the condition is about to be tested (including the last time,
+        when it is false), the invariants are evaluated first, and it is a
+        RuntimeError if one of them is false.
+      - Each time the body is about to run, the decreases-term (if any) is evaluated
+        and checked (see eval_decreases); after the body it is evaluated and checked
+        again, in the state the next iteration will start from, and it is a RuntimeError
+        if its value has not strictly decreased (see decreases_error). *)
 | "interp_statement d (Suc fuel) state (CoreStmt_While whileGhost condTm invars decr bodyStmts) =
     (case interp_term_list d fuel state invars of
       Inl err \<Rightarrow> Inl err
@@ -1147,12 +1246,21 @@ where
         | None \<Rightarrow>
             (case interp_term d fuel state condTm of
               Inr (CV_Bool True) \<Rightarrow>
-                (case interp_statement_list d fuel state bodyStmts of
-                  Inr (Continue state') \<Rightarrow>
-                    interp_statement d fuel (restore_scope state state')
-                                      (CoreStmt_While whileGhost condTm invars decr bodyStmts)
-                | Inr (Return state' retVal) \<Rightarrow> Inr (Return (restore_scope state state') retVal)
-                | Inl err \<Rightarrow> Inl err)
+                (case eval_decreases (interp_term d fuel state) decr of
+                  Inl err \<Rightarrow> Inl err
+                | Inr decrVal \<Rightarrow>
+                    (case interp_statement_list d fuel state bodyStmts of
+                      Inr (Continue state') \<Rightarrow>
+                        (case eval_decreases (interp_term d fuel (restore_scope state state')) decr of
+                          Inl err \<Rightarrow> Inl err
+                        | Inr decrVal' \<Rightarrow>
+                            (case decreases_error decrVal decrVal' of
+                              Some err \<Rightarrow> Inl err
+                            | None \<Rightarrow>
+                                interp_statement d fuel (restore_scope state state')
+                                  (CoreStmt_While whileGhost condTm invars decr bodyStmts)))
+                    | Inr (Return state' retVal) \<Rightarrow> Inr (Return (restore_scope state state') retVal)
+                    | Inl err \<Rightarrow> Inl err))
             | Inr (CV_Bool False) \<Rightarrow> Inr (Continue state)
             | Inr _ \<Rightarrow> Inl TypeError
             | Inl err \<Rightarrow> Inl err)))"

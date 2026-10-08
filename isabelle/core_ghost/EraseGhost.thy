@@ -1,5 +1,5 @@
 theory EraseGhost
-  imports TrivialDecreases "../core/CoreSyntax" "../core/CoreModule"
+  imports "../core/CoreSyntax" "../core/CoreModule"
 begin
 
 (* This file contains functions to "ghost-erase" a piece of Core code, i.e.,
@@ -90,8 +90,8 @@ lemma is_lvalue_erase_ghost_term [simp]:
 (* Ghost-erase a single statement, or an entire statement list:
     - A statement marked Ghost is removed.
     - Obtain, Assert, Assume, ShowHide, Fix and Use are removed.
-    - A NotGhost While loses its invariants, and its decreases-term is
-      replaced by a trivial one; its body is ghost-erased.
+    - A NotGhost While loses its invariants and its decreases-term; its body
+      is ghost-erased.
     - The bodies of a NotGhost Match, and of a Block, are ghost-erased.
     - Every other statement is kept.
     - The terms of a statement that is kept are ghost-erased, so a call
@@ -132,7 +132,7 @@ and erase_ghost_statement_list ::
 
 | "erase_ghost_statement funs (CoreStmt_While Ghost _ _ _ _) = []"
 | "erase_ghost_statement funs (CoreStmt_While NotGhost condTm invars decrTm body) =
-    [CoreStmt_While NotGhost (erase_ghost_term funs condTm) [] trivial_decreases
+    [CoreStmt_While NotGhost (erase_ghost_term funs condTm) [] None
        (erase_ghost_statement_list funs body)]"
 
 | "erase_ghost_statement funs (CoreStmt_Match Ghost _ _) = []"

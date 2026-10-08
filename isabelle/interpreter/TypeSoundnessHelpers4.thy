@@ -21,6 +21,69 @@ proof -
   then show ?thesis by (auto simp: invariants_error_def)
 qed
 
+(* Checking the value of a decreases-term is not a TypeError when the value
+   has a valid decreases type. (It can still be a RuntimeError: a mathematical
+   integer in it can be negative.) *)
+lemma decreases_value_error_sound:
+  shows "value_has_type env v ty \<Longrightarrow> is_valid_decreases_type ty
+         \<Longrightarrow> decreases_value_error v \<noteq> Some TypeError"
+    and "list_all2 (\<lambda>(n1, fv) (n2, ft). n1 = n2 \<and> value_has_type env fv ft) flds fldTys
+         \<Longrightarrow> list_all (\<lambda>(_, t). is_valid_decreases_type t) fldTys
+         \<Longrightarrow> decreases_fields_error flds \<noteq> Some TypeError"
+proof (induction v and flds arbitrary: ty and fldTys
+       rule: decreases_value_error_decreases_fields_error.induct)
+  case (1 b)
+  then show ?case by simp
+next
+  case (2 sign bits i)
+  then show ?case by simp
+next
+  case (3 i)
+  then show ?case by simp
+next
+  case (4 flds)
+  from "4.prems"(1) obtain fldTys where
+    ty_eq: "ty = CoreTy_Record fldTys" and
+    all2: "list_all2 (\<lambda>(n1, fv) (n2, ft). n1 = n2 \<and> value_has_type env fv ft) flds fldTys"
+    by (cases ty) auto
+  from "4.prems"(2) ty_eq have "list_all (\<lambda>(_, t). is_valid_decreases_type t) fldTys"
+    by simp
+  from "4.IH"[OF all2 this] show ?case by simp
+next
+  case (5 ctor payload)
+  from "5.prems" show ?case by (cases ty) (auto split: option.splits)
+next
+  case (6 sizes elems)
+  from "6.prems" show ?case by (cases ty) auto
+next
+  case (7 r)
+  from "7.prems" show ?case by (cases ty) auto
+next
+  case 8
+  then show ?case by simp
+next
+  case (9 n v flds)
+  from "9.prems"(1) obtain n2 t fldTys' where
+    tys_eq: "fldTys = (n2, t) # fldTys'" and
+    vt: "value_has_type env v t" and
+    rest: "list_all2 (\<lambda>(n1, fv) (n2, ft). n1 = n2 \<and> value_has_type env fv ft) flds fldTys'"
+    by (cases fldTys) auto
+  from "9.prems"(2) tys_eq have
+    t_valid: "is_valid_decreases_type t" and
+    rest_valid: "list_all (\<lambda>(_, t). is_valid_decreases_type t) fldTys'"
+    by simp_all
+  have hd: "decreases_value_error v \<noteq> Some TypeError"
+    by (rule "9.IH"(1)[OF vt t_valid])
+  show ?case
+  proof (cases "decreases_value_error v")
+    case None
+    from "9.IH"(2)[OF None rest rest_valid] None show ?thesis by simp
+  next
+    case (Some err)
+    with hd show ?thesis by simp
+  qed
+qed
+
 (* The main type soundness theorem, stated at fixed depth d, given that terms are sound
    at every smaller depth. *)
 lemma type_soundness_at_depth:
@@ -1899,6 +1962,54 @@ next
               from body_typed obtain bodyEnv' where
                 body_ty: "core_statement_list_type benv whileGhost bodyStmts = Some bodyEnv'"
                 by blast
+              \<comment> \<open>The decreases-term (if any) is typed at a valid decreases type in
+                  Ghost mode, so evaluating and checking it, in any state that
+                  matches env, is not a TypeError. \<close>
+              from typing CoreStmt_While have decr_ok: "has_valid_decreases_type env decr"
+                by (auto split: if_splits option.splits CoreType.splits)
+              have decr_sound: "sound_error_result err"
+                if sme0: "state_matches_env state0 env storeTyping"
+                and ev: "eval_decreases (interp_term d fuel state0) decr = Inl err"
+                for state0 :: "'w InterpState" and err
+              proof -
+                from eval_decreases_Inl[OF ev] obtain decrTm where
+                  d_eq: "decr = Some decrTm" and
+                  alt: "interp_term d fuel state0 decrTm = Inl err
+                        \<or> (\<exists>v. interp_term d fuel state0 decrTm = Inr v
+                                \<and> decreases_value_error v = Some err)"
+                  by blast
+                from decr_ok d_eq obtain decrTy where
+                  decr_ty: "core_term_type env Ghost decrTm = Some decrTy" and
+                  decr_valid: "is_valid_decreases_type decrTy"
+                  by (auto split: option.splits)
+                from IH_term[OF sme0 "4.prems"(2) decr_ty]
+                have ds: "sound_term_result state0 env decrTy (interp_term d fuel state0 decrTm)" .
+                show ?thesis
+                proof (cases "interp_term d fuel state0 decrTm")
+                  case (Inl err')
+                  with alt ds show ?thesis by simp
+                next
+                  case (Inr v)
+                  with alt have dve: "decreases_value_error v = Some err" by simp
+                  from ds Inr have "value_has_type env v (apply_subst (IS_TyArgs state0) decrTy)"
+                    by simp
+                  hence "value_has_type env v decrTy"
+                    by (simp add: is_valid_decreases_type_apply_subst[OF decr_valid])
+                  from decreases_value_error_sound(1)[OF this decr_valid] dve
+                  have "err \<noteq> TypeError" by auto
+                  thus ?thesis by (cases err) simp_all
+                qed
+              qed
+              show ?thesis
+              proof (cases "eval_decreases (interp_term d fuel state) decr")
+                case (Inl err)
+                from decr_sound[OF "4.prems"(1) Inl] have "sound_error_result err" .
+                moreover have "interp_statement d (Suc fuel) state
+                    (CoreStmt_While whileGhost condTm invars decr bodyStmts) = Inl err"
+                  using cond_eval condVal_eq True Inl by simp
+                ultimately show ?thesis using CoreStmt_While by simp
+              next
+                case Decr0: (Inr decrVal)
               \<comment> \<open>state_matches_env / tyenv_well_formed transfer from env to benv
                   (benv differs only in TE_ProofTopLevel, which they ignore). \<close>
               have sme_benv: "state_matches_env state benv storeTyping"
@@ -1926,7 +2037,7 @@ next
                 with body_sound have "sound_error_result body_err" by simp
                 moreover have "interp_statement d (Suc fuel) state
                     (CoreStmt_While whileGhost condTm invars decr bodyStmts) = Inl body_err"
-                  using cond_eval condVal_eq True Inl by simp
+                  using cond_eval condVal_eq True Decr0 Inl by simp
                 ultimately show ?thesis using CoreStmt_While by simp
               next
                 case (Inr bodyRes)
@@ -1956,17 +2067,51 @@ next
                     using restore_scope_sound[OF "4.prems"(1) sme_body ext_body
                                                  globals_eq functions_eq ctors_by_type_eq
                                                  dt_eq(1) dt_eq(2)] .
-                  \<comment> \<open>Recursive call: apply the fuel-level statement IH. \<close>
-                  from IH_stmt[OF sme_rs "4.prems"(2) no_goal while_typed]
-                  have rec_sound: "sound_statement_result env env storeTyping
-                      (interp_statement d fuel (restore_scope state state1)
-                         (CoreStmt_While whileGhost condTm invars decr bodyStmts))" .
-                  have interp_eq: "interp_statement d (Suc fuel) state
-                      (CoreStmt_While whileGhost condTm invars decr bodyStmts)
-                      = interp_statement d fuel (restore_scope state state1)
-                         (CoreStmt_While whileGhost condTm invars decr bodyStmts)"
-                    using cond_eval condVal_eq True body_eval Continue by simp
-                  from rec_sound interp_eq env'_eq CoreStmt_While show ?thesis by simp
+                  \<comment> \<open>The decreases-term is evaluated again after the body, in the
+                      restored state (which matches env), and its value is
+                      compared with the one from before the body. \<close>
+                  show ?thesis
+                  proof (cases "eval_decreases (interp_term d fuel (restore_scope state state1)) decr")
+                    case (Inl err)
+                    from decr_sound[OF sme_rs Inl] have "sound_error_result err" .
+                    moreover have "interp_statement d (Suc fuel) state
+                        (CoreStmt_While whileGhost condTm invars decr bodyStmts) = Inl err"
+                      using cond_eval condVal_eq True Decr0 body_eval Continue Inl by simp
+                    ultimately show ?thesis using CoreStmt_While by simp
+                  next
+                    case Decr1: (Inr decrVal')
+                    show ?thesis
+                    proof (cases "decreases_error decrVal decrVal'")
+                      case (Some err)
+                      \<comment> \<open>Both values are present or both absent, so the comparison
+                          is not a TypeError. \<close>
+                      have "(decrVal = None) = (decrVal' = None)"
+                        using eval_decreases_shape[OF Decr0] eval_decreases_shape[OF Decr1]
+                        by simp
+                      with Some have "err \<noteq> TypeError"
+                        by (cases decrVal; cases decrVal') (auto split: if_splits)
+                      hence "sound_error_result err" by (cases err) simp_all
+                      moreover have "interp_statement d (Suc fuel) state
+                          (CoreStmt_While whileGhost condTm invars decr bodyStmts) = Inl err"
+                        using cond_eval condVal_eq True Decr0 body_eval Continue Decr1 Some
+                        by simp
+                      ultimately show ?thesis using CoreStmt_While by simp
+                    next
+                      case None
+                      \<comment> \<open>Recursive call: apply the fuel-level statement IH. \<close>
+                      from IH_stmt[OF sme_rs "4.prems"(2) no_goal while_typed]
+                      have rec_sound: "sound_statement_result env env storeTyping
+                          (interp_statement d fuel (restore_scope state state1)
+                             (CoreStmt_While whileGhost condTm invars decr bodyStmts))" .
+                      have interp_eq: "interp_statement d (Suc fuel) state
+                          (CoreStmt_While whileGhost condTm invars decr bodyStmts)
+                          = interp_statement d fuel (restore_scope state state1)
+                             (CoreStmt_While whileGhost condTm invars decr bodyStmts)"
+                        using cond_eval condVal_eq True Decr0 body_eval Continue Decr1 None
+                        by simp
+                      from rec_sound interp_eq env'_eq CoreStmt_While show ?thesis by simp
+                    qed
+                  qed
                 next
                   case (Return state1 retVal)
                   from body_sound body_eval Return have
@@ -2008,7 +2153,7 @@ next
                   have interp_eq: "interp_statement d (Suc fuel) state
                       (CoreStmt_While whileGhost condTm invars decr bodyStmts)
                       = Inr (Return (restore_scope state state1) retVal)"
-                    using cond_eval condVal_eq True body_eval Return by simp
+                    using cond_eval condVal_eq True Decr0 body_eval Return by simp
                   from ret_typed tyargs_eq
                   have ret_typed': "value_has_type env retVal
                                        (apply_subst (IS_TyArgs state) (TE_ReturnType env))"
@@ -2021,6 +2166,7 @@ next
                                      tyenv_fixed_eq_refl storeTyping_extends_refl)
                   with interp_eq CoreStmt_While show ?thesis by simp
                 qed
+              qed
               qed
             qed
           qed

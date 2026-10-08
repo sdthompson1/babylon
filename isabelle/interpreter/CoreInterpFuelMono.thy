@@ -1486,58 +1486,127 @@ next
             show ?thesis
             proof (cases b)
               case True
-              hence body_noFuel: "interp_statement_list d fuel state bodyStmts \<noteq> Inl InsufficientFuel"
-                using noFuel Inr CV_Bool by (auto split: sum.splits ExecResult.splits)
-              hence IH_body: "\<forall>f'\<ge>fuel. interp_statement_list d f' state bodyStmts
-                                          = interp_statement_list d fuel state bodyStmts"
-                using "36.IH"(3)[OF Invs InvsOk] Inr CV_Bool True by blast
               have cond_fuel: "interp_term d fuel state condTm = Inr (CV_Bool True)"
                 using Inr CV_Bool True by simp
               have cond_f'': "interp_term d f'' state condTm = Inr (CV_Bool True)"
                 using IH_cond cond_fuel f''_ge by simp
+              \<comment> \<open>The decreases-term before the body, at both fuels. \<close>
+              have decr0_noFuel: "eval_decreases (interp_term d fuel state) decr
+                                    \<noteq> Inl InsufficientFuel"
+                using noFuel cond_fuel by (auto split: sum.splits)
+              have IH_decr0: "\<And>tm. decr = Some tm \<Longrightarrow>
+                  \<forall>f'\<ge>fuel. interp_term d f' state tm = interp_term d fuel state tm"
+              proof -
+                fix tm assume dd: "decr = Some tm"
+                from decr0_noFuel dd have "interp_term d fuel state tm \<noteq> Inl InsufficientFuel"
+                  by (auto split: sum.splits)
+                thus "\<forall>f'\<ge>fuel. interp_term d f' state tm = interp_term d fuel state tm"
+                  using "36.IH"(3)[OF Invs InvsOk] Inr CV_Bool True cond_fuel dd by metis
+              qed
+              have decr0_eq: "eval_decreases (interp_term d f'' state) decr
+                              = eval_decreases (interp_term d fuel state) decr"
+                by (rule eval_decreases_cong[OF refl]) (use IH_decr0 f''_ge in blast)
               show ?thesis
-              proof (cases "interp_statement_list d fuel state bodyStmts")
+              proof (cases "eval_decreases (interp_term d fuel state) decr")
                 case (Inl err)
-                hence "interp_statement_list d f'' state bodyStmts = Inl err" using IH_body f''_ge by metis
-                thus ?thesis using Inl f'_eq cond_f'' cond_fuel by simp
+                thus ?thesis using decr0_eq f'_eq cond_f'' cond_fuel by simp
               next
-                case (Inr result)
+                case Decr0: (Inr decrVal)
+                have decr0_f'': "eval_decreases (interp_term d f'' state) decr = Inr decrVal"
+                  using decr0_eq Decr0 by simp
+                have body_noFuel: "interp_statement_list d fuel state bodyStmts \<noteq> Inl InsufficientFuel"
+                  using noFuel cond_fuel Decr0 by (auto split: sum.splits ExecResult.splits)
+                hence IH_body: "\<forall>f'\<ge>fuel. interp_statement_list d f' state bodyStmts
+                                            = interp_statement_list d fuel state bodyStmts"
+                  using "36.IH"(4)[OF Invs InvsOk] Inr CV_Bool True cond_fuel Decr0 by metis
                 show ?thesis
-                proof (cases result)
-                  case (Continue state')
-                  hence loop_noFuel: "interp_statement d fuel (restore_scope state state')
-                                        (CoreStmt_While whileGhost condTm invars decr bodyStmts)
-                                      \<noteq> Inl InsufficientFuel"
-                    using noFuel cond_fuel \<open>interp_statement_list d fuel state bodyStmts = Inr result\<close>
-                    by auto
-                  hence IH_loop: "\<forall>f'\<ge>fuel. interp_statement d f' (restore_scope state state')
-                                              (CoreStmt_While whileGhost condTm invars decr bodyStmts) =
-                                            interp_statement d fuel (restore_scope state state')
-                                              (CoreStmt_While whileGhost condTm invars decr bodyStmts)"
-                    using "36.IH"(4)[OF Invs InvsOk] Inr CV_Bool True
-                          \<open>interp_statement_list d fuel state bodyStmts = Inr result\<close> Continue
-                    by (metis cond_fuel)
-                  have body_fuel: "interp_statement_list d fuel state bodyStmts = Inr (Continue state')"
-                    using \<open>interp_statement_list d fuel state bodyStmts = Inr result\<close> Continue by simp
-                  have "interp_term d f'' state condTm = Inr (CV_Bool True)"
-                    using cond_f'' by simp
-                  moreover have "interp_statement_list d f'' state bodyStmts = Inr (Continue state')"
-                    using IH_body body_fuel f''_ge by metis
-                  moreover have "interp_statement d f'' (restore_scope state state')
-                                  (CoreStmt_While whileGhost condTm invars decr bodyStmts) =
-                                interp_statement d fuel (restore_scope state state')
-                                  (CoreStmt_While whileGhost condTm invars decr bodyStmts)"
-                    using IH_loop f''_ge by metis
-                  ultimately show ?thesis using f'_eq cond_fuel body_fuel by simp
+                proof (cases "interp_statement_list d fuel state bodyStmts")
+                  case (Inl err)
+                  hence "interp_statement_list d f'' state bodyStmts = Inl err"
+                    using IH_body f''_ge by metis
+                  thus ?thesis using Inl f'_eq cond_f'' cond_fuel decr0_f'' Decr0 by simp
                 next
-                  case (Return state' retVal)
-                  have body_fuel: "interp_statement_list d fuel state bodyStmts = Inr (Return state' retVal)"
-                    using \<open>interp_statement_list d fuel state bodyStmts = Inr result\<close> Return by simp
-                  have "interp_term d f'' state condTm = Inr (CV_Bool True)"
-                    using cond_f'' by simp
-                  moreover have "interp_statement_list d f'' state bodyStmts = Inr (Return state' retVal)"
-                    using IH_body body_fuel f''_ge by metis
-                  ultimately show ?thesis using f'_eq cond_fuel body_fuel by simp
+                  case Body: (Inr result)
+                  show ?thesis
+                  proof (cases result)
+                    case (Continue state')
+                    let ?rs = "restore_scope state state'"
+                    have body_fuel: "interp_statement_list d fuel state bodyStmts
+                                       = Inr (Continue state')"
+                      using Body Continue by simp
+                    have body_f'': "interp_statement_list d f'' state bodyStmts
+                                      = Inr (Continue state')"
+                      using IH_body body_fuel f''_ge by metis
+                    \<comment> \<open>The decreases-term after the body, at both fuels. \<close>
+                    have decr1_noFuel: "eval_decreases (interp_term d fuel ?rs) decr
+                                          \<noteq> Inl InsufficientFuel"
+                      using noFuel cond_fuel Decr0 body_fuel
+                      by (auto split: sum.splits option.splits)
+                    have IH_decr1: "\<And>tm. decr = Some tm \<Longrightarrow>
+                        \<forall>f'\<ge>fuel. interp_term d f' ?rs tm = interp_term d fuel ?rs tm"
+                    proof -
+                      fix tm assume dd: "decr = Some tm"
+                      from decr1_noFuel dd
+                      have "interp_term d fuel ?rs tm \<noteq> Inl InsufficientFuel"
+                        by (auto split: sum.splits)
+                      thus "\<forall>f'\<ge>fuel. interp_term d f' ?rs tm = interp_term d fuel ?rs tm"
+                        using "36.IH"(5)[OF Invs InvsOk] Inr CV_Bool True cond_fuel Decr0
+                              Body Continue body_fuel dd
+                        by metis
+                    qed
+                    have decr1_eq: "eval_decreases (interp_term d f'' ?rs) decr
+                                    = eval_decreases (interp_term d fuel ?rs) decr"
+                      by (rule eval_decreases_cong[OF refl]) (use IH_decr1 f''_ge in blast)
+                    show ?thesis
+                    proof (cases "eval_decreases (interp_term d fuel ?rs) decr")
+                      case (Inl err)
+                      thus ?thesis
+                        using decr1_eq f'_eq cond_f'' cond_fuel decr0_f'' Decr0 body_f'' body_fuel
+                        by simp
+                    next
+                      case Decr1: (Inr decrVal')
+                      have decr1_f'': "eval_decreases (interp_term d f'' ?rs) decr = Inr decrVal'"
+                        using decr1_eq Decr1 by simp
+                      show ?thesis
+                      proof (cases "decreases_error decrVal decrVal'")
+                        case (Some err)
+                        thus ?thesis
+                          using f'_eq cond_f'' cond_fuel decr0_f'' Decr0 body_f'' body_fuel
+                                decr1_f'' Decr1
+                          by simp
+                      next
+                        case None
+                        have loop_noFuel: "interp_statement d fuel ?rs
+                                              (CoreStmt_While whileGhost condTm invars decr bodyStmts)
+                                            \<noteq> Inl InsufficientFuel"
+                          using noFuel cond_fuel Decr0 body_fuel Decr1 None by auto
+                        hence IH_loop: "\<forall>f'\<ge>fuel. interp_statement d f' ?rs
+                                                    (CoreStmt_While whileGhost condTm invars decr bodyStmts) =
+                                                  interp_statement d fuel ?rs
+                                                    (CoreStmt_While whileGhost condTm invars decr bodyStmts)"
+                          using "36.IH"(6)[OF Invs InvsOk] Inr CV_Bool True cond_fuel Decr0
+                                Body Continue body_fuel Decr1 None
+                          by metis
+                        have "interp_statement d f'' ?rs
+                                (CoreStmt_While whileGhost condTm invars decr bodyStmts) =
+                              interp_statement d fuel ?rs
+                                (CoreStmt_While whileGhost condTm invars decr bodyStmts)"
+                          using IH_loop f''_ge by metis
+                        thus ?thesis
+                          using f'_eq cond_f'' cond_fuel decr0_f'' Decr0 body_f'' body_fuel
+                                decr1_f'' Decr1 None
+                          by simp
+                      qed
+                    qed
+                  next
+                    case (Return state' retVal)
+                    have body_fuel: "interp_statement_list d fuel state bodyStmts
+                                       = Inr (Return state' retVal)"
+                      using Body Return by simp
+                    have "interp_statement_list d f'' state bodyStmts = Inr (Return state' retVal)"
+                      using IH_body body_fuel f''_ge by metis
+                    thus ?thesis using f'_eq cond_f'' cond_fuel decr0_f'' Decr0 body_fuel by simp
+                  qed
                 qed
               qed
             next
@@ -2679,50 +2748,118 @@ next
                 using Inr CV_Bool True by simp
               have cond_d': "interp_term d' fuel state condTm = Inr (CV_Bool True)"
                 using cond_eq cond_d by simp
-              have body_noFuel: "interp_statement_list d fuel state bodyStmts \<noteq> Inl InsufficientFuel"
-                using "36.prems" Inr CV_Bool True by (auto split: sum.splits ExecResult.splits)
-              hence IH_body: "\<forall>d'\<ge>d. interp_statement_list d' fuel state bodyStmts
-                                        = interp_statement_list d fuel state bodyStmts"
-                using "36.IH"(3)[OF Invs InvsOk] Inr CV_Bool True by blast
-              hence body_eq: "interp_statement_list d' fuel state bodyStmts
-                                = interp_statement_list d fuel state bodyStmts"
-                using d'_ge by blast
+              \<comment> \<open>The decreases-term before the body, at both depths. \<close>
+              have decr0_noFuel: "eval_decreases (interp_term d fuel state) decr
+                                    \<noteq> Inl InsufficientFuel"
+                using "36.prems" cond_d by (auto split: sum.splits)
+              have IH_decr0: "\<And>tm. decr = Some tm \<Longrightarrow>
+                  \<forall>d'\<ge>d. interp_term d' fuel state tm = interp_term d fuel state tm"
+              proof -
+                fix tm assume dd: "decr = Some tm"
+                from decr0_noFuel dd have "interp_term d fuel state tm \<noteq> Inl InsufficientFuel"
+                  by (auto split: sum.splits)
+                thus "\<forall>d'\<ge>d. interp_term d' fuel state tm = interp_term d fuel state tm"
+                  using "36.IH"(3)[OF Invs InvsOk] Inr CV_Bool True cond_d dd by metis
+              qed
+              have decr0_eq: "eval_decreases (interp_term d' fuel state) decr
+                              = eval_decreases (interp_term d fuel state) decr"
+                by (rule eval_decreases_cong[OF refl]) (use IH_decr0 d'_ge in blast)
               show ?thesis
-              proof (cases "interp_statement_list d fuel state bodyStmts")
+              proof (cases "eval_decreases (interp_term d fuel state) decr")
                 case (Inl err)
-                thus ?thesis using body_eq cond_d cond_d' by simp
+                thus ?thesis using decr0_eq cond_d cond_d' by simp
               next
-                case Body: (Inr result)
+                case Decr0: (Inr decrVal)
+                have decr0_d': "eval_decreases (interp_term d' fuel state) decr = Inr decrVal"
+                  using decr0_eq Decr0 by simp
+                have body_noFuel: "interp_statement_list d fuel state bodyStmts \<noteq> Inl InsufficientFuel"
+                  using "36.prems" cond_d Decr0 by (auto split: sum.splits ExecResult.splits)
+                hence IH_body: "\<forall>d'\<ge>d. interp_statement_list d' fuel state bodyStmts
+                                          = interp_statement_list d fuel state bodyStmts"
+                  using "36.IH"(4)[OF Invs InvsOk] Inr CV_Bool True cond_d Decr0 by metis
+                hence body_eq: "interp_statement_list d' fuel state bodyStmts
+                                  = interp_statement_list d fuel state bodyStmts"
+                  using d'_ge by blast
                 show ?thesis
-                proof (cases result)
-                  case (Continue state')
-                  have body_d: "interp_statement_list d fuel state bodyStmts = Inr (Continue state')"
-                    using Body Continue by simp
-                  have body_d': "interp_statement_list d' fuel state bodyStmts = Inr (Continue state')"
-                    using body_eq body_d by simp
-                  have loop_noFuel: "interp_statement d fuel (restore_scope state state')
-                                        (CoreStmt_While whileGhost condTm invars decr bodyStmts)
-                                      \<noteq> Inl InsufficientFuel"
-                    using "36.prems" cond_d body_d by auto
-                  hence IH_loop: "\<forall>d'\<ge>d. interp_statement d' fuel (restore_scope state state')
-                                              (CoreStmt_While whileGhost condTm invars decr bodyStmts) =
-                                            interp_statement d fuel (restore_scope state state')
-                                              (CoreStmt_While whileGhost condTm invars decr bodyStmts)"
-                    using "36.IH"(4)[OF Invs InvsOk] Inr CV_Bool True Body Continue
-                    by metis
-                  have "interp_statement d' fuel (restore_scope state state')
-                          (CoreStmt_While whileGhost condTm invars decr bodyStmts) =
-                        interp_statement d fuel (restore_scope state state')
-                          (CoreStmt_While whileGhost condTm invars decr bodyStmts)"
-                    using IH_loop d'_ge by metis
-                  thus ?thesis using cond_d cond_d' body_d body_d' by simp
+                proof (cases "interp_statement_list d fuel state bodyStmts")
+                  case (Inl err)
+                  thus ?thesis using body_eq cond_d cond_d' decr0_d' Decr0 by simp
                 next
-                  case (Return state' retVal)
-                  have body_d: "interp_statement_list d fuel state bodyStmts = Inr (Return state' retVal)"
-                    using Body Return by simp
-                  have "interp_statement_list d' fuel state bodyStmts = Inr (Return state' retVal)"
-                    using body_eq body_d by simp
-                  thus ?thesis using cond_d cond_d' body_d by simp
+                  case Body: (Inr result)
+                  show ?thesis
+                  proof (cases result)
+                    case (Continue state')
+                    let ?rs = "restore_scope state state'"
+                    have body_d: "interp_statement_list d fuel state bodyStmts = Inr (Continue state')"
+                      using Body Continue by simp
+                    have body_d': "interp_statement_list d' fuel state bodyStmts = Inr (Continue state')"
+                      using body_eq body_d by simp
+                    \<comment> \<open>The decreases-term after the body, at both depths. \<close>
+                    have decr1_noFuel: "eval_decreases (interp_term d fuel ?rs) decr
+                                          \<noteq> Inl InsufficientFuel"
+                      using "36.prems" cond_d Decr0 body_d
+                      by (auto split: sum.splits option.splits)
+                    have IH_decr1: "\<And>tm. decr = Some tm \<Longrightarrow>
+                        \<forall>d'\<ge>d. interp_term d' fuel ?rs tm = interp_term d fuel ?rs tm"
+                    proof -
+                      fix tm assume dd: "decr = Some tm"
+                      from decr1_noFuel dd
+                      have "interp_term d fuel ?rs tm \<noteq> Inl InsufficientFuel"
+                        by (auto split: sum.splits)
+                      thus "\<forall>d'\<ge>d. interp_term d' fuel ?rs tm = interp_term d fuel ?rs tm"
+                        using "36.IH"(5)[OF Invs InvsOk] Inr CV_Bool True cond_d Decr0
+                              Body Continue body_d dd
+                        by metis
+                    qed
+                    have decr1_eq: "eval_decreases (interp_term d' fuel ?rs) decr
+                                    = eval_decreases (interp_term d fuel ?rs) decr"
+                      by (rule eval_decreases_cong[OF refl]) (use IH_decr1 d'_ge in blast)
+                    show ?thesis
+                    proof (cases "eval_decreases (interp_term d fuel ?rs) decr")
+                      case (Inl err)
+                      thus ?thesis
+                        using decr1_eq cond_d cond_d' decr0_d' Decr0 body_d body_d' by simp
+                    next
+                      case Decr1: (Inr decrVal')
+                      have decr1_d': "eval_decreases (interp_term d' fuel ?rs) decr = Inr decrVal'"
+                        using decr1_eq Decr1 by simp
+                      show ?thesis
+                      proof (cases "decreases_error decrVal decrVal'")
+                        case (Some err)
+                        thus ?thesis
+                          using cond_d cond_d' decr0_d' Decr0 body_d body_d' decr1_d' Decr1
+                          by simp
+                      next
+                        case None
+                        have loop_noFuel: "interp_statement d fuel ?rs
+                                              (CoreStmt_While whileGhost condTm invars decr bodyStmts)
+                                            \<noteq> Inl InsufficientFuel"
+                          using "36.prems" cond_d Decr0 body_d Decr1 None by auto
+                        hence IH_loop: "\<forall>d'\<ge>d. interp_statement d' fuel ?rs
+                                                    (CoreStmt_While whileGhost condTm invars decr bodyStmts) =
+                                                  interp_statement d fuel ?rs
+                                                    (CoreStmt_While whileGhost condTm invars decr bodyStmts)"
+                          using "36.IH"(6)[OF Invs InvsOk] Inr CV_Bool True cond_d Decr0
+                                Body Continue body_d Decr1 None
+                          by metis
+                        have "interp_statement d' fuel ?rs
+                                (CoreStmt_While whileGhost condTm invars decr bodyStmts) =
+                              interp_statement d fuel ?rs
+                                (CoreStmt_While whileGhost condTm invars decr bodyStmts)"
+                          using IH_loop d'_ge by metis
+                        thus ?thesis
+                          using cond_d cond_d' decr0_d' Decr0 body_d body_d' decr1_d' Decr1 None
+                          by simp
+                      qed
+                    qed
+                  next
+                    case (Return state' retVal)
+                    have body_d: "interp_statement_list d fuel state bodyStmts = Inr (Return state' retVal)"
+                      using Body Return by simp
+                    have "interp_statement_list d' fuel state bodyStmts = Inr (Return state' retVal)"
+                      using body_eq body_d by simp
+                    thus ?thesis using cond_d cond_d' decr0_d' Decr0 body_d by simp
+                  qed
                 qed
               qed
             next

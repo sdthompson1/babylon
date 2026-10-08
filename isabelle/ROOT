@@ -76,7 +76,6 @@ session Babylon = "HOL-Library" +
     "core_ghost/ErasedSteps"
     "core_ghost/GhostFree"
     "core_ghost/GhostInvisible"
-    "core_ghost/TrivialDecreases"
 
     (* core_passes *)
     "core_passes/MatchCompile"

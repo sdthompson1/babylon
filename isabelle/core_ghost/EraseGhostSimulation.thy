@@ -1054,7 +1054,7 @@ next
         next
           case NotGhost
           from E CoreStmt_While NotGhost
-          have stmt'_eq: "stmt' = CoreStmt_While NotGhost (?er condTm) [] (CoreTm_LitBool False)
+          have stmt'_eq: "stmt' = CoreStmt_While NotGhost (?er condTm) [] None
                                     (erase_ghost_statement_list ?ft body)"
             by auto
           from T CoreStmt_While have env'_eq: "env' = env"
@@ -1096,7 +1096,13 @@ next
               from HE re show ?thesis by blast
             next
               case True
-              with CoreStmt_While H cv CV_Bool obtain bodyRes where
+              \<comment> \<open>The full run evaluated its decreases-term (if any) before the
+                  body. The erased loop has none, so its check passes trivially. \<close>
+              with CoreStmt_While H cv CV_Bool obtain decrVal where
+                dv: "eval_decreases (interp_term d fuel full) decr = Inr decrVal"
+                by (auto split: sum.splits)
+              note [simp] = dv
+              from CoreStmt_While H cv CV_Bool True obtain bodyRes where
                 body: "interp_statement_list d fuel full body = Inr bodyRes"
                 by (auto split: sum.splits)
               \<comment> \<open>The body, in both states. \<close>
@@ -1144,7 +1150,15 @@ next
                   using static_parts_eqD(2)[OF interp_statement_list_static[OF body]]
                         Continue funs_eq
                   by simp
+                \<comment> \<open>The full run evaluated its decreases-term again after the
+                    body, and the check passed. \<close>
                 from CoreStmt_While H cv CV_Bool True body Continue
+                obtain decrVal' where
+                  dv': "eval_decreases (interp_term d fuel (restore_scope full state1)) decr
+                          = Inr decrVal'" and
+                  de: "decreases_error decrVal decrVal' = None"
+                  by (auto split: sum.splits option.splits)
+                from CoreStmt_While H cv CV_Bool True body Continue dv' de
                 have rec_eq: "interp_statement d fuel (restore_scope full state1)
                                 (CoreStmt_While g condTm invars decr body) = Inr res"
                   by simp

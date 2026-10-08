@@ -42,7 +42,7 @@ and apply_subst_to_statement_list :: "TypeSubst \<Rightarrow> CoreStatement list
 | "apply_subst_to_statement subst (CoreStmt_While ghost condTm invars decrTm body) =
     CoreStmt_While ghost (apply_subst_to_term subst condTm)
                    (map (apply_subst_to_term subst) invars)
-                   (apply_subst_to_term subst decrTm)
+                   (map_option (apply_subst_to_term subst) decrTm)
                    (apply_subst_to_statement_list subst body)"
 | "apply_subst_to_statement subst (CoreStmt_Match ghost scrut arms) =
     CoreStmt_Match ghost (apply_subst_to_term subst scrut)

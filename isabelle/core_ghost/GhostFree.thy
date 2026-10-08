@@ -1,5 +1,5 @@
 theory GhostFree
-  imports "../core/CoreSyntax" "../core/CoreModule" TrivialDecreases
+  imports "../core/CoreSyntax" "../core/CoreModule"
 begin
 
 (* Ghost-free code.
@@ -21,8 +21,7 @@ begin
 (* A statement is ghost-free if:
     - it is not marked Ghost;
     - it is not an Obtain, Assert, Assume, ShowHide, Fix or Use;
-    - if it is a While, it has no invariants, and its decreases-term is the
-      trivial one;
+    - if it is a While, it has no invariants and no decreases-term;
     - the statements nested in it are ghost-free. *)
 fun core_statement_ghost_free :: "CoreStatement \<Rightarrow> bool"
 and core_statement_list_ghost_free :: "CoreStatement list \<Rightarrow> bool" where
@@ -39,7 +38,7 @@ and core_statement_list_ghost_free :: "CoreStatement list \<Rightarrow> bool" wh
 | "core_statement_ghost_free (CoreStmt_While whileGhost _ invars decrTm body) =
     (whileGhost = NotGhost
      \<and> invars = []
-     \<and> decrTm = trivial_decreases
+     \<and> decrTm = None
      \<and> core_statement_list_ghost_free body)"
 
 | "core_statement_ghost_free (CoreStmt_Match matchGhost _ arms) =

@@ -426,7 +426,13 @@ next
             then show ?thesis by (simp add: static_parts_eq_refl)
           next
             case True
+            \<comment> \<open>The decreases-term (if any) was evaluated before the body. \<close>
             with CoreStmt_While H cv CV_Bool
+            obtain decrVal where
+              dv: "eval_decreases (interp_term d fuel state) decr = Inr decrVal"
+              by (auto split: sum.splits)
+            note [simp] = dv
+            from CoreStmt_While H cv CV_Bool True
             obtain bodyRes where
               body: "interp_statement_list d fuel state bodyStmts = Inr bodyRes"
               by (auto split: sum.splits)
@@ -439,7 +445,14 @@ next
               from body_eq Continue have eq1: "static_parts_eq state state1" by simp
               have eq_rs: "static_parts_eq state ?rs"
                 by (rule static_parts_eq_restore_scope[OF eq1])
+              \<comment> \<open>The decreases-term was evaluated again after the body, and the
+                  check passed. \<close>
               from CoreStmt_While H cv CV_Bool True body Continue
+              obtain decrVal' where
+                dv': "eval_decreases (interp_term d fuel ?rs) decr = Inr decrVal'" and
+                de: "decreases_error decrVal decrVal' = None"
+                by (auto split: sum.splits option.splits)
+              from CoreStmt_While H cv CV_Bool True body Continue dv' de
               have rec_eq: "interp_statement d fuel ?rs
                                (CoreStmt_While g condTm invars decr bodyStmts) = Inr res"
                 by simp

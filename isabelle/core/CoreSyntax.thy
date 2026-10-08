@@ -178,9 +178,9 @@ datatype CoreStatement =
   (* Assume that a given boolean term is True. May be unsound; use carefully. *)
   | CoreStmt_Assume CoreTerm
   
-  (* While-loop with: ghost flag, condition, invariants, decreases-term, loop body.
+  (* While-loop with: ghost flag, condition, invariants, optional decreases-term, loop body.
      The loop body runs inside its own scope, i.e. it is implicitly inside a CoreStmt_Block. *)
-  | CoreStmt_While GhostOrNot CoreTerm "CoreTerm list" CoreTerm "CoreStatement list"  
+  | CoreStmt_While GhostOrNot CoreTerm "CoreTerm list" "CoreTerm option" "CoreStatement list"
   
   (* Match-stmt with: ghost flag, scrutinee, list of arms. Each arm is a pattern and a 
      statement-list (which runs inside its own scope, i.e. is implicitly inside a CoreStmt_Block). *)

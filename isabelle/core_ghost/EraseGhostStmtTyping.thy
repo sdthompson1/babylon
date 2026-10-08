@@ -747,7 +747,7 @@ next
     have cE: "core_term_type envE NotGhost ?condE = Some CoreTy_Bool"
       by (rule core_term_type_erased[OF c wf rel])
     have sE: "core_statement_type envE NotGhost
-                (CoreStmt_While NotGhost ?condE [] (CoreTm_LitBool False)
+                (CoreStmt_While NotGhost ?condE [] None
                    (erase_ghost_statement_list (TE_Functions env) body))
               = Some envE"
       using cE bE by simp

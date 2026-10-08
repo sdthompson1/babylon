@@ -2165,12 +2165,11 @@ next
   note wf = "12.prems"(2) and ok = "12.prems"(3)
   let ?me = "apply_subst_to_module_env subst targetEnv env"
   let ?envF = "env \<lparr> TE_ProofTopLevel := False \<rparr>"
-  from "12.prems"(1) obtain decrTy bodyEnv where
+  from "12.prems"(1) obtain bodyEnv where
     gh: "ghost = Ghost \<longrightarrow> whileGhost = Ghost" and
     cond: "core_term_type env whileGhost condTm = Some CoreTy_Bool" and
     invs: "list_all (\<lambda>inv. core_term_type env Ghost inv = Some CoreTy_Bool) invars" and
-    decr: "core_term_type env Ghost decrTm = Some decrTy" and
-    decr_valid: "is_valid_decreases_type decrTy" and
+    decr: "has_valid_decreases_type env decrTm" and
     body_typed: "core_statement_list_type ?envF whileGhost body = Some bodyEnv" and
     out_eq: "envOut = env"
     by (auto split: if_splits option.splits CoreType.splits)
@@ -2197,18 +2196,27 @@ next
     show "core_term_type ?me Ghost inv' = Some CoreTy_Bool"
       using inv'_eq by simp
   qed
-  have decr_subst:
-    "core_term_type ?me Ghost (apply_subst_to_term subst decrTm) = Some decrTy"
-    using core_term_type_subst_module_env[OF decr wf ok triv_ok_rt cp]
-          is_valid_decreases_type_apply_subst[OF decr_valid]
-    by simp
+  have decr_subst: "has_valid_decreases_type ?me (map_option (apply_subst_to_term subst) decrTm)"
+  proof (cases decrTm)
+    case None
+    then show ?thesis by simp
+  next
+    case (Some tm)
+    from decr Some obtain decrTy where
+      t: "core_term_type env Ghost tm = Some decrTy" and
+      v: "is_valid_decreases_type decrTy"
+      by (auto split: option.splits)
+    from core_term_type_subst_module_env[OF t wf ok triv_ok_rt cp]
+         is_valid_decreases_type_apply_subst[OF v] v Some
+    show ?thesis by simp
+  qed
   have wf_F: "tyenv_well_formed ?envF"
     using tyenv_well_formed_TE_ProofTopLevel_irrelevant[OF wf] .
   have ok_F: "module_env_subst_ok subst targetEnv ?envF"
     using ok unfolding module_env_subst_ok_def by simp
   have ok_rt_F: "whileGhost = NotGhost \<longrightarrow> module_env_subst_runtime_ok subst targetEnv ?envF"
     using ok_rt_w unfolding module_env_subst_runtime_ok_def by simp
-  from "12.IH"[OF gh cond refl invs decr decr_valid body_typed
+  from "12.IH"[OF gh cond refl invs decr body_typed
                   wf_F ok_F ok_rt_F]
   have body_subst:
     "core_statement_list_type (?me \<lparr> TE_ProofTopLevel := False \<rparr>) whileGhost
@@ -2216,7 +2224,7 @@ next
        = Some (apply_subst_to_module_env subst targetEnv bodyEnv)"
     by simp
   show ?case
-    using gh cond_subst invs_subst decr_subst decr_valid body_subst out_eq by simp
+    using gh cond_subst invs_subst decr_subst body_subst out_eq by simp
 next
   \<comment> \<open>Obtain: adds a ghost local; the condition is checked in the extended env.\<close>
   case (13 env ghost varName varTy condTm)

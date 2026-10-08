@@ -77,7 +77,7 @@ datatype (plugins del: size "quickcheck" transfer lifting) TypeError =
   | TyErr_NonVoidReturnNeedsValue Location  (* `return;` in a non-void function *)
   | TyErr_ReturnInGhostContext Location  (* `return` in a ghost block of an executable function *)
   | TyErr_InvalidWhileAttribute Location  (* a while attribute other than `invariant` or `decreases` *)
-  | TyErr_WhileNeedsOneDecreases Location  (* a while loop without exactly one `decreases` attribute *)
+  | TyErr_WhileMultipleDecreases Location  (* a while loop with more than one `decreases` attribute *)
   | TyErr_InvalidDecreasesType Location CoreType  (* `decreases e` where e's type is not a valid decreases type *)
   | TyErr_AssertStarNoGoal Location  (* `assert *` with no enclosing proof goal *)
   | TyErr_FixNoForallGoal Location  (* `fix x` with no enclosing universally-quantified proof goal *)

@@ -340,8 +340,8 @@ definition type_error_to_string :: "TypeError \<Rightarrow> string" where
     | TyErr_InvalidWhileAttribute loc \<Rightarrow>
         loc_prefix loc @ ''invalid attribute on '' @ quote ''while'' @ '' loop: only ''
           @ quote ''invariant'' @ '' and '' @ quote ''decreases'' @ '' are allowed''
-    | TyErr_WhileNeedsOneDecreases loc \<Rightarrow>
-        loc_prefix loc @ quote ''while'' @ '' loop must have exactly one ''
+    | TyErr_WhileMultipleDecreases loc \<Rightarrow>
+        loc_prefix loc @ quote ''while'' @ '' loop may have at most one ''
           @ quote ''decreases'' @ '' attribute''
     | TyErr_InvalidDecreasesType loc ty \<Rightarrow>
         loc_prefix loc @ ''invalid type for '' @ quote ''decreases'' @ '': '' @ quote_type ty

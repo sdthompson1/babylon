@@ -2341,6 +2341,40 @@ next
   show ?case using head_typed tail_typed by (simp add: ci_eq)
 qed
 
+(* elab_while_decreases only advances the metavariable counter. *)
+lemma elab_while_decreases_next_mv:
+  "elab_while_decreases env elabEnv decr next_mv = Inr (coreDecr, next_mv')
+   \<Longrightarrow> next_mv \<le> next_mv'"
+  by (cases decr)
+     (auto dest!: elab_term_next_mv_monotone split: sum.splits prod.splits if_splits)
+
+(* The decreases term elaborated by elab_while_decreases (if there is one) typechecks
+   in env (Ghost) at a valid decreases type. *)
+lemma elab_while_decreases_correct:
+  assumes elab: "elab_while_decreases env elabEnv decr next_mv = Inr (coreDecr, next_mv')"
+    and wf: "tyenv_well_formed env"
+    and ee_wf: "elabenv_well_formed env elabEnv"
+    and bound: "\<forall>n. n |\<in>| TE_TypeVars env \<longrightarrow> tyvar_fresh_ok n next_mv"
+  shows "has_valid_decreases_type env coreDecr"
+proof (cases decr)
+  case None
+  with elab show ?thesis by simp
+next
+  case (Some d)
+  from elab Some obtain coreD decrTy where
+    decrE: "elab_term env elabEnv Ghost d next_mv = Inr (coreD, decrTy, next_mv')" and
+    decr_valid: "is_valid_decreases_type decrTy" and
+    decr_inf: "term_inferred env coreD" and
+    cd_eq: "coreDecr = Some coreD"
+    by (auto split: sum.splits prod.splits if_splits)
+  let ?envD = "extend_env_with_tyvars env Ghost next_mv next_mv'"
+  have decr_typed: "core_term_type ?envD Ghost coreD = Some decrTy"
+    using elab_term_correct(1)[OF decrE wf ee_wf] bound by simp
+  have "core_term_type env Ghost coreD = Some decrTy"
+    using inferred_term_typed_in_env[OF decr_typed bound decr_inf] .
+  with decr_valid cd_eq show ?thesis by simp
+qed
+
 (* elab_while_header only advances the metavariable counter. *)
 lemma elab_while_header_next_mv:
   "elab_while_header env elabEnv ghost loc cond invs decr next_mv
@@ -2348,13 +2382,14 @@ lemma elab_while_header_next_mv:
    \<Longrightarrow> next_mv \<le> next_mv'"
   by (auto simp: elab_while_header_def
            dest!: elab_term_next_mv_monotone elab_while_invariants_next_mv
+                  elab_while_decreases_next_mv
            split: sum.splits prod.splits option.splits if_splits
            intro: order_trans)
 
 (* elab_while_header produces a condition that types to Bool in env (ambient ghost),
-   invariants that each type to Bool in env (Ghost), and a decreases term that types
-   to a valid decreases type in env (Ghost). This bundles the three premises the
-   Core While rule needs (besides the body). *)
+   invariants that each type to Bool in env (Ghost), and an optional decreases term
+   that, if present, types to a valid decreases type in env (Ghost). This bundles the
+   three premises the Core While rule needs (besides the body). *)
 lemma elab_while_header_correct:
   assumes elab: "elab_while_header env elabEnv ghost loc cond invs decr next_mv
                    = Inr (condTm, coreInvars, decrTm, next_mv')"
@@ -2363,27 +2398,21 @@ lemma elab_while_header_correct:
     and bound: "\<forall>n. n |\<in>| TE_TypeVars env \<longrightarrow> tyvar_fresh_ok n next_mv"
   shows "core_term_type env ghost condTm = Some CoreTy_Bool
        \<and> list_all (\<lambda>inv. core_term_type env Ghost inv = Some CoreTy_Bool) coreInvars
-       \<and> (\<exists>decrTy. core_term_type env Ghost decrTm = Some decrTy
-                   \<and> is_valid_decreases_type decrTy)"
+       \<and> has_valid_decreases_type env decrTm"
 proof -
   let ?is_flex = "\<lambda>n. n |\<notin>| TE_TypeVars env"
   \<comment> \<open>Peel the header: condition, unifier, invariants, decreases.\<close>
-  from elab obtain coreCond condTy next_mv1 subst next_mv2 coreDecr decrTy where
+  from elab obtain coreCond condTy next_mv1 subst next_mv2 where
     etm: "elab_term env elabEnv ghost cond next_mv = Inr (coreCond, condTy, next_mv1)" and
     unif: "unify ?is_flex condTy CoreTy_Bool = Some subst" and
     invsE: "elab_while_invariants env elabEnv invs next_mv1 = Inr (coreInvars, next_mv2)" and
-    decrE: "elab_term env elabEnv Ghost decr next_mv2 = Inr (coreDecr, decrTy, next_mv')" and
-    decr_valid: "is_valid_decreases_type decrTy" and
-    cc_eq: "condTm = apply_subst_to_term subst coreCond" and
-    cd_eq: "decrTm = coreDecr"
+    decrE: "elab_while_decreases env elabEnv decr next_mv2 = Inr (decrTm, next_mv')" and
+    cc_eq: "condTm = apply_subst_to_term subst coreCond"
     by (auto simp: elab_while_header_def
              split: sum.splits prod.splits option.splits if_splits)
-  \<comment> \<open>Both inferred checks passed (else the result is Inl).\<close>
+  \<comment> \<open>The inferred check on the condition passed (else the result is Inl).\<close>
   have cond_inf: "term_inferred env (apply_subst_to_term subst coreCond)"
     using elab etm unif unfolding elab_while_header_def by (auto split: if_splits)
-  have decr_inf: "term_inferred env coreDecr"
-    using elab etm unif cond_inf invsE decrE decr_valid unfolding elab_while_header_def
-    by (auto split: if_splits)
   \<comment> \<open>(1) The condition types to Bool in env (Assume reasoning at ambient ghost).\<close>
   let ?envC = "extend_env_with_tyvars env ghost next_mv next_mv1"
   have cond_typed: "core_term_type ?envC ghost coreCond = Some condTy"
@@ -2426,13 +2455,10 @@ proof -
   \<comment> \<open>(2) Each invariant types to Bool in env (Ghost mode).\<close>
   have inv_bool: "list_all (\<lambda>inv. core_term_type env Ghost inv = Some CoreTy_Bool) coreInvars"
     using elab_while_invariants_correct[OF invsE wf ee_wf bound1] .
-  \<comment> \<open>(3) The decreases term types to decrTy (a valid decreases type) in env (Ghost).\<close>
-  let ?envD = "extend_env_with_tyvars env Ghost next_mv2 next_mv'"
-  have decr_typed: "core_term_type ?envD Ghost coreDecr = Some decrTy"
-    using elab_term_correct(1)[OF decrE wf ee_wf] bound2 by simp
-  have decr_in_env: "core_term_type env Ghost decrTm = Some decrTy"
-    using inferred_term_typed_in_env[OF decr_typed bound2 decr_inf] cd_eq by simp
-  show ?thesis using cond_bool inv_bool decr_in_env decr_valid by blast
+  \<comment> \<open>(3) The decreases term, if any, types to a valid decreases type in env (Ghost).\<close>
+  have decr_ok: "has_valid_decreases_type env decrTm"
+    using elab_while_decreases_correct[OF decrE wf ee_wf bound2] .
+  show ?thesis using cond_bool inv_bool decr_ok by blast
 qed
 
 
@@ -2652,8 +2678,8 @@ next
   case (11 env elabEnv ghost loc cond attrs body next_mv)
   let ?bodyEnv = "env \<lparr> TE_ProofTopLevel := False \<rparr>"
   from "11.prems" obtain invs decr where
-    attrs_ok: "collect_while_attributes loc attrs = Inr (invs, [decr])"
-    by (cases "collect_while_attributes loc attrs") (auto split: prod.splits list.splits)
+    attrs_ok: "collect_while_attributes loc attrs = Inr (invs, decr)"
+    by (cases "collect_while_attributes loc attrs") (auto split: prod.splits)
   from "11.prems" attrs_ok obtain condTm coreInvars decrTm next_mv3 where
     hdr: "elab_while_header env elabEnv ghost loc cond invs decr next_mv
             = Inr (condTm, coreInvars, decrTm, next_mv3)"
@@ -4536,16 +4562,16 @@ next
       scope and returns the entry env). The header (condition / invariants / decreases) is
       certified by elab_while_header_correct: the condition types to Bool in env
       (ambient ghost), each invariant types to Bool (Ghost), and the decreases term
-      types to a valid decreases type (Ghost). The body typechecks under
+      (if any) types to a valid decreases type (Ghost). The body typechecks under
       bodyEnv = env with TE_ProofTopLevel := False via the (single) list IH, whose two
       ambient invariants transfer since bodyEnv only changes TE_ProofTopLevel.\<close>
   case (11 env elabEnv ghost loc cond attrs body next_mv)
   let ?bodyEnv = "env \<lparr> TE_ProofTopLevel := False \<rparr>"
-  \<comment> \<open>Peel the attribute split, the single decreases, the header, and the body.\<close>
+  \<comment> \<open>Peel the attribute split, the header, and the body.\<close>
   from "11.prems"(1) obtain invs decr where
-    attrs_ok: "collect_while_attributes loc attrs = Inr (invs, [decr])"
+    attrs_ok: "collect_while_attributes loc attrs = Inr (invs, decr)"
     by (cases "collect_while_attributes loc attrs")
-       (auto split: prod.splits list.splits)
+       (auto split: prod.splits)
   from "11.prems"(1) attrs_ok obtain condTm coreInvars decrTm next_mv3 where
     hdr: "elab_while_header env elabEnv ghost loc cond invs decr next_mv
             = Inr (condTm, coreInvars, decrTm, next_mv3)"
@@ -4559,12 +4585,11 @@ next
     by (cases "elab_statement_list ?bodyEnv elabEnv ghost body next_mv3")
        (auto simp: Let_def split: prod.splits)
   \<comment> \<open>The header obligations (cond Bool, invariants Bool, decreases valid).\<close>
-  from elab_while_header_correct[OF hdr "11.prems"(2,3,4)] obtain decrTy where
+  from elab_while_header_correct[OF hdr "11.prems"(2,3,4)] have
     cond_bool: "core_term_type env ghost condTm = Some CoreTy_Bool" and
     inv_bool: "list_all (\<lambda>inv. core_term_type env Ghost inv = Some CoreTy_Bool) coreInvars" and
-    decr_typed: "core_term_type env Ghost decrTm = Some decrTy" and
-    decr_valid: "is_valid_decreases_type decrTy"
-    by blast
+    decr_ok: "has_valid_decreases_type env decrTm"
+    by blast+
   \<comment> \<open>The body typechecks under bodyEnv (the list IH). bodyEnv differs from env only in
       TE_ProofTopLevel, so the IH premises transfer.\<close>
   have wf_body: "tyenv_well_formed ?bodyEnv"
@@ -4582,7 +4607,7 @@ next
     using "11.IH" attrs_ok hdr bodyE wf_body ee_body bound_body inv1_body inv2_body by simp
   \<comment> \<open>Assemble the Core While rule (whileGhost = ghost, so the ghost guard is trivial).\<close>
   show ?case
-    using cond_bool inv_bool decr_typed decr_valid body_typed
+    using cond_bool inv_bool decr_ok body_typed
     by (simp add: cs_eq env'_eq)
 next
   \<comment> \<open>Call: delegated to elab_call_statement_correct (a Block around a single

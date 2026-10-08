@@ -216,7 +216,7 @@ and core_statement_list_free_vars :: "CoreStatement list \<Rightarrow> string fs
 | "core_statement_free_vars (CoreStmt_While _ condTm invars decrTm body) =
     core_term_free_vars condTm
     |\<union>| ffUnion (fset_of_list (map core_term_free_vars invars))
-    |\<union>| core_term_free_vars decrTm
+    |\<union>| (case decrTm of None \<Rightarrow> {||} | Some tm \<Rightarrow> core_term_free_vars tm)
     |\<union>| core_statement_list_free_vars body"
 | "core_statement_free_vars (CoreStmt_Match _ scrut arms) =
     core_term_free_vars scrut

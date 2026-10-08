@@ -64,6 +64,16 @@ definition cast_result_type ::
             \<and> (ghost = NotGhost \<longrightarrow> is_runtime_type env t)
          then Some t else None)"
 
+(* The optional decreases-term of a While loop. It may be absent; if present it
+   is a Ghost term whose type is a valid decreases type (see
+   is_valid_decreases_type). *)
+fun has_valid_decreases_type :: "CoreTyEnv \<Rightarrow> CoreTerm option \<Rightarrow> bool" where
+  "has_valid_decreases_type env None = True"
+| "has_valid_decreases_type env (Some decrTm) =
+    (case core_term_type env Ghost decrTm of
+       Some decrTy \<Rightarrow> is_valid_decreases_type decrTy
+     | None \<Rightarrow> False)"
+
 
 (* ========================================================================== *)
 (* Statement typechecking *)
@@ -252,7 +262,8 @@ where
   (* While loop.
      The condition must be Bool.
      Invariants must be Bool and are Ghost.
-     The decreases term must be a valid_decreases_type and is Ghost.
+     The decreases term is optional; if present it must be a valid_decreases_type
+     and is Ghost.
      The body typechecks as a statement list; it runs in a separate variable scope, so
      its result env is discarded. *)
 | "core_statement_type env ghost (CoreStmt_While whileGhost condTm invars decrTm body) =
@@ -260,15 +271,12 @@ where
      then (case core_term_type env whileGhost condTm of
              Some CoreTy_Bool \<Rightarrow>
                if list_all (\<lambda>inv. core_term_type env Ghost inv = Some CoreTy_Bool) invars
-               then (case core_term_type env Ghost decrTm of
-                       Some decrTy \<Rightarrow>
-                         if is_valid_decreases_type decrTy
-                         then (case core_statement_list_type
-                                      (env \<lparr> TE_ProofTopLevel := False \<rparr>) whileGhost body of
-                                 Some _ \<Rightarrow> Some env
-                               | None \<Rightarrow> None)
-                         else None
-                     | None \<Rightarrow> None)
+               then if has_valid_decreases_type env decrTm
+                    then (case core_statement_list_type
+                                 (env \<lparr> TE_ProofTopLevel := False \<rparr>) whileGhost body of
+                            Some _ \<Rightarrow> Some env
+                          | None \<Rightarrow> None)
+                    else None
                else None
            | _ \<Rightarrow> None)
      else None)"
@@ -1202,9 +1210,25 @@ qed
    core_statement_type accepts, and the resulting environment is the original
    result with the extra type variables added. *)
 
-(* This mirrors core_term_type_irrelevant_tyvar (CoreTypecheck.thy). The variant 
-   phrased with extend_env_with_tyvars is in ExtendEnvWithTyvars.thy (which 
+(* This mirrors core_term_type_irrelevant_tyvar (CoreTypecheck.thy). The variant
+   phrased with extend_env_with_tyvars is in ExtendEnvWithTyvars.thy (which
    imports this theory. *)
+
+lemma has_valid_decreases_type_irrelevant_tyvar:
+  assumes "has_valid_decreases_type env decr"
+  shows "has_valid_decreases_type
+           (env \<lparr> TE_TypeVars := TE_TypeVars env |\<union>| extraTV,
+                  TE_RuntimeTypeVars := TE_RuntimeTypeVars env |\<union>| extraRT \<rparr>) decr"
+proof (cases decr)
+  case None
+  then show ?thesis by simp
+next
+  case (Some tm)
+  from assms Some obtain ty where
+    t: "core_term_type env Ghost tm = Some ty" and v: "is_valid_decreases_type ty"
+    by (auto split: option.splits)
+  from core_term_type_irrelevant_tyvar[OF t] v Some show ?thesis by simp
+qed
 
 lemma core_statement_type_irrelevant_tyvar:
   "core_statement_type env ghost stmt = Some env' \<Longrightarrow>
@@ -1522,12 +1546,11 @@ next
                 e \<lparr> TE_TypeVars := TE_TypeVars e |\<union>| extraTV,
                     TE_RuntimeTypeVars := TE_RuntimeTypeVars e |\<union>| extraRT \<rparr>"
   let ?env1 = "?ext env"
-  from "12.prems" obtain decrTy bodyEnv where
+  from "12.prems" obtain bodyEnv where
     gh: "ghost = Ghost \<longrightarrow> whileGhost = Ghost" and
     cond: "core_term_type env whileGhost condTm = Some CoreTy_Bool" and
     invs: "list_all (\<lambda>inv. core_term_type env Ghost inv = Some CoreTy_Bool) invars" and
-    decr: "core_term_type env Ghost decrTm = Some decrTy" and
-    decr_valid: "is_valid_decreases_type decrTy" and
+    decr: "has_valid_decreases_type env decrTm" and
     body: "core_statement_list_type (env \<lparr> TE_ProofTopLevel := False \<rparr>) whileGhost body = Some bodyEnv" and
     env'_eq: "env' = env"
     by (auto split: if_splits option.splits CoreType.splits)
@@ -1535,15 +1558,15 @@ next
     using cond core_term_type_irrelevant_tyvar by blast
   have invs': "list_all (\<lambda>inv. core_term_type ?env1 Ghost inv = Some CoreTy_Bool) invars"
     using invs core_term_type_irrelevant_tyvar by (simp add: list_all_iff)
-  have decr': "core_term_type ?env1 Ghost decrTm = Some decrTy"
-    using decr core_term_type_irrelevant_tyvar by blast
+  have decr': "has_valid_decreases_type ?env1 decrTm"
+    using decr has_valid_decreases_type_irrelevant_tyvar by blast
   have goal_shape: "?ext (env \<lparr> TE_ProofTopLevel := False \<rparr>)
                       = ?env1 \<lparr> TE_ProofTopLevel := False \<rparr>" by simp
-  from "12.IH"[OF gh cond refl invs decr decr_valid body] goal_shape have body':
+  from "12.IH"[OF gh cond refl invs decr body] goal_shape have body':
     "core_statement_list_type (?env1 \<lparr> TE_ProofTopLevel := False \<rparr>) whileGhost body
        = Some (?ext bodyEnv)"
     by argo
-  from gh cond' invs' decr' decr_valid body' show ?case
+  from gh cond' invs' decr' body' show ?case
     by (simp add: env'_eq)
 next
   \<comment> \<open>Obtain: adds a ghost local; condTm checked under the extended env.\<close>

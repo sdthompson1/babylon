@@ -247,8 +247,8 @@ next
 next
   case (12 s1 ghost condTm invars decrTm body)
   show ?case
-    by (simp add: "12.IH"[OF "12.prems"] apply_subst_to_term_cong_subst[OF "12.prems"]
-             cong: map_cong)
+    by (metis (lifting) ext "12.IH" "12.prems" apply_subst_to_statement.simps(12)
+        apply_subst_to_term_cong_subst)
 next
   case (13 s1 ghost scrut arms)
   have "map (\<lambda>(pat, body). (pat, apply_subst_to_statement_list s1 body)) arms

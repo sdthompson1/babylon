@@ -891,6 +891,23 @@ proof -
   then show ?thesis using cons unfolding tyenv_ctors_consistent_def by simp
 qed
 
+(* The optional decreases-term of a While loop transfers to the extended env. *)
+lemma has_valid_decreases_type_tyenv_extends:
+  assumes ext: "tyenv_extends env env2"
+    and cons: "tyenv_ctors_consistent env"
+    and ok: "has_valid_decreases_type env decr"
+  shows "has_valid_decreases_type env2 decr"
+proof (cases decr)
+  case None
+  then show ?thesis by simp
+next
+  case (Some tm)
+  from ok Some obtain ty where
+    t: "core_term_type env Ghost tm = Some ty" and v: "is_valid_decreases_type ty"
+    by (auto split: option.splits)
+  from core_term_type_tyenv_extends[OF ext cons t] v Some show ?thesis by simp
+qed
+
 (* The statement-level weakening. Unlike the term level, the output
    environment is existential: env2's output is env2 with the same scope
    updates that env's output applied to env, so the two outputs are again
@@ -1229,12 +1246,11 @@ next
   \<comment> \<open>While: env unchanged; body checked under TE_ProofTopLevel := False.\<close>
   case (12 env ghost whileGhost condTm invars decrTm body)
   note ext = "12.prems"(2) and cons = "12.prems"(3)
-  from "12.prems"(1) obtain decrTy bodyEnv where
+  from "12.prems"(1) obtain bodyEnv where
     gh: "ghost = Ghost \<longrightarrow> whileGhost = Ghost" and
     cond: "core_term_type env whileGhost condTm = Some CoreTy_Bool" and
     invs: "list_all (\<lambda>inv. core_term_type env Ghost inv = Some CoreTy_Bool) invars" and
-    decr: "core_term_type env Ghost decrTm = Some decrTy" and
-    decr_valid: "is_valid_decreases_type decrTy" and
+    decr: "has_valid_decreases_type env decrTm" and
     body: "core_statement_list_type (env \<lparr> TE_ProofTopLevel := False \<rparr>) whileGhost body
              = Some bodyEnv" and
     out_eq: "envOut = env"
@@ -1243,20 +1259,20 @@ next
     using core_term_type_tyenv_extends[OF ext cons cond] .
   have invs2: "list_all (\<lambda>inv. core_term_type env2 Ghost inv = Some CoreTy_Bool) invars"
     using invs core_term_type_tyenv_extends[OF ext cons] by (fastforce simp: list_all_iff)
-  have decr2: "core_term_type env2 Ghost decrTm = Some decrTy"
-    using core_term_type_tyenv_extends[OF ext cons decr] .
+  have decr2: "has_valid_decreases_type env2 decrTm"
+    using has_valid_decreases_type_tyenv_extends[OF ext cons decr] .
   have ext_f: "tyenv_extends (env \<lparr> TE_ProofTopLevel := False \<rparr>)
                              (env2 \<lparr> TE_ProofTopLevel := False \<rparr>)"
     using ext unfolding tyenv_extends_def by simp
   have cons_f: "tyenv_ctors_consistent (env \<lparr> TE_ProofTopLevel := False \<rparr>)"
     using cons unfolding tyenv_ctors_consistent_def by simp
-  from "12.IH"[OF gh cond refl invs decr decr_valid body ext_f cons_f] obtain bodyEnv2 where
+  from "12.IH"[OF gh cond refl invs decr body ext_f cons_f] obtain bodyEnv2 where
     body2: "core_statement_list_type (env2 \<lparr> TE_ProofTopLevel := False \<rparr>) whileGhost body
               = Some bodyEnv2"
     by blast
   have res: "core_statement_type env2 ghost (CoreStmt_While whileGhost condTm invars decrTm body)
                = Some env2"
-    using gh cond2 invs2 decr2 decr_valid body2 by simp
+    using gh cond2 invs2 decr2 body2 by simp
   from res ext show ?case using out_eq by blast
 next
   \<comment> \<open>Obtain: adds a ghost local; the condition is a term checked in the
