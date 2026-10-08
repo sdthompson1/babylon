@@ -331,18 +331,34 @@ proof -
         by (auto simp: Let_def split: if_splits)
       with lhs' rhs' eq_neq True show ?thesis by auto
     next
-      case False
-      with assms(1) resolved cop eq_neq obtain newLhs newRhs commonTy where
-        coerce: "coerce_to_common_int_type lhsTm' lhsTy' rhsTm' rhsTy' = Some (newLhs, newRhs, commonTy)"
-        and tm_eq: "resultTm = CoreTm_Binop cop newLhs newRhs" and ty_eq: "resultTy = CoreTy_Bool"
-        by (auto simp: Let_def split: option.splits if_splits)
-      from coerce_to_common_int_type_correct[OF coerce lhs' rhs' assms(4)]
-      have typed: "core_term_type env ghost newLhs = Some commonTy"
-                  "core_term_type env ghost newRhs = Some commonTy" by auto
-      from coerce have "is_finite_integer_type commonTy"
-        by (cases lhsTy'; cases rhsTy') (auto split: option.splits prod.splits simp: Let_def)
-      hence "is_numeric_type commonTy" by (cases commonTy) auto
-      with typed eq_neq tm_eq ty_eq show ?thesis by auto
+      case neq: False
+      show ?thesis
+      proof (cases "is_finite_integer_type lhsTy' \<and> is_finite_integer_type rhsTy'")
+        case True
+        with neq assms(1) resolved cop eq_neq obtain newLhs newRhs commonTy where
+          coerce: "coerce_to_common_int_type lhsTm' lhsTy' rhsTm' rhsTy' = Some (newLhs, newRhs, commonTy)"
+          and tm_eq: "resultTm = CoreTm_Binop cop newLhs newRhs" and ty_eq: "resultTy = CoreTy_Bool"
+          by (auto simp: Let_def split: option.splits if_splits)
+        from coerce_to_common_int_type_correct[OF coerce lhs' rhs' assms(4)]
+        have typed: "core_term_type env ghost newLhs = Some commonTy"
+                    "core_term_type env ghost newRhs = Some commonTy" by auto
+        from coerce have "is_finite_integer_type commonTy"
+          by (cases lhsTy'; cases rhsTy') (auto split: option.splits prod.splits simp: Let_def)
+        hence "is_numeric_type commonTy" by (cases commonTy) auto
+        with typed eq_neq tm_eq ty_eq show ?thesis by auto
+      next
+        case False
+        \<comment> \<open>Arrays of different kinds, widened to the incomplete array type (ghost only)\<close>
+        with neq assms(1) resolved cop eq_neq obtain newLhs newRhs commonTy where
+          coerce: "coerce_to_common_array_type lhsTm' lhsTy' rhsTm' rhsTy' = Some (newLhs, newRhs, commonTy)"
+          and gh: "ghost = Ghost"
+          and tm_eq: "resultTm = CoreTm_Binop cop newLhs newRhs" and ty_eq: "resultTy = CoreTy_Bool"
+          by (auto simp: Let_def split: option.splits if_splits)
+        from coerce_to_common_array_type_correct[OF coerce lhs' rhs' assms(4) gh]
+        have typed: "core_term_type env ghost newLhs = Some commonTy"
+                    "core_term_type env ghost newRhs = Some commonTy" by auto
+        with gh eq_neq tm_eq ty_eq show ?thesis by auto
+      qed
     qed
   next
     \<comment> \<open>Logical: both Bool\<close>

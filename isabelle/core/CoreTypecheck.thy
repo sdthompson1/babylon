@@ -135,6 +135,17 @@ lemma array_cast_ok_type_tyvars:
   "array_cast_ok srcTy tgtTy \<Longrightarrow> type_tyvars tgtTy = type_tyvars srcTy"
   by (cases srcTy; cases tgtTy) auto
 
+(* Any dimension can be widened to an unknown dimension. *)
+lemma dim_cast_ok_unknown: "dim_cast_ok d CoreDim_Unknown"
+  by (cases d) simp_all
+
+(* Any array type can be widened to the incomplete array type with the same
+   element type and number of dimensions. *)
+lemma array_cast_ok_widen:
+  "array_cast_ok (CoreTy_Array elemTy dims)
+                 (CoreTy_Array elemTy (replicate (length dims) CoreDim_Unknown))"
+  by (simp add: list_all2_conv_all_nth dim_cast_ok_unknown)
+
 
 (* A general cast can either be an array cast (as described above), or a numeric
    cast (converting any numeric type -- finite int, int or real -- to another). *)

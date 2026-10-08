@@ -543,6 +543,13 @@ compared, then it is the contents of the arrays, rather than the
 pointers to the array memory, that are being compared. No verification
 checks are required for these operators.
 
+In non-executable code, when comparing two arrays for equality or
+inequality, it is not required for the types to match exactly; they
+can be any "compatible" array types. For example, comparing `i32[10]`
+with `i32[*]` or `i32[]` (using `==` or `!=`) is allowed. For this
+to work, the element types and the number of dimensions must agree
+exactly.
+
 Numerical values can also be compared using the operators `<` (less
 than), `<=` (less than or equal to), `>` (greater than), or `>=`
 (greater than or equal to). These can only be used at numeric types,

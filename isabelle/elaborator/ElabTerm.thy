@@ -364,6 +364,26 @@ fun coerce_to_common_int_type :: "CoreTerm \<Rightarrow> CoreType \<Rightarrow> 
         in Some (newTm1, newTm2, commonTy1))"
 | "coerce_to_common_int_type _ _ _ _ = None"
 
+(* Coerce two array-typed terms to a common incomplete array type, for use with == and !=.
+   Applies when both types are arrays with the same element type and the same number of
+   dimensions, but of different categories (fixed-size, allocatable or incomplete): both
+   operands are then widened to the incomplete array type (T[], T[,], ...) and compared
+   there. Returns None in all other cases; in particular, two fixed-size arrays of
+   different sizes cannot be compared. (The caller handles identical types before
+   calling this.) *)
+fun coerce_to_common_array_type :: "CoreTerm \<Rightarrow> CoreType \<Rightarrow> CoreTerm \<Rightarrow> CoreType
+                                    \<Rightarrow> (CoreTerm \<times> CoreTerm \<times> CoreType) option" where
+  "coerce_to_common_array_type tm1 (CoreTy_Array elemTy1 dims1)
+                               tm2 (CoreTy_Array elemTy2 dims2) =
+    (if elemTy1 = elemTy2 \<and> length dims1 = length dims2
+        \<and> map dim_category dims1 \<noteq> map dim_category dims2
+     then let commonTy = CoreTy_Array elemTy1 (replicate (length dims1) CoreDim_Unknown)
+          in Some (insert_cast (CoreTy_Array elemTy1 dims1) commonTy tm1,
+                   insert_cast (CoreTy_Array elemTy2 dims2) commonTy tm2,
+                   commonTy)
+     else None)"
+| "coerce_to_common_array_type _ _ _ _ = None"
+
 (* Helper for binary operator elaboration: check that both operands satisfy a type predicate,
    then either use them directly (if same type) or try coercion to a common int type.
    - type_pred: the predicate both operand types must satisfy
@@ -542,7 +562,14 @@ fun elab_single_binop :: "(string \<Rightarrow> bool) \<Rightarrow> Location \<R
               Some (newLhs, newRhs, _) \<Rightarrow>
                 Inr (CoreTm_Binop cop newLhs newRhs, CoreTy_Bool)
             | None \<Rightarrow> Inl [TyErr_BinopCannotCombineTypes loc babOp lhsTy' rhsTy'])
-          else Inl [TyErr_BinopCannotCombineTypes loc babOp lhsTy' rhsTy']
+          else
+            \<comment> \<open>Arrays of different categories (e.g. T[10] and T[]) are compared at the
+                incomplete array type. Only bool/numeric are allowed when not ghost.\<close>
+            (case coerce_to_common_array_type lhsTm' lhsTy' rhsTm' rhsTy' of
+              Some (newLhs, newRhs, _) \<Rightarrow>
+                if ghost = Ghost then Inr (CoreTm_Binop cop newLhs newRhs, CoreTy_Bool)
+                else Inl [TyErr_EqualityRequiresBoolOrNumeric loc]
+            | None \<Rightarrow> Inl [TyErr_BinopCannotCombineTypes loc babOp lhsTy' rhsTy'])
 
         else if is_logical_binop cop then
           \<comment> \<open>Logical: both Bool\<close>

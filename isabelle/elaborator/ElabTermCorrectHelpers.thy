@@ -2453,5 +2453,45 @@ next
   with assms(1) show ?thesis by simp
 qed
 
+(* Correctness of coerce_to_common_array_type:
+   If coercion succeeds, both output terms have the common (incomplete array) type.
+   Only used in ghost code, so the common type need not be a runtime type. *)
+lemma coerce_to_common_array_type_correct:
+  assumes "coerce_to_common_array_type tm1 ty1 tm2 ty2 = Some (newTm1, newTm2, commonTy)"
+      and "core_term_type env ghost tm1 = Some ty1"
+      and "core_term_type env ghost tm2 = Some ty2"
+      and "tyenv_well_formed env"
+      and "ghost = Ghost"
+  shows "core_term_type env ghost newTm1 = Some commonTy
+       \<and> core_term_type env ghost newTm2 = Some commonTy"
+proof -
+  from assms(1) obtain elemTy dims1 dims2 where
+    ty1_eq: "ty1 = CoreTy_Array elemTy dims1" and
+    ty2_eq: "ty2 = CoreTy_Array elemTy dims2" and
+    len: "length dims1 = length dims2" and
+    commonTy_eq: "commonTy = CoreTy_Array elemTy (replicate (length dims1) CoreDim_Unknown)" and
+    newTm1_eq: "newTm1 = insert_cast ty1 commonTy tm1" and
+    newTm2_eq: "newTm2 = insert_cast ty2 commonTy tm2"
+    by (cases ty1; cases ty2) (auto simp: Let_def split: if_splits)
+
+  \<comment> \<open>The common type is well-kinded, since ty1 is\<close>
+  have ty1_wk: "is_well_kinded env ty1"
+    using core_term_type_well_kinded[OF assms(2,4)] .
+  hence common_wk: "is_well_kinded env commonTy"
+    using ty1_eq commonTy_eq array_dims_well_kinded_replicate_unknown by simp
+
+  \<comment> \<open>Both input types widen to the common type\<close>
+  have co1: "coercible ty1 commonTy"
+    using ty1_eq commonTy_eq array_cast_ok_widen by (simp add: coercible_def)
+  have co2: "coercible ty2 commonTy"
+    using ty2_eq commonTy_eq len array_cast_ok_widen by (simp add: coercible_def)
+
+  have "core_term_type env ghost newTm1 = Some commonTy"
+    using insert_cast_typed[OF assms(2) _ common_wk] co1 assms(5) newTm1_eq by simp
+  moreover have "core_term_type env ghost newTm2 = Some commonTy"
+    using insert_cast_typed[OF assms(3) _ common_wk] co2 assms(5) newTm2_eq by simp
+  ultimately show ?thesis by simp
+qed
+
 
 end

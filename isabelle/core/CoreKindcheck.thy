@@ -32,6 +32,20 @@ fun dim_in_range :: "CoreDimension \<Rightarrow> bool" where
 definition array_dims_well_kinded :: "CoreDimension list \<Rightarrow> bool" where
   "array_dims_well_kinded dims \<equiv> dims \<noteq> [] \<and> dims_uniform dims \<and> list_all dim_in_range dims"
 
+(* A non-empty list of identical dimensions is uniform. *)
+lemma dims_uniform_cons_replicate: "dims_uniform (d # replicate n d)"
+  by (induction n) simp_all
+
+lemma dims_uniform_replicate: "n > 0 \<Longrightarrow> dims_uniform (replicate n d)"
+  by (cases n) (simp_all add: dims_uniform_cons_replicate)
+
+(* Replacing every dimension of a well-kinded dimension list by CoreDim_Unknown
+   (i.e. forming the incomplete array type T[] / T[,] etc.) keeps it well-kinded. *)
+lemma array_dims_well_kinded_replicate_unknown:
+  "array_dims_well_kinded dims
+   \<Longrightarrow> array_dims_well_kinded (replicate (length dims) CoreDim_Unknown)"
+  by (auto simp: array_dims_well_kinded_def dims_uniform_replicate list_all_iff)
+
 (* Definition of well-kindedness *)
 fun is_well_kinded :: "CoreTyEnv \<Rightarrow> CoreType \<Rightarrow> bool" where
   "is_well_kinded env (CoreTy_Datatype typeName argTypes) =
