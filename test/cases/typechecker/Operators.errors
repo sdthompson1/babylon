@@ -26,3 +26,7 @@ src/Operators.b:45:34: Type mismatch
 src/Operators.b:49:34: Type mismatch (expected finite-sized integer)
 src/Operators.b:50:33: Type mismatch (expected numeric type)
 src/Operators.b:54:21: Type mismatch
+src/Operators.b:61:27: Type mismatch
+src/Operators.b:62:27: Type mismatch
+src/Operators.b:64:16: Type mismatch (expected bool or numeric)
+src/Operators.b:65:16: Type mismatch (expected bool or numeric)

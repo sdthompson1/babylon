@@ -53,3 +53,17 @@ interface {}
   {
       return {1} == {1,2};   // Type error: Different tuple sizes.
   }
+
+  function equality2()
+  {
+      var a: i32[10];
+      var b: i32[20];
+      ghost var p1 = a == b;    // Type error: different array sizes
+      ghost var p2 = a != b;    // Ditto
+
+      var p3 = {1,2,3} == {1,2,3};   // Illegal outside ghost code
+      var p4 = {1,2,3} != {1,2,3};   // Ditto
+
+      ghost var p5 = {1,2,3} == {1,2,3};  // Allowed
+      ghost var p6 = {1,2,3} != {1,2,3};  // Allowed
+  }
