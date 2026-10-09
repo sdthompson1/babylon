@@ -1143,31 +1143,30 @@ u64, u64}`.
 ## Allocated expressions
 
 The expression `allocated(E)` evaluates to `true` if `E` currently
-contains allocated heap memory (which must therefore be freed at some
-point -- see the section on memory leaks below), or `false` otherwise.
+contains allocated heap memory (or some other resource, such as a file
+handle), which must be freed or released at some point.
 
-In more detail:
+Concretely:
 
- - If `E` is an allocatable array type (e.g. `i32[*]` or `bool[*,*]`
-   etc.) then `allocated(E)` is true if `sizeof(E)` is non-zero (in
+ - If `E` has an allocatable array type (e.g. `i32[*]` or `bool[*,*]`
+   etc.), then `allocated(E)` is true if `sizeof(E)` is non-zero (in
    the case of a single-dimensional array), or if *all* components of
    `sizeof(E)` are non-zero (in the case of multi-dimensional arrays).
+   (This is because `[*]` arrays represent pointers to heap memory,
+   which must be freed eventually.)
 
- - If `E` is a fixed-sized array type, then `allocated(E)` is true if
+ - If `E` has a fixed-sized array type, then `allocated(E)` is true if
    `allocated(E[i])` is true for *any* valid array index `i`.
 
- - If `E` is an incomplete type, then it is illegal to call
+ - If `E` has an incomplete type, then it is illegal to call
    `allocated(E)` (a type error will result).
 
- - If `E` is a tuple, record or datatype, then it is allocated if
-   *any* of the component fields or payload(s) are allocated.
+ - If `E`'s type is a tuple, record or datatype, then `E` is allocated
+   if *any* of its component fields or payload(s) are allocated.
 
- - If `E` is an `extern` type (see below) that was marked
-   `(allocated)` in its declaration, then `allocated(E)` is true if
-   `E` is not equal to the default value for that type. If the
-   `extern` type was marked `(allocated_always)`, then `allocated(E)`
-   is always true. If the `extern` type was not marked in either of
-   those ways, then `allocated(E)` is false.
+ - If `E` has an `extern` type, then the result of `allocated(E)`
+   depends on how the type was declared; see "Extern types" below for
+   the details.
 
  - In all other cases, `allocated(E)` is false.
 
@@ -2033,10 +2032,12 @@ that relies on knowing what the concrete type underlying the name
 `Foo` actually is.
 
 It is also possible to declare an abstract type using the syntax `type
-Foo (allocated);` or `type Foo (allocated_always);`. This means that,
-if `x` has type `Foo`, then (in the former case) `allocated(x)` is
-true if and only if `x` is equal to the default value of a `Foo`
-object, and (in the latter case) `allocated(x)` is always true.
+Foo (allocated);` or `type Foo (allocated_always);`. The `(allocated)`
+marker means that `allocated(x)` is only known to be false when `x`
+equals the default value of type `Foo`; for any other value,
+`allocated(x)` might or might not be true. The `(allocated_always)`
+marker is even stricter: the verifier will assume nothing at all about
+whether `allocated(x)` is true or false.
 
 It is a rule of the language that the "allocated level" of an abstract
 type must be compatible with the implementation given for it. If the
@@ -2085,18 +2086,27 @@ inside" the type to see what the `void *` pointer contains or what it
 points to.
 
 It is also possible to declare an extern type as `extern type Foo
-(allocated);` or `extern type Foo (allocated_always);`. This means
-that, on the Babylon side, values of type Foo will be considered
-"allocated" if the C void pointer is non-NULL (in the former case) or
-just always considered "allocated" (in the latter case). In
-particular, `(allocated)` is useful if the C void pointer points to
-some sort of allocated memory (as this will prevent the pointer being
-"leaked" or duplicated on the Babylon side).
+(allocated);` or `extern type Foo (allocated_always);`. The
+`(allocated)` case means that if the `void *` pointer (on the C side)
+is equal to `NULL`, then the value (on the Babylon side) will be
+considered non-allocated; but nothing would be assumed about the
+"allocated-ness" of non-NULL pointer values. The `(allocated_always)`
+case is stricter: the verifier assumes nothing at all about whether an
+extern value of this type is allocated or not.
 
-If a type is declared using `extern type` in the module interface then
-no `type` or `datatype` declaration bearing the same name may appear
-in the module implementation. The reverse is also true, with the
-exception that the type declared using `extern type` in the module
+The `(allocated)` case is useful if the C `void *` value represents
+some sort of pointer to allocated memory, with `NULL` meaning that no
+memory has been allocated (as is usual in C); this will prevent the
+pointer from being leaked or duplicated on the Babylon side. The
+`(allocated_always)` case prevents the Babylon side from creating a
+value of the type at all, which is useful when the `void *` represents
+some sort of handle, where the C code only ever wants to see handles
+that it itself created.
+
+If a type is declared using `extern type` in the module interface,
+then no `type` or `datatype` declaration bearing the same name may
+appear in the module implementation. The reverse is also true, with
+the exception that the type declared using `extern type` in the module
 implementation may be redeclared as an abstract type (see above) in
 the module interface.
 
@@ -2434,8 +2444,8 @@ Note the preconditions in the above example. When verifying the
 function, the verifier needs to prove that the return value is not
 allocated (this is a general rule -- return values must be
 non-allocated -- see the description of the return statement above).
-This would be fine if, say, the return type was `{i32, i32}`, but if
-`U` and `V` were allocatable array types, say, then it might become a
+This would be fine if the return type was `{i32, i32}`, but if `U` and
+`V` were, say, allocatable array types, then it might become a
 problem. That is why the precondition is required -- effectively we
 are shifting the burden onto the caller to prove that non-allocated
 values are being passed for `x` and `y`. As long as this condition is

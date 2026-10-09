@@ -77,10 +77,10 @@ datatype MaybeFoo = Nothing | Just(Foo);
 ghost function f9()
 {
     var v: Foo;  // allowed because we are in ghost function
-
-    assert allocated(v);
-    assert allocated(Just(v));
-    assert !allocated(Nothing);
+    assert allocated(v);   // Unprovable, nothing can be said about allocated(v)
+}
+ghost function f9a() {
+  assert !allocated(Nothing);   // Provable, we know "Nothing" is unallocated, even if we don't know whether "Just" values are allocated or not.
 }
 
 function f10()
@@ -102,8 +102,8 @@ ghost function is_allocated<T>(x: T): bool
 ghost function f11(f: Foo)
 {
     assert !is_allocated<i32>(0);
-    assert is_allocated<Foo>(f);
-    assert !is_allocated<Foo>(f);  // negative test
+    assert !is_allocated<Foo>(f);  // Unprovable, nothing is known about whether Foo is allocated
+
 }
 
 // Copying is allowed in ghost function

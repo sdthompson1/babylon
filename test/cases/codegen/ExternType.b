@@ -29,5 +29,5 @@ function main()
     };
 
     free_alloc_test(m);
-    assert m == MA_Nothing;
+    assert !allocated(m);
 }

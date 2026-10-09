@@ -510,37 +510,22 @@ struct Item * add_tyvar_to_env(struct VContext *context, const char *name, bool 
 
     const char *allocated_fol_name = copy_string_2("$allocated-", fol_name);
 
-    if (alloc_level != ALLOC_UNKNOWN) {
-        // (define-fun $allocated-%^name ((alloc_fol_var %^name)) Bool alloc_fol_term)
-
-        struct Sexpr *alloc_expr = NULL;
-        switch (alloc_level) {
-        case ALLOC_ALWAYS:
-            alloc_expr = make_string_sexpr("true");
-            break;
-
-        case ALLOC_NEVER:
-            alloc_expr = make_string_sexpr("false");
-            break;
-
-        case ALLOC_IF_NOT_DEFAULT:
-            alloc_expr = make_list3_sexpr(
-                make_string_sexpr("distinct"),
-                make_string_sexpr("$x"),
-                make_string_sexpr_handover(copy_string_2("$default-", fol_name)));
-            break;
-
-        case ALLOC_UNKNOWN:
-            fatal_error("unreachable");
-        }
-
+    // The alloc level is only a constraint on the (unknown) realization of
+    // the type, so in general $allocated is left uninterpreted, and only the
+    // facts implied by the alloc level are asserted:
+    //  - ALLOC_NEVER: no value is allocated, so $allocated is defined as false.
+    //  - ALLOC_IF_NOT_DEFAULT: the default value is not allocated (but a
+    //    non-default value may or may not be allocated).
+    //  - ALLOC_ALWAYS, ALLOC_UNKNOWN: nothing is known.
+    if (alloc_level == ALLOC_NEVER) {
+        // (define-fun $allocated-%^name (($x %^name)) Bool false)
         item->fol_decl = make_list5_sexpr(
             make_string_sexpr("define-fun"),
             make_string_sexpr(allocated_fol_name),
             make_list1_sexpr(make_list2_sexpr(make_string_sexpr("$x"),
                                               make_string_sexpr(fol_name))),
             make_string_sexpr("Bool"),
-            alloc_expr);
+            make_string_sexpr("false"));
 
     } else {
         // (declare-fun $allocated-%^name (%^name) Bool)
@@ -549,6 +534,18 @@ struct Item * add_tyvar_to_env(struct VContext *context, const char *name, bool 
             make_string_sexpr(allocated_fol_name),
             make_list1_sexpr(make_string_sexpr(fol_name)),
             make_string_sexpr("Bool"));
+
+        if (alloc_level == ALLOC_IF_NOT_DEFAULT) {
+            // (assert (not ($allocated-%^name $default-%^name)))
+            item->fol_axioms = make_list1_sexpr(
+                make_list2_sexpr(
+                    make_string_sexpr("assert"),
+                    make_list2_sexpr(
+                        make_string_sexpr("not"),
+                        make_list2_sexpr(
+                            make_string_sexpr(allocated_fol_name),
+                            make_string_sexpr_handover(copy_string_2("$default-", fol_name))))));
+        }
     }
 
     item->fol_name = copy_string(allocated_fol_name);
