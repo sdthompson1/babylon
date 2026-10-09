@@ -258,11 +258,21 @@ proof -
                  | Some stmts \<Rightarrow>
                      core_statement_list_type
                        (module_body_env_for env (CF_Args f) info')
-                       (FI_Ghost info') stmts \<noteq> None)"
+                       (FI_Ghost info') stmts \<noteq> None)" and
+      ctr_wt: "fun_contracts_well_typed env info'"
       using fwt f_lk unfolding module_functions_well_typed_def by blast
     have info'_eq: "info' = info" using decl decl2 by simp
     have len: "length (CF_Args f) = length (FI_TmArgs info)"
       using len0 info'_eq by simp
+    \<comment> \<open>The contract typechecks at the interpreter's body envs, which coincide
+        with the module's on this closed env.\<close>
+    have ctr_match: "contracts_typed_in (body_env_for env) info"
+    proof -
+      have "body_env_for env = module_body_env_for env"
+        by (rule ext)+ (simp add: module_body_env_for_eq_body_env_for[OF abs])
+      then show ?thesis
+        using ctr_wt info'_eq unfolding fun_contracts_well_typed_def by simp
+    qed
 
     \<comment> \<open>The five conjuncts of fun_info_matches_interp_fun.\<close>
     have if_sel:
@@ -317,7 +327,7 @@ proof -
     qed
     have match: "fun_info_matches_interp_fun env info (make_interp_fun info f body)"
       unfolding fun_info_matches_interp_fun_def if_sel
-      using markers distZip body_match by simp
+      using markers distZip body_match ctr_match by simp
 
     show "case fmlookup (IS_Functions ?st) name of
             Some interpFun \<Rightarrow> fun_info_matches_interp_fun env info interpFun

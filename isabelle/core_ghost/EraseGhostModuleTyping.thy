@@ -914,6 +914,9 @@ proof -
       using length_drop_ghost_params[OF len] by simp
     have distE: "distinct (CF_Args f)"
       unfolding argsE by (rule distinct_drop_ghost[OF dist])
+    \<comment> \<open>Erasure removes the contract.\<close>
+    have ctrE: "fun_contracts_well_typed ?E ?infoE"
+      by (rule fun_contracts_well_typed_empty) simp_all
     show "\<exists>info. fmlookup (TE_Functions ?E) name = Some info
                  \<and> length (CF_Args f) = length (FI_TmArgs info)
                  \<and> distinct (CF_Args f)
@@ -922,8 +925,9 @@ proof -
                     | Some body \<Rightarrow>
                         core_statement_list_type
                           (module_body_env_for ?E (CF_Args f) info) (FI_Ghost info) body
-                        \<noteq> None)"
-      by (intro exI[of _ ?infoE] conjI) (rule fiE lenE distE bodyE')+
+                        \<noteq> None)
+                 \<and> fun_contracts_well_typed ?E info"
+      by (intro exI[of _ ?infoE] conjI) (rule fiE lenE distE bodyE' ctrE)+
   qed
 
   have nwtE: "normalized_module_well_typed (erase_ghost_module m)"

@@ -398,12 +398,14 @@ lemma fun_info_matches_interp_fun_ground_cong_env:
 proof -
   have body_eq: "\<And>names. body_env_for env1 names funInfo = body_env_for env2 names funInfo"
     by (rule body_env_for_cong[OF gv fn dt dc dcbt gd abs])
+  have body_fun_eq: "body_env_for env1 = body_env_for env2"
+    by (rule ext)+ (rule body_env_for_cong[OF gv fn dt dc dcbt gd abs])
   have ext_eq: "\<And>externFun. extern_fun_contract env1 funInfo externFun
                               = extern_fun_contract env2 funInfo externFun"
     by (rule extern_fun_contract_ground_cong_env[OF dc dt])
   show ?thesis
     unfolding fun_info_matches_interp_fun_def
-    by (simp add: body_eq ext_eq split: sum.splits)
+    by (simp add: body_eq body_fun_eq ext_eq split: sum.splits)
 qed
 
 (* state_matches_env reads none of TE_GhostLocals, TE_ReturnType, TE_FunctionGhost,

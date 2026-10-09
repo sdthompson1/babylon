@@ -641,6 +641,36 @@ qed
    body env's TE_TypeVars / TE_RuntimeTypeVars are derived from
    TE_AbstractTypes, so they grow pointwise (irrelevant-tyvar weakening), and
    the leftover TE_AbstractTypes difference is again invisible. *)
+
+lemma fun_contracts_well_typed_grow_tyvar_fields:
+  assumes ok: "fun_contracts_well_typed env info"
+      and cons: "tyenv_ctors_consistent env"
+  shows "fun_contracts_well_typed
+           (env \<lparr> TE_TypeVars := TE_TypeVars env |\<union>| eTV,
+                  TE_RuntimeTypeVars := TE_RuntimeTypeVars env |\<union>| eRT,
+                  TE_AbstractTypes := TE_AbstractTypes env |\<union>| eAB \<rparr>) info"
+proof (rule fun_contracts_well_typed_mono[OF ok])
+  let ?env' = "env \<lparr> TE_TypeVars := TE_TypeVars env |\<union>| eTV,
+                     TE_RuntimeTypeVars := TE_RuntimeTypeVars env |\<union>| eRT,
+                     TE_AbstractTypes := TE_AbstractTypes env |\<union>| eAB \<rparr>"
+  fix names info' tm
+  assume t0: "core_term_type (module_body_env_for env names info') Ghost tm = Some CoreTy_Bool"
+  let ?B = "module_body_env_for env names info'"
+  let ?B' = "module_body_env_for ?env' names info'"
+  let ?mid = "?B \<lparr> TE_TypeVars := TE_TypeVars ?B |\<union>| TE_TypeVars ?B',
+                   TE_RuntimeTypeVars := TE_RuntimeTypeVars ?B
+                                          |\<union>| TE_RuntimeTypeVars ?B' \<rparr>"
+  have t1: "core_term_type ?mid Ghost tm = Some CoreTy_Bool"
+    using core_term_type_irrelevant_tyvar[OF t0] .
+  have ext: "tyenv_extends ?mid ?B'"
+    unfolding tyenv_extends_def module_body_env_for_def
+    by (intro conjI allI impI fset_eqI) auto
+  have cons_mid: "tyenv_ctors_consistent ?mid"
+    using cons unfolding tyenv_ctors_consistent_def module_body_env_for_def by simp
+  show "core_term_type ?B' Ghost tm = Some CoreTy_Bool"
+    using core_term_type_tyenv_extends[OF ext cons_mid t1] .
+qed
+
 lemma module_functions_well_typed_grow_tyvar_fields:
   assumes fwt: "module_functions_well_typed env funs"
       and cons: "tyenv_ctors_consistent env"
@@ -665,9 +695,12 @@ proof -
                     None \<Rightarrow> True
                   | Some body \<Rightarrow>
                       core_statement_list_type (module_body_env_for env (CF_Args f) info)
-                        (FI_Ghost info) body \<noteq> None"
+                        (FI_Ghost info) body \<noteq> None" and
+        ctr: "fun_contracts_well_typed env info"
       using fwt unfolding module_functions_well_typed_def by blast
     have decl': "fmlookup (TE_Functions ?env') name = Some info" using decl by simp
+    have ctr': "fun_contracts_well_typed ?env' info"
+      using fun_contracts_well_typed_grow_tyvar_fields[OF ctr cons] .
     have body_ok': "case CF_Body f of
                       None \<Rightarrow> True
                     | Some body \<Rightarrow>
@@ -707,8 +740,9 @@ proof -
                None \<Rightarrow> True
              | Some body \<Rightarrow>
                  core_statement_list_type (module_body_env_for ?env' (CF_Args f) info)
-                   (FI_Ghost info) body \<noteq> None)"
-      using decl' len dist body_ok' by simp
+                   (FI_Ghost info) body \<noteq> None) \<and>
+            fun_contracts_well_typed ?env' info"
+      using decl' len dist body_ok' ctr' by simp
   qed
 qed
 
@@ -1396,6 +1430,27 @@ proof (intro allI impI)
     using d' by blast
 qed
 
+(* Function contracts stay well-typed when the env is extended: the contract
+   envs are body envs, which extend along with the enclosing env. *)
+lemma fun_contracts_well_typed_tyenv_extends:
+  assumes ok: "fun_contracts_well_typed env info"
+      and ext: "tyenv_extends env env'"
+      and cons: "tyenv_ctors_consistent env"
+      and abs_eq: "TE_AbstractTypes env' = TE_AbstractTypes env"
+  shows "fun_contracts_well_typed env' info"
+proof (rule fun_contracts_well_typed_mono[OF ok])
+  fix names info' tm
+  assume t: "core_term_type (module_body_env_for env names info') Ghost tm = Some CoreTy_Bool"
+  have body_ext: "tyenv_extends (module_body_env_for env names info')
+                                (module_body_env_for env' names info')"
+    using ext[unfolded tyenv_extends_def] abs_eq
+    unfolding tyenv_extends_def module_body_env_for_def by auto
+  have cons_body: "tyenv_ctors_consistent (module_body_env_for env names info')"
+    using cons unfolding tyenv_ctors_consistent_def module_body_env_for_def by simp
+  show "core_term_type (module_body_env_for env' names info') Ghost tm = Some CoreTy_Bool"
+    using core_term_type_tyenv_extends[OF body_ext cons_body t] .
+qed
+
 lemma module_functions_well_typed_tyenv_extends:
   assumes fwt: "module_functions_well_typed env F"
       and ext: "tyenv_extends env env'"
@@ -1412,8 +1467,11 @@ proof (intro allI impI)
     body: "case CF_Body f of
              None \<Rightarrow> True
            | Some body \<Rightarrow> core_statement_list_type
-               (module_body_env_for env (CF_Args f) info) (FI_Ghost info) body \<noteq> None"
+               (module_body_env_for env (CF_Args f) info) (FI_Ghost info) body \<noteq> None" and
+    ctr: "fun_contracts_well_typed env info"
     unfolding module_functions_well_typed_def by blast
+  have ctr': "fun_contracts_well_typed env' info"
+    using fun_contracts_well_typed_tyenv_extends[OF ctr ext cons abs_eq] .
   have info': "fmlookup (TE_Functions env') name = Some info"
     using ext info unfolding tyenv_extends_def by blast
   have body_ext: "tyenv_extends (module_body_env_for env (CF_Args f) info)
@@ -1447,8 +1505,9 @@ proof (intro allI impI)
                (case CF_Body f of
                   None \<Rightarrow> True
                 | Some body \<Rightarrow> core_statement_list_type
-                    (module_body_env_for env' (CF_Args f) info) (FI_Ghost info) body \<noteq> None)"
-    using info' len dst body' by simp
+                    (module_body_env_for env' (CF_Args f) info) (FI_Ghost info) body \<noteq> None) \<and>
+               fun_contracts_well_typed env' info"
+    using info' len dst body' ctr' by simp
 qed
 
 (* tyenv_add_global commutes with module_context_env, provided the new type
@@ -3250,6 +3309,7 @@ lemma elab_decls_invariant_define_function:
                         core_statement_list_type
                           (module_body_env_for env paramNames funInfo)
                           (FI_Ghost funInfo) coreBody \<noteq> None"
+      and ctr: "fun_contracts_well_typed env funInfo"
   shows "elab_decls_invariant env0 ownAbstract ctxGlobals env elabEnv
            (m \<lparr> CM_Functions := fmupd name \<lparr> CF_Args = paramNames,
                                              CF_Body = bodyOpt \<rparr>
@@ -3337,7 +3397,8 @@ proof -
                   | Some body \<Rightarrow>
                       core_statement_list_type
                         (module_body_env_for env (CF_Args f) info)
-                        (FI_Ghost info) body \<noteq> None)"
+                        (FI_Ghost info) body \<noteq> None) \<and>
+                 fun_contracts_well_typed env info"
     proof (cases "n = name")
       case True
       then have f_eq: "f = \<lparr> CF_Args = paramNames,
@@ -3360,6 +3421,8 @@ proof -
                     (module_body_env_for env (CF_Args f) funInfo)
                     (FI_Ghost funInfo) body \<noteq> None"
           using body' by (simp add: f_eq option.case_eq_if)
+        show "fun_contracts_well_typed env funInfo"
+          using ctr .
       qed
     next
       case False
@@ -3653,6 +3716,8 @@ proof -
                    core_term_free_tyvars tm
                      \<subseteq> fset (TE_AbstractTypes env |\<union>| fset_of_list (FI_TyArgs funInfo))"
     using sigc(10) sigc(11) by simp
+  have ctr_wt: "fun_contracts_well_typed e funInfo" for e
+    by (rule fun_contracts_well_typed_empty[OF sigc(10) sigc(11)])
   \<comment> \<open>Dispatch on whether the function is already declared.\<close>
   from elab show ?thesis
   proof (cases rule: elab_function_decl_Inr_elim)
@@ -3678,7 +3743,7 @@ proof -
                                                 CF_Body = bodyOpt \<rparr>
                                        (CM_Functions m) \<rparr>)"
       by (rule elab_decls_invariant_define_function
-                 [OF inv lk len_pn dst_pn body_ok])
+                 [OF inv lk len_pn dst_pn body_ok ctr_wt])
     then show ?thesis using Define(11) Define(12) Define(13) by simp
   next
     case (Declare funInfo2 bodyOpt)
@@ -3725,7 +3790,7 @@ proof -
                                                     CF_Body = bodyOpt \<rparr>
                                            (CM_Functions ?m1) \<rparr>)"
         by (rule elab_decls_invariant_define_function
-                   [OF inv2 lk1 len_pn dst_pn body_ok])
+                   [OF inv2 lk1 len_pn dst_pn body_ok ctr_wt])
       then show ?thesis using Declare(9) Declare(10) Declare(11) fi True by simp
     next
       case False
@@ -4145,8 +4210,10 @@ proof -
                        (FI_Ghost (ghost_const_fun_info declTy)) coreBody \<noteq> None"
     using ghost_const_body_typechecks[OF wf scope_env typed]
     by (simp add: ghost_const_fun_info_def)
+  have ctr: "fun_contracts_well_typed env (ghost_const_fun_info declTy)"
+    by (rule fun_contracts_well_typed_empty) (simp_all add: ghost_const_fun_info_def)
   show ?thesis
-    using elab_decls_invariant_define_function[OF inv lk len dst body_ok]
+    using elab_decls_invariant_define_function[OF inv lk len dst body_ok ctr]
     by (simp add: ghost_const_fun_def)
 qed
 
@@ -5666,6 +5733,7 @@ proof -
                           core_statement_list_type
                             (module_body_env_for env (CF_Args ?f\<sigma>) info)
                             (FI_Ghost info) body \<noteq> None"
+          and ctr: "fun_contracts_well_typed env info"
         unfolding module_functions_well_typed_def by blast
       have len: "length (CF_Args f0) = length (FI_TmArgs info)" using len\<sigma> by simp
       have dst: "distinct (CF_Args f0)" using dst\<sigma> by simp
@@ -5740,6 +5808,44 @@ proof -
           unfolding collapse st_comp by simp
         then show ?thesis using f'_eq Some by simp
       qed
+      \<comment> \<open>The contract terms move through the same singleton pass, at the
+          contract body envs.\<close>
+      have ctr': "fun_contracts_well_typed env' ?info'"
+      proof (rule fun_contracts_well_typed_subst[OF ctr])
+        fix names info'' tm
+        assume which: "info'' = info \<or> info'' = post_funinfo info"
+           and lenN: "length names = length (FI_TmArgs info'')"
+           and typed: "core_term_type (module_body_env_for env names info'') Ghost tm
+                         = Some CoreTy_Bool"
+        have wf_n: "tyenv_well_formed (module_body_env_for env names info'')"
+          using which
+        proof (elim disjE)
+          assume i: "info'' = info"
+          show ?thesis
+            unfolding i by (rule module_body_env_for_well_formed[OF wf ilk lenN[unfolded i]])
+        next
+          assume i: "info'' = post_funinfo info"
+          show ?thesis
+            unfolding i
+            by (rule module_body_env_for_well_formed_post[OF wf ilk lenN[unfolded i]])
+        qed
+        have name_fi'': "name |\<notin>| fset_of_list (FI_TyArgs info'')"
+          using which name_fi by auto
+        have ok_n: "module_env_subst_ok ?s
+                      (module_body_env_for env' names (apply_subst_to_funinfo ?s info''))
+                      (module_body_env_for env names info'')"
+          using apply_realization_body_subst_ok(1)
+                  [OF env'_eq abs_tv rtv_sub wk' rt' name_fi'' cap_new] .
+        have coll: "apply_subst_to_module_env ?s
+                      (module_body_env_for env' names (apply_subst_to_funinfo ?s info''))
+                      (module_body_env_for env names info'')
+                    = module_body_env_for env' names (apply_subst_to_funinfo ?s info'')"
+          by (rule apply_realization_body_collapse[OF env'_eq])
+        show "core_term_type (module_body_env_for env' names (apply_subst_to_funinfo ?s info''))
+                Ghost (apply_subst_to_term ?s tm) = Some CoreTy_Bool"
+          using core_term_type_ghost_bool_subst_module_env[OF typed wf_n ok_n cp_s]
+          unfolding coll .
+      qed
       show "\<exists>info'. fmlookup (TE_Functions env') fname = Some info' \<and>
               length (CF_Args f') = length (FI_TmArgs info') \<and>
               distinct (CF_Args f') \<and>
@@ -5748,7 +5854,8 @@ proof -
                | Some body \<Rightarrow>
                    core_statement_list_type
                      (module_body_env_for env' (CF_Args f') info')
-                     (FI_Ghost info') body \<noteq> None)"
+                     (FI_Ghost info') body \<noteq> None) \<and>
+              fun_contracts_well_typed env' info'"
       proof (intro exI[of _ ?info'] conjI)
         show "fmlookup (TE_Functions env') fname = Some ?info'" by (rule ilk')
         show "length (CF_Args f') = length (FI_TmArgs ?info')"
@@ -5761,6 +5868,7 @@ proof -
                     (module_body_env_for env' (CF_Args f') ?info')
                     (FI_Ghost ?info') body \<noteq> None"
           by (rule body')
+        show "fun_contracts_well_typed env' ?info'" by (rule ctr')
       qed
     qed
   qed
@@ -10255,7 +10363,8 @@ proof -
                  core_statement_list_type
                    (module_body_env_for (CM_TyEnv (normalize_module L))
                                         (CF_Args f') info)
-                   (FI_Ghost info) body \<noteq> None)"
+                   (FI_Ghost info) body \<noteq> None) \<and>
+            fun_contracts_well_typed (CM_TyEnv (normalize_module L)) info"
     proof (cases "fmlookup (CM_Functions M) name")
       case (Some fM)
       \<comment> \<open>M-side entry: the fold invariant's typechecking clause is already a
@@ -10275,10 +10384,11 @@ proof -
                 | Some body \<Rightarrow>
                     core_statement_list_type
                       (module_body_env_for env (CF_Args f') info)
-                      (FI_Ghost info) body \<noteq> None"
+                      (FI_Ghost info) body \<noteq> None" and
+        ctrM: "fun_contracts_well_typed env info"
         using fwtM f'_isM unfolding module_functions_well_typed_def by blast
       show ?thesis
-        unfolding env_eq using declM lenM distM bodyM by simp
+        unfolding env_eq using declM lenM distM bodyM ctrM by simp
     next
       case None
       \<comment> \<open>I-side entry: transfer I's own body typing across the substitution
@@ -10294,7 +10404,8 @@ proof -
                    | Some body \<Rightarrow>
                        core_statement_list_type
                          (module_body_env_for (CM_TyEnv I) (CF_Args f) info0)
-                         (FI_Ghost info0) body \<noteq> None"
+                         (FI_Ghost info0) body \<noteq> None" and
+        ctr0: "fun_contracts_well_typed (CM_TyEnv I) info0"
         using fwtI inI unfolding module_functions_well_typed_def by blast
       have m_raw: "fmlookup (TE_Functions (CM_TyEnv L)) name = Some info0"
         using link_modules_decl_submaps(2)[OF linkI link subI a_decl] .
@@ -10367,7 +10478,7 @@ proof -
                   mid_lk len0] .
         have ok_sb: "module_env_subst_ok ?\<sigma> ?tb ?sb"
           using link_mid_body_env_subst_ok[OF link m_raw refl
-                  elab_link_mid_env_subst_ok[OF I_wt I_norm inv link] absL,
+                  elab_link_mid_env_subst_ok[OF I_wt I_norm inv link] absL refl,
                   where names = "CF_Args f"]
           by (simp add: subst_eq)
         have rt_sb: "module_env_subst_runtime_ok ?\<sigma> ?tb ?sb"
@@ -10398,11 +10509,88 @@ proof -
         show ?thesis
           unfolding cf' using t4 env_eq by auto
       qed
+      \<comment> \<open>The contract chain: widen and extend I's contract envs into the mid
+          env's, then substitute and collapse, as for the body.\<close>
+      have ctr_mid: "fun_contracts_well_typed ?mid info0"
+      proof (rule fun_contracts_well_typed_mono[OF ctr0])
+        fix names info' tm
+        assume t0: "core_term_type (module_body_env_for (CM_TyEnv I) names info') Ghost tm
+                      = Some CoreTy_Bool"
+        let ?be = "module_body_env_for (CM_TyEnv I) names info'"
+        let ?e1' = "?be \<lparr> TE_TypeVars := TE_TypeVars ?be |\<union>| TE_TypeVars (CM_TyEnv M),
+                          TE_RuntimeTypeVars :=
+                            TE_RuntimeTypeVars ?be |\<union>| TE_RuntimeTypeVars (CM_TyEnv M) \<rparr>"
+        have t1: "core_term_type ?e1' Ghost tm = Some CoreTy_Bool"
+          using core_term_type_irrelevant_tyvar[OF t0,
+                  where extraTV = "TE_TypeVars (CM_TyEnv M)"
+                    and extraRT = "TE_RuntimeTypeVars (CM_TyEnv M)"] .
+        have ext1: "tyenv_extends ?e1' (module_body_env_for ?mid names info')"
+          using link_mid_body_env_extends[OF linkI linkM1 link setMS ghostOK
+                                             absI rtvI absM rtvM,
+                                           where names = names and info = info']
+          unfolding normI .
+        have cons1': "tyenv_ctors_consistent ?e1'"
+          using wfI unfolding tyenv_well_formed_def tyenv_ctors_consistent_def
+          by (simp add: module_body_env_for_def)
+        show "core_term_type (module_body_env_for ?mid names info') Ghost tm
+                = Some CoreTy_Bool"
+          using core_term_type_tyenv_extends[OF ext1 cons1' t1] .
+      qed
+      have mid_wf: "tyenv_well_formed ?mid"
+        using elab_link_mid_env_well_formed[OF I_wt I_norm inv link] .
+      have mid_lk0: "fmlookup (TE_Functions ?mid) name = Some info0"
+        unfolding link_mid_env_simps normI
+        using a_decl fmdomI[OF a_decl] by (simp add: fmadd_drop_lookup)
+      have cp_L: "\<forall>ty' \<in> fmran' (CM_TypeSubst L). is_complete_type ty'"
+        unfolding subst_eq
+        using inv unfolding elab_decls_invariant_def typesubst_complete_def by blast
+      have ctr_L: "fun_contracts_well_typed (CM_TyEnv (normalize_module L))
+                     (apply_subst_to_funinfo (CM_TypeSubst L) info0)"
+      proof (rule fun_contracts_well_typed_subst[OF ctr_mid])
+        fix names info'' tm
+        assume which: "info'' = info0 \<or> info'' = post_funinfo info0"
+           and lenN: "length names = length (FI_TmArgs info'')"
+           and typed: "core_term_type (module_body_env_for ?mid names info'') Ghost tm
+                         = Some CoreTy_Bool"
+        let ?sbN = "module_body_env_for ?mid names info''"
+        let ?tbN = "module_body_env_for (CM_TyEnv (normalize_module L)) names
+                      (apply_subst_to_funinfo (CM_TypeSubst L) info'')"
+        have wf_n: "tyenv_well_formed ?sbN"
+          using which
+        proof (elim disjE)
+          assume i: "info'' = info0"
+          show ?thesis
+            unfolding i
+            by (rule module_body_env_for_well_formed[OF mid_wf mid_lk0 lenN[unfolded i]])
+        next
+          assume i: "info'' = post_funinfo info0"
+          show ?thesis
+            unfolding i
+            by (rule module_body_env_for_well_formed_post[OF mid_wf mid_lk0 lenN[unfolded i]])
+        qed
+        have tyargs1: "FI_TyArgs info'' = FI_TyArgs info0"
+          using which by auto
+        have ok_n: "module_env_subst_ok (CM_TypeSubst L) ?tbN ?sbN"
+          using link_mid_body_env_subst_ok[OF link m_raw refl
+                  elab_link_mid_env_subst_ok[OF I_wt I_norm inv link] absL tyargs1,
+                  where names = names] .
+        have info_rel'': "info'' = apply_subst_to_funinfo (CM_TypeSubst I) info''"
+          by (simp add: I_norm)
+        have coll: "apply_subst_to_module_env (CM_TypeSubst L) ?tbN ?sbN = ?tbN"
+          using link_mid_body_env_collapse[OF linkI linkM1 link setMS info_rel'',
+                                           where names = names] .
+        show "core_term_type ?tbN Ghost (apply_subst_to_term (CM_TypeSubst L) tm)
+                = Some CoreTy_Bool"
+          using core_term_type_ghost_bool_subst_module_env[OF typed wf_n ok_n cp_L]
+          unfolding coll .
+      qed
+      have ctrM: "fun_contracts_well_typed env ?infoM"
+        using ctr_L unfolding env_eq subst_eq .
       have args_eq: "CF_Args f' = CF_Args f"
         by (simp add: f'_eq)
       show ?thesis
         unfolding env_eq args_eq
-        using m_decl lenM dist0 body_case by simp
+        using m_decl lenM dist0 body_case ctrM by simp
     qed
   qed
 qed

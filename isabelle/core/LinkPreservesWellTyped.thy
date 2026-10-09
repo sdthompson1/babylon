@@ -2812,14 +2812,19 @@ qed
    The module-level module_env_subst_ok fact and the whole link's
    abstract-types convention are taken as premises, so this works from any
    proof of the module-level fact (both sides well-typed, or one side carrying
-   only the structural invariant). *)
+   only the structural invariant).
+
+   The signature info0 need not itself be declared in m: it is enough that it
+   has the type parameters of some function info1 that is (for instance,
+   info0 = post_funinfo info1, for a postcondition). *)
 lemma link_mid_body_env_subst_ok:
   assumes linkM: "link_modules ms = Inr m"
-      and m_lk: "fmlookup (TE_Functions (CM_TyEnv m)) fname = Some info0"
+      and m_lk: "fmlookup (TE_Functions (CM_TyEnv m)) fname = Some info1"
       and tyargs: "FI_TyArgs info = FI_TyArgs info0"
       and mid_ok: "module_env_subst_ok (CM_TypeSubst m)
                      (CM_TyEnv (normalize_module m)) (link_mid_env a b m)"
       and absM: "TE_AbstractTypes (CM_TyEnv m) = TE_TypeVars (CM_TyEnv m)"
+      and tyargs1: "FI_TyArgs info0 = FI_TyArgs info1"
   shows "module_env_subst_ok (CM_TypeSubst m)
            (module_body_env_for (CM_TyEnv (normalize_module m)) names
               (apply_subst_to_funinfo (CM_TypeSubst m) info0))
@@ -2889,7 +2894,7 @@ proof -
       next
         assume n_ty: "n |\<in>| fset_of_list (FI_TyArgs info0)"
         have "fmlookup (CM_TypeSubst m) n = None"
-          using link_capture_tyargs_none[OF linkM m_lk n_ty] .
+          using link_capture_tyargs_none[OF linkM m_lk n_ty[unfolded tyargs1]] .
         moreover have "n |\<in>| TE_TypeVars ?tb"
           using n_ty
           by (auto simp: module_body_env_for_def apply_subst_to_funinfo_def)
@@ -3227,7 +3232,8 @@ lemma link_mid_functions_contribution:
                 core_statement_list_type
                   (module_body_env_for (CM_TyEnv (normalize_module m)) (CF_Args f0) info)
                   (FI_Ghost info)
-                  (apply_subst_to_statement_list (CM_TypeSubst m) body0) \<noteq> None)"
+                  (apply_subst_to_statement_list (CM_TypeSubst m) body0) \<noteq> None) \<and>
+           fun_contracts_well_typed (CM_TyEnv (normalize_module m)) info"
 proof -
   let ?\<sigma>A = "CM_TypeSubst a"
   let ?\<sigma>M = "CM_TypeSubst m"
@@ -3282,7 +3288,8 @@ proof -
                  | Some body \<Rightarrow>
                      core_statement_list_type
                        (module_body_env_for ?envA (CF_Args ?fA) infoA)
-                       (FI_Ghost infoA) body \<noteq> None"
+                       (FI_Ghost infoA) body \<noteq> None" and
+      ctrA: "fun_contracts_well_typed ?envA infoA"
     using fwtA a_def' unfolding module_functions_well_typed_def by blast
 
   \<comment> \<open>Underneath: the raw whole-link declaration.\<close>
@@ -3372,7 +3379,7 @@ proof -
               mid_lk len0] .
     have ok_sb: "module_env_subst_ok ?\<sigma>M ?tb ?sb"
       using link_mid_body_env_subst_ok[OF linkM m_raw tyargs
-              link_mid_env_subst_ok[OF linkA wtA linkB wtB linkM setMS] absM] .
+              link_mid_env_subst_ok[OF linkA wtA linkB wtB linkM setMS] absM refl] .
     have rt_sb: "module_env_subst_runtime_ok ?\<sigma>M ?tb ?sb"
       using link_mid_body_env_runtime_ok[OF linkA linkB linkM setMS
                                             m_raw tyargs ghostA absM rtvM] .
@@ -3396,6 +3403,102 @@ proof -
       using t4 unfolding Some ghostA by auto
   qed
 
+  \<comment> \<open>The contract chain: widen and extend the a-side contract envs into the
+      mid env's, then substitute with the whole link's substitution and
+      collapse, as for the body.\<close>
+  have ctr_mid: "fun_contracts_well_typed ?mid infoA"
+  proof (rule fun_contracts_well_typed_mono[OF ctrA])
+    fix names info' tm
+    assume t0: "core_term_type (module_body_env_for ?envA names info') Ghost tm
+                  = Some CoreTy_Bool"
+    let ?be = "module_body_env_for ?envA names info'"
+    let ?e1' = "?be \<lparr> TE_TypeVars := TE_TypeVars ?be |\<union>| TE_TypeVars (CM_TyEnv b),
+                      TE_RuntimeTypeVars :=
+                        TE_RuntimeTypeVars ?be |\<union>| TE_RuntimeTypeVars (CM_TyEnv b) \<rparr>"
+    have t1: "core_term_type ?e1' Ghost tm = Some CoreTy_Bool"
+      using core_term_type_irrelevant_tyvar[OF t0,
+              where extraTV = "TE_TypeVars (CM_TyEnv b)"
+                and extraRT = "TE_RuntimeTypeVars (CM_TyEnv b)"] .
+    have ext1: "tyenv_extends ?e1' (module_body_env_for ?mid names info')"
+      using link_mid_body_env_extends[OF linkA linkB linkM setMS ghostOK
+                                         absa rtva absb rtvb,
+                                       where names = names and info = info'] .
+    have cons1': "tyenv_ctors_consistent ?e1'"
+      using wfA unfolding tyenv_well_formed_def tyenv_ctors_consistent_def
+      by (simp add: module_body_env_for_def)
+    show "core_term_type (module_body_env_for ?mid names info') Ghost tm = Some CoreTy_Bool"
+      using core_term_type_tyenv_extends[OF ext1 cons1' t1] .
+  qed
+  have mid_wf: "tyenv_well_formed ?mid"
+    using link_mid_env_well_formed[OF linkA wtA linkB wtB linkM setMS ghostOK] .
+  have mid_lk0: "fmlookup (TE_Functions ?mid) name = Some infoA"
+  proof -
+    have "name |\<in>| fmdom (fmmap (apply_subst_to_funinfo ?\<sigma>A)
+                                 (TE_Functions (CM_TyEnv a)))"
+      using a_raw by (auto intro: fmdomI)
+    then show ?thesis
+      using a_raw infoA_eq by (auto simp: fmadd_drop_lookup)
+  qed
+  have mid_ok: "module_env_subst_ok ?\<sigma>M ?envM ?mid"
+    using link_mid_env_subst_ok[OF linkA wtA linkB wtB linkM setMS] .
+  have cp_M: "\<forall>ty' \<in> fmran' ?\<sigma>M. is_complete_type ty'"
+    using link_modules_typesubst_complete[OF linkA linkB linkM setMS cpA cpB]
+    unfolding typesubst_complete_def .
+  have ctr_sub: "fun_contracts_well_typed ?envM (apply_subst_to_funinfo ?\<sigma>M infoA)"
+  proof (rule fun_contracts_well_typed_subst[OF ctr_mid])
+    fix names info'' tm
+    assume which: "info'' = infoA \<or> info'' = post_funinfo infoA"
+       and lenN: "length names = length (FI_TmArgs info'')"
+       and typed: "core_term_type (module_body_env_for ?mid names info'') Ghost tm
+                     = Some CoreTy_Bool"
+    \<comment> \<open>The unsubstituted signature behind info''.\<close>
+    obtain info0'' where rel: "info'' = apply_subst_to_funinfo ?\<sigma>A info0''"
+                     and ty1: "FI_TyArgs info0'' = FI_TyArgs info0"
+    proof -
+      from which show ?thesis
+      proof
+        assume "info'' = infoA"
+        then show ?thesis using that[of info0] infoA_eq by simp
+      next
+        assume "info'' = post_funinfo infoA"
+        then show ?thesis
+          using that[of "post_funinfo info0"] infoA_eq
+          by (simp add: apply_subst_to_funinfo_post_funinfo)
+      qed
+    qed
+    have ty_n: "FI_TyArgs info'' = FI_TyArgs info0''"
+      by (simp add: rel)
+    have wf_n: "tyenv_well_formed (module_body_env_for ?mid names info'')"
+      using which
+    proof (elim disjE)
+      assume i: "info'' = infoA"
+      show ?thesis
+        unfolding i by (rule module_body_env_for_well_formed[OF mid_wf mid_lk0 lenN[unfolded i]])
+    next
+      assume i: "info'' = post_funinfo infoA"
+      show ?thesis
+        unfolding i
+        by (rule module_body_env_for_well_formed_post[OF mid_wf mid_lk0 lenN[unfolded i]])
+    qed
+    have ok_n: "module_env_subst_ok ?\<sigma>M
+                  (module_body_env_for ?envM names (apply_subst_to_funinfo ?\<sigma>M info0''))
+                  (module_body_env_for ?mid names info'')"
+      using link_mid_body_env_subst_ok[OF linkM m_raw ty_n mid_ok absM ty1] .
+    have coll: "apply_subst_to_module_env ?\<sigma>M
+                  (module_body_env_for ?envM names (apply_subst_to_funinfo ?\<sigma>M info0''))
+                  (module_body_env_for ?mid names info'')
+                = module_body_env_for ?envM names (apply_subst_to_funinfo ?\<sigma>M info0'')"
+      using link_mid_body_env_collapse[OF linkA linkB linkM setMS rel] .
+    have tgt_eq: "apply_subst_to_funinfo ?\<sigma>M info0'' = apply_subst_to_funinfo ?\<sigma>M info''"
+      by (simp add: rel subst_absorb_funinfo[OF absA])
+    show "core_term_type (module_body_env_for ?envM names (apply_subst_to_funinfo ?\<sigma>M info''))
+            Ghost (apply_subst_to_term ?\<sigma>M tm) = Some CoreTy_Bool"
+      using core_term_type_ghost_bool_subst_module_env[OF typed wf_n ok_n cp_M]
+      unfolding coll unfolding tgt_eq .
+  qed
+  have ctrM: "fun_contracts_well_typed ?envM ?infoM"
+    using ctr_sub unfolding infoA_eq subst_absorb_funinfo[OF absA] .
+
   have "fmlookup (TE_Functions ?envM) name = Some ?infoM \<and>
         length (CF_Args f0) = length (FI_TmArgs ?infoM) \<and>
         distinct (CF_Args f0) \<and>
@@ -3405,8 +3508,9 @@ proof -
              core_statement_list_type
                (module_body_env_for ?envM (CF_Args f0) ?infoM)
                (FI_Ghost ?infoM)
-               (apply_subst_to_statement_list ?\<sigma>M body0) \<noteq> None)"
-    using m_decl len dist0 body_case by blast
+               (apply_subst_to_statement_list ?\<sigma>M body0) \<noteq> None) \<and>
+        fun_contracts_well_typed ?envM ?infoM"
+    using m_decl len dist0 body_case ctrM by blast
   then show ?thesis by auto
 qed
 
@@ -3568,7 +3672,8 @@ proof -
              core_statement_list_type
                (module_body_env_for ?envM (CF_Args f0) info)
                (FI_Ghost info)
-               (apply_subst_to_statement_list ?\<sigma>M body0) \<noteq> None)"
+               (apply_subst_to_statement_list ?\<sigma>M body0) \<noteq> None) \<and>
+        fun_contracts_well_typed ?envM info"
     proof (elim disjE)
       assume zA: "z \<in> set as"
       have adisj: "fmdisjoint_list (map CM_Functions as)"
@@ -3602,7 +3707,8 @@ proof -
                      core_statement_list_type
                        (module_body_env_for ?envM (CF_Args f0) info)
                        (FI_Ghost info)
-                       (apply_subst_to_statement_list ?\<sigma>M body0) \<noteq> None"
+                       (apply_subst_to_statement_list ?\<sigma>M body0) \<noteq> None" and
+        i_ctr: "fun_contracts_well_typed ?envM info"
       by auto
     show "\<exists>info.
         fmlookup (TE_Functions ?envM) name = Some info \<and>
@@ -3613,7 +3719,8 @@ proof -
          | Some body \<Rightarrow>
              core_statement_list_type
                (module_body_env_for ?envM (CF_Args f) info)
-               (FI_Ghost info) body \<noteq> None)"
+               (FI_Ghost info) body \<noteq> None) \<and>
+        fun_contracts_well_typed ?envM info"
     proof (cases "CF_Body f0")
       case None
       then have fb: "CF_Body f = None"
@@ -3628,8 +3735,9 @@ proof -
              | Some body \<Rightarrow>
                  core_statement_list_type
                    (module_body_env_for ?envM (CF_Args f) info)
-                   (FI_Ghost info) body \<noteq> None)"
-        unfolding fa fb using i_decl i_len i_dist None by simp
+                   (FI_Ghost info) body \<noteq> None) \<and>
+            fun_contracts_well_typed ?envM info"
+        unfolding fa fb using i_decl i_len i_dist None i_ctr by simp
       then show ?thesis by auto
     next
       case (Some body0)
@@ -3650,8 +3758,9 @@ proof -
              | Some body \<Rightarrow>
                  core_statement_list_type
                    (module_body_env_for ?envM (CF_Args f) info)
-                   (FI_Ghost info) body \<noteq> None)"
-        unfolding fa fb using i_decl i_len i_dist body' by simp
+                   (FI_Ghost info) body \<noteq> None) \<and>
+            fun_contracts_well_typed ?envM info"
+        unfolding fa fb using i_decl i_len i_dist body' i_ctr by simp
       then show ?thesis by auto
     qed
   qed

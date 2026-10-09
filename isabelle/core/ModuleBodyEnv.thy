@@ -1,5 +1,5 @@
 theory ModuleBodyEnv
-  imports CoreTyEnvWellFormed
+  imports CoreTyEnvWellFormed "../util/NatToString"
 begin
 
 (* The type environment in which a function body is typechecked
@@ -66,18 +66,119 @@ definition module_body_env_for :: "CoreTyEnv \<Rightarrow> string list \<Rightar
 
 
 (* ========================================================================== *)
+(* Contract names and signatures                                              *)
+(* ========================================================================== *)
+
+(* A function's contract (FI_Requires, FI_Ensures) cannot refer to the
+   parameters by their declared names, because FunInfo carries no parameter
+   names. Instead it uses positional names:
+     - arg@@i is the i-th parameter (by value or by reference, as declared);
+     - old@@i is the value the i-th parameter had on entry to the function
+       (postconditions only);
+     - return is the return value (postconditions only).
+   None of these can be written in Babylon source. *)
+
+definition contract_arg_names :: "nat \<Rightarrow> string list" where
+  "contract_arg_names n = map (\<lambda>i. ''arg@@'' @ nat_to_string i) [0..<n]"
+
+definition contract_old_names :: "nat \<Rightarrow> string list" where
+  "contract_old_names n = map (\<lambda>i. ''old@@'' @ nat_to_string i) [0..<n]"
+
+(* The names in scope in a postcondition, in the order of post_funinfo's
+   parameters. *)
+definition contract_post_names :: "nat \<Rightarrow> string list" where
+  "contract_post_names n = contract_arg_names n @ contract_old_names n @ [''return'']"
+
+(* A precondition is typechecked, and evaluated, as if it were a body of the
+   function itself, with parameter names contract_arg_names. A postcondition is
+   treated likewise, but for the extended signature below: the function's own
+   parameters, then one ghost by-value parameter per original parameter
+   (holding its entry value), then one ghost by-value parameter holding the
+   return value. Its parameter names are contract_post_names. *)
+definition post_funinfo :: "FunInfo \<Rightarrow> FunInfo" where
+  "post_funinfo info =
+     info \<lparr> FI_TmArgs := FI_TmArgs info
+                         @ map (\<lambda>(ty, _, _). (ty, Var, Ghost)) (FI_TmArgs info)
+                         @ [(FI_ReturnType info, Var, Ghost)] \<rparr>"
+
+(* Note: nat_to_string.simps must be kept out of the simp set in the following
+   proofs, since it unfolds forever on a variable argument. *)
+
+lemma length_contract_arg_names [simp]: "length (contract_arg_names n) = n"
+  by (simp add: contract_arg_names_def del: nat_to_string.simps)
+
+lemma length_contract_old_names [simp]: "length (contract_old_names n) = n"
+  by (simp add: contract_old_names_def del: nat_to_string.simps)
+
+lemma length_contract_post_names [simp]: "length (contract_post_names n) = n + n + 1"
+  by (simp add: contract_post_names_def)
+
+lemma distinct_contract_arg_names: "distinct (contract_arg_names n)"
+  unfolding contract_arg_names_def distinct_map
+  by (auto intro!: inj_onI dest: nat_to_string_injective simp del: nat_to_string.simps)
+
+lemma distinct_contract_old_names: "distinct (contract_old_names n)"
+  unfolding contract_old_names_def distinct_map
+  by (auto intro!: inj_onI dest: nat_to_string_injective simp del: nat_to_string.simps)
+
+lemma distinct_contract_post_names: "distinct (contract_post_names n)"
+  using distinct_contract_arg_names[of n] distinct_contract_old_names[of n]
+  unfolding contract_post_names_def
+  by (auto simp: contract_arg_names_def contract_old_names_def simp del: nat_to_string.simps)
+
+lemma post_funinfo_simps [simp]:
+  "FI_TyArgs (post_funinfo info) = FI_TyArgs info"
+  "FI_TmArgs (post_funinfo info)
+     = FI_TmArgs info @ map (\<lambda>(ty, _, _). (ty, Var, Ghost)) (FI_TmArgs info)
+       @ [(FI_ReturnType info, Var, Ghost)]"
+  "FI_ReturnType (post_funinfo info) = FI_ReturnType info"
+  "FI_Ghost (post_funinfo info) = FI_Ghost info"
+  "FI_Impure (post_funinfo info) = FI_Impure info"
+  "FI_Requires (post_funinfo info) = FI_Requires info"
+  "FI_Ensures (post_funinfo info) = FI_Ensures info"
+  by (simp_all add: post_funinfo_def)
+
+lemma length_post_funinfo_args:
+  "length (FI_TmArgs (post_funinfo info)) = length (contract_post_names (length (FI_TmArgs info)))"
+  by simp
+
+
+(* ========================================================================== *)
 (* Well-formedness of function-body environments                              *)
 (* ========================================================================== *)
 
 (* The body env of a declared function over a well-formed env is well-formed. *)
 
-(* The interpreter-side body_env_for_well_formed (StateMatchesEnv.thy) is a
-   corollary of this lemma, by way of the closed-module equality
-   (module_body_env_for_eq_body_env_for). *)
-
-lemma module_body_env_for_well_formed:
+(* Generalized version: the signature need not be in TE_Functions, as long as it
+   satisfies the well-formedness conditions that tyenv_well_formed would
+   impose on it there. (This is needed for post_funinfo.) See below for the
+   more generally used versions. *)
+lemma module_body_env_for_well_formed_sig:
   assumes wf: "tyenv_well_formed env"
-      and lk: "fmlookup (TE_Functions env) fname = Some info"
+      and sig_wk: "(\<forall>ty \<in> fst ` set (FI_TmArgs info).
+                      is_well_kinded (env \<lparr> TE_TypeVars :=
+                                            TE_AbstractTypes env
+                                            |\<union>| fset_of_list (FI_TyArgs info) \<rparr>) ty)
+                   \<and> is_well_kinded (env \<lparr> TE_TypeVars :=
+                                           TE_AbstractTypes env
+                                           |\<union>| fset_of_list (FI_TyArgs info) \<rparr>)
+                                    (FI_ReturnType info)"
+      and sig_rt: "FI_Ghost info = NotGhost \<Longrightarrow>
+               (\<forall>ty vor. (ty, vor, NotGhost) \<in> set (FI_TmArgs info) \<longrightarrow>
+                  is_runtime_type
+                    (env \<lparr> TE_TypeVars := TE_AbstractTypes env
+                                          |\<union>| fset_of_list (FI_TyArgs info),
+                           TE_RuntimeTypeVars :=
+                             (TE_AbstractTypes env |\<inter>| TE_RuntimeTypeVars env)
+                             |\<union>| fset_of_list (FI_TyArgs info) \<rparr>) ty)
+               \<and> is_runtime_type
+                   (env \<lparr> TE_TypeVars := TE_AbstractTypes env
+                                         |\<union>| fset_of_list (FI_TyArgs info),
+                          TE_RuntimeTypeVars :=
+                            (TE_AbstractTypes env |\<inter>| TE_RuntimeTypeVars env)
+                            |\<union>| fset_of_list (FI_TyArgs info) \<rparr>)
+                   (FI_ReturnType info)"
+      and sig_cp: "FI_Ghost info = NotGhost \<Longrightarrow> is_complete_type (FI_ReturnType info)"
       and len: "length names = length (FI_TmArgs info)"
   shows "tyenv_well_formed (module_body_env_for env names info)"
 proof -
@@ -199,7 +300,7 @@ proof -
       then have "is_well_kinded (env \<lparr> TE_TypeVars :=
                                        TE_AbstractTypes env
                                        |\<union>| fset_of_list (FI_TyArgs info) \<rparr>) ty"
-        using ftwk[OF lk] by blast
+        using sig_wk by blast
       moreover have "is_well_kinded ?be ty
                        = is_well_kinded (env \<lparr> TE_TypeVars :=
                                                TE_AbstractTypes env
@@ -242,7 +343,7 @@ proof -
                             TE_RuntimeTypeVars :=
                               (TE_AbstractTypes env |\<inter>| TE_RuntimeTypeVars env)
                               |\<union>| fset_of_list (FI_TyArgs info) \<rparr>) ty"
-          using fgc[OF lk NotGhost] by blast
+          using sig_rt[OF NotGhost] by blast
         moreover have "is_runtime_type ?be ty
                          = is_runtime_type
                              (env \<lparr> TE_TypeVars := TE_AbstractTypes env
@@ -301,7 +402,7 @@ proof -
       have "is_well_kinded (env \<lparr> TE_TypeVars :=
                                   TE_AbstractTypes env
                                   |\<union>| fset_of_list (FI_TyArgs info) \<rparr>) (FI_ReturnType info)"
-        using ftwk[OF lk] by blast
+        using sig_wk by blast
       moreover have "is_well_kinded ?be (FI_ReturnType info)
                        = is_well_kinded (env \<lparr> TE_TypeVars :=
                                                TE_AbstractTypes env
@@ -325,7 +426,7 @@ proof -
                      TE_RuntimeTypeVars :=
                        (TE_AbstractTypes env |\<inter>| TE_RuntimeTypeVars env)
                        |\<union>| fset_of_list (FI_TyArgs info) \<rparr>) (FI_ReturnType info)"
-        using fgc[OF lk ng] by blast
+        using sig_rt[OF ng] by blast
       moreover have "is_runtime_type ?be (FI_ReturnType info)
                        = is_runtime_type
                            (env \<lparr> TE_TypeVars := TE_AbstractTypes env
@@ -347,7 +448,7 @@ proof -
       then have ng: "FI_Ghost info = NotGhost"
         by (simp add: module_body_env_for_def)
       show "is_complete_type (TE_ReturnType ?be)"
-        using frc[OF lk ng] by (simp add: module_body_env_for_def)
+        using sig_cp[OF ng] by (simp add: module_body_env_for_def)
     qed
   next
     show "tyenv_ctors_consistent ?be"
@@ -519,6 +620,106 @@ proof -
       using wf unfolding tyenv_well_formed_def tyenv_datatypes_nonempty_def
       by (simp add: module_body_env_for_def)
   qed
+qed
+
+
+(* The usual case: the signature of a function declared in the env. *)
+
+(* Note: The interpreter-side body_env_for_well_formed (StateMatchesEnv.thy) is a
+   corollary of this lemma, by way of the closed-module equality
+   (module_body_env_for_eq_body_env_for). *)
+
+lemma module_body_env_for_well_formed:
+  assumes wf: "tyenv_well_formed env"
+      and lk: "fmlookup (TE_Functions env) fname = Some info"
+      and len: "length names = length (FI_TmArgs info)"
+  shows "tyenv_well_formed (module_body_env_for env names info)"
+proof -
+  let ?wkEnv = "env \<lparr> TE_TypeVars := TE_AbstractTypes env |\<union>| fset_of_list (FI_TyArgs info) \<rparr>"
+  let ?rtEnv = "env \<lparr> TE_TypeVars := TE_AbstractTypes env |\<union>| fset_of_list (FI_TyArgs info),
+                      TE_RuntimeTypeVars := (TE_AbstractTypes env |\<inter>| TE_RuntimeTypeVars env)
+                                            |\<union>| fset_of_list (FI_TyArgs info) \<rparr>"
+  have sig_wk: "(\<forall>ty \<in> fst ` set (FI_TmArgs info). is_well_kinded ?wkEnv ty)
+                \<and> is_well_kinded ?wkEnv (FI_ReturnType info)"
+    using wf lk unfolding tyenv_well_formed_def tyenv_fun_types_well_kinded_def by blast
+  have sig_rt: "(\<forall>ty vor. (ty, vor, NotGhost) \<in> set (FI_TmArgs info) \<longrightarrow>
+                   is_runtime_type ?rtEnv ty)
+                \<and> is_runtime_type ?rtEnv (FI_ReturnType info)"
+    if ng: "FI_Ghost info = NotGhost"
+    using wf lk ng
+    unfolding tyenv_well_formed_def tyenv_fun_ghost_constraint_def Let_def by blast
+  have sig_cp: "is_complete_type (FI_ReturnType info)" if ng: "FI_Ghost info = NotGhost"
+    using wf lk ng
+    unfolding tyenv_well_formed_def tyenv_fun_return_types_complete_def by blast
+  show ?thesis
+    by (rule module_body_env_for_well_formed_sig[OF wf sig_wk sig_rt sig_cp len])
+qed
+
+
+(* The body env of a postcondition (post_funinfo of a declared function) is
+   well-formed too: the extra parameters are ghost, and have the types of the
+   original parameters and of the return value. *)
+
+lemma module_body_env_for_well_formed_post:
+  assumes wf: "tyenv_well_formed env"
+      and lk: "fmlookup (TE_Functions env) fname = Some info"
+      and len: "length names = length (FI_TmArgs (post_funinfo info))"
+  shows "tyenv_well_formed (module_body_env_for env names (post_funinfo info))"
+proof -
+  let ?wkEnv = "env \<lparr> TE_TypeVars := TE_AbstractTypes env |\<union>| fset_of_list (FI_TyArgs info) \<rparr>"
+  let ?rtEnv = "env \<lparr> TE_TypeVars := TE_AbstractTypes env |\<union>| fset_of_list (FI_TyArgs info),
+                      TE_RuntimeTypeVars := (TE_AbstractTypes env |\<inter>| TE_RuntimeTypeVars env)
+                                            |\<union>| fset_of_list (FI_TyArgs info) \<rparr>"
+  have wk0: "(\<forall>ty \<in> fst ` set (FI_TmArgs info). is_well_kinded ?wkEnv ty)
+             \<and> is_well_kinded ?wkEnv (FI_ReturnType info)"
+    using wf lk unfolding tyenv_well_formed_def tyenv_fun_types_well_kinded_def by blast
+  have rt0: "(\<forall>ty vor. (ty, vor, NotGhost) \<in> set (FI_TmArgs info) \<longrightarrow>
+                is_runtime_type ?rtEnv ty)
+             \<and> is_runtime_type ?rtEnv (FI_ReturnType info)"
+    if ng: "FI_Ghost info = NotGhost"
+    using wf lk ng
+    unfolding tyenv_well_formed_def tyenv_fun_ghost_constraint_def Let_def by blast
+  have cp0: "is_complete_type (FI_ReturnType info)" if ng: "FI_Ghost info = NotGhost"
+    using wf lk ng
+    unfolding tyenv_well_formed_def tyenv_fun_return_types_complete_def by blast
+  \<comment> \<open>The extra parameters' types are original parameter types or the return
+      type, and they are all ghost.\<close>
+  have post_fst: "fst ` set (FI_TmArgs (post_funinfo info))
+                    = fst ` set (FI_TmArgs info) \<union> {FI_ReturnType info}"
+    by (auto simp: case_prod_beta image_iff; metis fst_conv)
+  have post_ng: "(ty, vor, NotGhost) \<in> set (FI_TmArgs (post_funinfo info))
+                   \<Longrightarrow> (ty, vor, NotGhost) \<in> set (FI_TmArgs info)" for ty vor
+    by (auto simp: case_prod_beta)
+  \<comment> \<open>The three signature conditions, stated for post_funinfo info itself.\<close>
+  let ?pi = "post_funinfo info"
+  let ?wkP = "env \<lparr> TE_TypeVars := TE_AbstractTypes env |\<union>| fset_of_list (FI_TyArgs ?pi) \<rparr>"
+  let ?rtP = "env \<lparr> TE_TypeVars := TE_AbstractTypes env |\<union>| fset_of_list (FI_TyArgs ?pi),
+                    TE_RuntimeTypeVars := (TE_AbstractTypes env |\<inter>| TE_RuntimeTypeVars env)
+                                          |\<union>| fset_of_list (FI_TyArgs ?pi) \<rparr>"
+  have sig_wk: "(\<forall>ty \<in> fst ` set (FI_TmArgs ?pi). is_well_kinded ?wkP ty)
+                \<and> is_well_kinded ?wkP (FI_ReturnType ?pi)"
+    using wk0 unfolding post_fst by simp
+  have sig_rt: "(\<forall>ty vor. (ty, vor, NotGhost) \<in> set (FI_TmArgs ?pi) \<longrightarrow>
+                   is_runtime_type ?rtP ty)
+                \<and> is_runtime_type ?rtP (FI_ReturnType ?pi)"
+    if ng: "FI_Ghost ?pi = NotGhost"
+  proof -
+    have ng0: "FI_Ghost info = NotGhost" using ng by simp
+    have args: "is_runtime_type ?rtP ty"
+      if mem: "(ty, vor, NotGhost) \<in> set (FI_TmArgs ?pi)" for ty vor
+    proof -
+      have "(ty, vor, NotGhost) \<in> set (FI_TmArgs info)" by (rule post_ng[OF mem])
+      then have "is_runtime_type ?rtEnv ty" using rt0[OF ng0] by blast
+      then show ?thesis by simp
+    qed
+    have ret: "is_runtime_type ?rtP (FI_ReturnType ?pi)"
+      using rt0[OF ng0] by simp
+    show ?thesis using args ret by blast
+  qed
+  have sig_cp: "is_complete_type (FI_ReturnType ?pi)" if ng: "FI_Ghost ?pi = NotGhost"
+    using cp0 ng by simp
+  show ?thesis
+    by (rule module_body_env_for_well_formed_sig[OF wf sig_wk sig_rt sig_cp len])
 qed
 
 end

@@ -1,6 +1,6 @@
 theory StateMatchesEnv
   imports CoreInterp "../core/CoreStmtTypecheck" "../core/CoreTermTypeMode"
-          "../core/ModuleBodyEnv"
+          "../core/ModuleBodyEnv" "../core/CoreContractTypecheck"
 begin
 
 (* This helper builds the type environment in which a function body should typecheck.
@@ -68,6 +68,16 @@ lemma body_env_for_input_TE_ProofGoal_irrelevant [simp]:
 lemma body_env_for_input_TE_ProofTopLevel_irrelevant [simp]:
   "body_env_for (env \<lparr> TE_ProofTopLevel := b \<rparr>) names funInfo = body_env_for env names funInfo"
   by (simp add: body_env_for_def)
+
+(* The same two facts for the partially-applied body_env_for (as it appears
+   in contracts_typed_in). *)
+lemma body_env_for_fun_TE_ProofGoal_irrelevant [simp]:
+  "body_env_for (env \<lparr> TE_ProofGoal := g \<rparr>) = body_env_for env"
+  by (rule ext)+ simp
+
+lemma body_env_for_fun_TE_ProofTopLevel_irrelevant [simp]:
+  "body_env_for (env \<lparr> TE_ProofTopLevel := b \<rparr>) = body_env_for env"
+  by (rule ext)+ simp
 
 
 (* state_matches_env requires a "store typing" which is a list of types, same length
@@ -203,6 +213,9 @@ definition fun_info_matches_interp_fun :: "CoreTyEnv \<Rightarrow> FunInfo \<Rig
     distinct (map fst (IF_Args interpFun)) \<and>
     \<comment> \<open>Impure flag matches\<close>
     FI_Impure funInfo = IF_Impure interpFun \<and>
+    \<comment> \<open>The contract typechecks (CoreContractTypecheck.thy), in the body envs
+        of the contract signatures.\<close>
+    contracts_typed_in (body_env_for env) funInfo \<and>
     \<comment> \<open>Body certification: for Babylon functions, the body statement list
         typechecks in an appropriate env and ghost-mode; for external functions,
         the extern contract holds.\<close>
@@ -473,6 +486,8 @@ lemma fun_info_matches_interp_fun_cong_env:
 proof -
   have body_eq: "\<And>names. body_env_for env1 names funInfo = body_env_for env2 names funInfo"
     by (rule body_env_for_cong[OF gv fn dt dc dcbt gd abs])
+  have body_fun_eq: "body_env_for env1 = body_env_for env2"
+    by (rule ext)+ (rule body_env_for_cong[OF gv fn dt dc dcbt gd abs])
   have wk_eq: "\<And>ty. is_well_kinded env1 ty = is_well_kinded env2 ty"
     by (rule is_well_kinded_cong_env[OF tv dt])
   have rt_eq: "\<And>ty. is_runtime_type env1 ty = is_runtime_type env2 ty"
@@ -484,7 +499,7 @@ proof -
     by (simp add: extern_fun_contract_def extern_fun_well_typed_def wk_eq rt_eq vht_eq)
   show ?thesis
     unfolding fun_info_matches_interp_fun_def
-    by (simp add: body_eq ext_eq split: sum.splits)
+    by (simp add: body_eq body_fun_eq ext_eq split: sum.splits)
 qed
 
 end

@@ -3043,4 +3043,17 @@ proof -
 qed
 
 
+(* The special case of core_term_type_subst_module_env used for contract terms
+   (Ghost mode, type bool), where the runtime-coverage condition is not
+   needed. *)
+lemma core_term_type_ghost_bool_subst_module_env:
+  assumes typed: "core_term_type env Ghost tm = Some CoreTy_Bool"
+      and wf: "tyenv_well_formed env"
+      and ok: "module_env_subst_ok subst targetEnv env"
+      and cp: "\<forall>ty' \<in> fmran' subst. is_complete_type ty'"
+  shows "core_term_type (apply_subst_to_module_env subst targetEnv env) Ghost
+                        (apply_subst_to_term subst tm) = Some CoreTy_Bool"
+  using core_term_type_subst_module_env[OF typed wf ok _ cp] by simp
+
+
 end
