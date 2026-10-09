@@ -126,6 +126,243 @@ next
 qed (simp_all add: compose_subst_correct)
 
 
+(* The empty substitution, mapped over a list of terms. *)
+lemma map_apply_subst_to_term_fmempty [simp]:
+  "map (apply_subst_to_term fmempty) tms = tms"
+  by (induction tms) simp_all
+
+
+(* Substitutions that agree on all types act identically on terms. *)
+lemma apply_subst_to_term_cong_subst:
+  assumes eq: "\<And>ty. apply_subst s1 ty = apply_subst s2 ty"
+  shows "apply_subst_to_term s1 tm = apply_subst_to_term s2 tm"
+proof (induction tm)
+  case (CoreTm_LitArray elemTy tms)
+  then show ?case by (simp add: eq cong: map_cong)
+next
+  case (CoreTm_FunctionCall fnName tyArgs args)
+  then show ?case by (simp add: eq cong: map_cong)
+next
+  case (CoreTm_Record flds)
+  have "map (\<lambda>(name, tm). (name, apply_subst_to_term s1 tm)) flds
+      = map (\<lambda>(name, tm). (name, apply_subst_to_term s2 tm)) flds"
+    by (rule map_cong[OF refl]) (use CoreTm_Record.IH in \<open>auto split: prod.splits\<close>)
+  then show ?case by simp
+next
+  case (CoreTm_ArrayProj arr idxs)
+  then show ?case by (simp add: cong: map_cong)
+next
+  case (CoreTm_Match scrut arms)
+  have "map (\<lambda>(pat, tm). (pat, apply_subst_to_term s1 tm)) arms
+      = map (\<lambda>(pat, tm). (pat, apply_subst_to_term s2 tm)) arms"
+    by (rule map_cong[OF refl]) (use CoreTm_Match.IH in \<open>auto split: prod.splits\<close>)
+  then show ?case using CoreTm_Match.IH by simp
+qed (simp_all add: eq)
+
+
+(* Substitutions that agree (as fmaps) on every type variable occurring in a
+   term act identically on that term. The term analogue of
+   apply_subst_cong_on_tyvars (TypeSubst.thy). *)
+lemma apply_subst_to_term_cong_on_tyvars:
+  assumes "\<And>v. v \<in> core_term_free_tyvars tm \<Longrightarrow> fmlookup s1 v = fmlookup s2 v"
+  shows "apply_subst_to_term s1 tm = apply_subst_to_term s2 tm"
+  using assms
+proof (induction tm)
+  case (CoreTm_LitArray elemTy tms)
+  have "apply_subst s1 elemTy = apply_subst s2 elemTy"
+    by (rule apply_subst_cong_on_tyvars) (simp add: CoreTm_LitArray.prems)
+  moreover have "map (apply_subst_to_term s1) tms = map (apply_subst_to_term s2) tms"
+  proof (rule map_cong[OF refl])
+    fix t assume mem: "t \<in> set tms"
+    have cong_t: "\<And>v. v \<in> core_term_free_tyvars t \<Longrightarrow> fmlookup s1 v = fmlookup s2 v"
+      using mem by (intro CoreTm_LitArray.prems) force
+    show "apply_subst_to_term s1 t = apply_subst_to_term s2 t"
+      by (rule CoreTm_LitArray.IH[OF mem cong_t])
+  qed
+  ultimately show ?case by simp
+next
+  case (CoreTm_Cast ty tm)
+  have "apply_subst s1 ty = apply_subst s2 ty"
+    by (rule apply_subst_cong_on_tyvars) (simp add: CoreTm_Cast.prems)
+  moreover have "apply_subst_to_term s1 tm = apply_subst_to_term s2 tm"
+    by (rule CoreTm_Cast.IH) (simp add: CoreTm_Cast.prems)
+  ultimately show ?case by simp
+next
+  case (CoreTm_Unop op tm)
+  have "apply_subst_to_term s1 tm = apply_subst_to_term s2 tm"
+    by (rule CoreTm_Unop.IH) (simp add: CoreTm_Unop.prems)
+  then show ?case by simp
+next
+  case (CoreTm_Binop op tm1 tm2)
+  have "apply_subst_to_term s1 tm1 = apply_subst_to_term s2 tm1"
+    by (rule CoreTm_Binop.IH(1)) (simp add: CoreTm_Binop.prems)
+  moreover have "apply_subst_to_term s1 tm2 = apply_subst_to_term s2 tm2"
+    by (rule CoreTm_Binop.IH(2)) (simp add: CoreTm_Binop.prems)
+  ultimately show ?case by simp
+next
+  case (CoreTm_Let name rhs body)
+  have "apply_subst_to_term s1 rhs = apply_subst_to_term s2 rhs"
+    by (rule CoreTm_Let.IH(1)) (simp add: CoreTm_Let.prems)
+  moreover have "apply_subst_to_term s1 body = apply_subst_to_term s2 body"
+    by (rule CoreTm_Let.IH(2)) (simp add: CoreTm_Let.prems)
+  ultimately show ?case by simp
+next
+  case (CoreTm_Quantifier q var ty body)
+  have "apply_subst s1 ty = apply_subst s2 ty"
+    by (rule apply_subst_cong_on_tyvars) (simp add: CoreTm_Quantifier.prems)
+  moreover have "apply_subst_to_term s1 body = apply_subst_to_term s2 body"
+    by (rule CoreTm_Quantifier.IH) (simp add: CoreTm_Quantifier.prems)
+  ultimately show ?case by simp
+next
+  case (CoreTm_FunctionCall fnName tyArgs args)
+  have "map (apply_subst s1) tyArgs = map (apply_subst s2) tyArgs"
+  proof (rule map_cong[OF refl])
+    fix ty assume mem: "ty \<in> set tyArgs"
+    show "apply_subst s1 ty = apply_subst s2 ty"
+    proof (rule apply_subst_cong_on_tyvars)
+      fix v assume "v \<in> type_tyvars ty"
+      then show "fmlookup s1 v = fmlookup s2 v"
+        using mem by (intro CoreTm_FunctionCall.prems) force
+    qed
+  qed
+  moreover have "map (apply_subst_to_term s1) args = map (apply_subst_to_term s2) args"
+  proof (rule map_cong[OF refl])
+    fix t assume mem: "t \<in> set args"
+    have cong_t: "\<And>v. v \<in> core_term_free_tyvars t \<Longrightarrow> fmlookup s1 v = fmlookup s2 v"
+      using mem by (intro CoreTm_FunctionCall.prems) force
+    show "apply_subst_to_term s1 t = apply_subst_to_term s2 t"
+      by (rule CoreTm_FunctionCall.IH[OF mem cong_t])
+  qed
+  ultimately show ?case by simp
+next
+  case (CoreTm_VariantCtor ctorName tyArgs arg)
+  have "map (apply_subst s1) tyArgs = map (apply_subst s2) tyArgs"
+  proof (rule map_cong[OF refl])
+    fix ty assume mem: "ty \<in> set tyArgs"
+    show "apply_subst s1 ty = apply_subst s2 ty"
+    proof (rule apply_subst_cong_on_tyvars)
+      fix v assume "v \<in> type_tyvars ty"
+      then show "fmlookup s1 v = fmlookup s2 v"
+        using mem by (intro CoreTm_VariantCtor.prems) force
+    qed
+  qed
+  moreover have "apply_subst_to_term s1 arg = apply_subst_to_term s2 arg"
+    by (rule CoreTm_VariantCtor.IH) (simp add: CoreTm_VariantCtor.prems)
+  ultimately show ?case by simp
+next
+  case (CoreTm_Record flds)
+  have "map (\<lambda>(name, tm). (name, apply_subst_to_term s1 tm)) flds
+      = map (\<lambda>(name, tm). (name, apply_subst_to_term s2 tm)) flds"
+  proof (rule map_cong[OF refl])
+    fix fld assume mem: "fld \<in> set flds"
+    obtain name t where fld_eq: "fld = (name, t)" by (cases fld)
+    have t_snd: "t \<in> Basic_BNFs.snds fld" by (simp add: fld_eq)
+    have cong_t: "\<And>v. v \<in> core_term_free_tyvars t \<Longrightarrow> fmlookup s1 v = fmlookup s2 v"
+      using mem fld_eq by (intro CoreTm_Record.prems) force
+    have "apply_subst_to_term s1 t = apply_subst_to_term s2 t"
+      by (rule CoreTm_Record.IH[OF mem t_snd cong_t])
+    then show "(\<lambda>(name, tm). (name, apply_subst_to_term s1 tm)) fld
+             = (\<lambda>(name, tm). (name, apply_subst_to_term s2 tm)) fld"
+      by (simp add: fld_eq)
+  qed
+  then show ?case by simp
+next
+  case (CoreTm_RecordProj tm fldName)
+  have "apply_subst_to_term s1 tm = apply_subst_to_term s2 tm"
+    by (rule CoreTm_RecordProj.IH) (simp add: CoreTm_RecordProj.prems)
+  then show ?case by simp
+next
+  case (CoreTm_VariantProj tm ctorName)
+  have "apply_subst_to_term s1 tm = apply_subst_to_term s2 tm"
+    by (rule CoreTm_VariantProj.IH) (simp add: CoreTm_VariantProj.prems)
+  then show ?case by simp
+next
+  case (CoreTm_ArrayProj arr idxs)
+  have "apply_subst_to_term s1 arr = apply_subst_to_term s2 arr"
+    by (rule CoreTm_ArrayProj.IH(1)) (simp add: CoreTm_ArrayProj.prems)
+  moreover have "map (apply_subst_to_term s1) idxs = map (apply_subst_to_term s2) idxs"
+  proof (rule map_cong[OF refl])
+    fix t assume mem: "t \<in> set idxs"
+    have cong_t: "\<And>v. v \<in> core_term_free_tyvars t \<Longrightarrow> fmlookup s1 v = fmlookup s2 v"
+      using mem by (intro CoreTm_ArrayProj.prems) force
+    show "apply_subst_to_term s1 t = apply_subst_to_term s2 t"
+      by (rule CoreTm_ArrayProj.IH(2)[OF mem cong_t])
+  qed
+  ultimately show ?case by simp
+next
+  case (CoreTm_Match scrut arms)
+  have "apply_subst_to_term s1 scrut = apply_subst_to_term s2 scrut"
+    by (rule CoreTm_Match.IH(1)) (simp add: CoreTm_Match.prems)
+  moreover have "map (\<lambda>(pat, tm). (pat, apply_subst_to_term s1 tm)) arms
+               = map (\<lambda>(pat, tm). (pat, apply_subst_to_term s2 tm)) arms"
+  proof (rule map_cong[OF refl])
+    fix arm assume mem: "arm \<in> set arms"
+    obtain pat t where arm_eq: "arm = (pat, t)" by (cases arm)
+    have t_snd: "t \<in> Basic_BNFs.snds arm" by (simp add: arm_eq)
+    have cong_t: "\<And>v. v \<in> core_term_free_tyvars t \<Longrightarrow> fmlookup s1 v = fmlookup s2 v"
+      using mem arm_eq by (intro CoreTm_Match.prems) force
+    have "apply_subst_to_term s1 t = apply_subst_to_term s2 t"
+      by (rule CoreTm_Match.IH(2)[OF mem t_snd cong_t])
+    then show "(\<lambda>(pat, tm). (pat, apply_subst_to_term s1 tm)) arm
+             = (\<lambda>(pat, tm). (pat, apply_subst_to_term s2 tm)) arm"
+      by (simp add: arm_eq)
+  qed
+  ultimately show ?case by simp
+next
+  case (CoreTm_Sizeof tm)
+  have "apply_subst_to_term s1 tm = apply_subst_to_term s2 tm"
+    by (rule CoreTm_Sizeof.IH) (simp add: CoreTm_Sizeof.prems)
+  then show ?case by simp
+next
+  case (CoreTm_Allocated ty tm)
+  have "apply_subst s1 ty = apply_subst s2 ty"
+    by (rule apply_subst_cong_on_tyvars) (simp add: CoreTm_Allocated.prems)
+  moreover have "apply_subst_to_term s1 tm = apply_subst_to_term s2 tm"
+    by (rule CoreTm_Allocated.IH) (simp add: CoreTm_Allocated.prems)
+  ultimately show ?case by simp
+next
+  case (CoreTm_Old tm)
+  have "apply_subst_to_term s1 tm = apply_subst_to_term s2 tm"
+    by (rule CoreTm_Old.IH) (simp add: CoreTm_Old.prems)
+  then show ?case by simp
+next
+  case (CoreTm_Default ty)
+  have "apply_subst s1 ty = apply_subst s2 ty"
+    by (rule apply_subst_cong_on_tyvars) (simp add: CoreTm_Default.prems)
+  then show ?case by simp
+qed simp_all
+
+
+(* Substitution is the identity on a term whose type variables avoid the
+   substitution's domain. The term analogue of apply_subst_disjoint_id. *)
+lemma apply_subst_to_term_disjoint_id:
+  assumes "core_term_free_tyvars tm \<inter> fset (fmdom subst) = {}"
+  shows "apply_subst_to_term subst tm = tm"
+proof -
+  have "apply_subst_to_term subst tm = apply_subst_to_term fmempty tm"
+  proof (rule apply_subst_to_term_cong_on_tyvars)
+    fix v assume "v \<in> core_term_free_tyvars tm"
+    then have "v \<notin> fset (fmdom subst)" using assms by blast
+    then show "fmlookup subst v = fmlookup fmempty v" by (simp add: fmdom_notD)
+  qed
+  then show ?thesis by simp
+qed
+
+
+(* Applying an idempotent substitution to a term twice is the same as applying
+   it once. The term analogue of idempotent_subst_twice. *)
+lemma apply_subst_to_term_idem:
+  assumes "idempotent_subst s"
+  shows "apply_subst_to_term s (apply_subst_to_term s tm) = apply_subst_to_term s tm"
+proof -
+  have eq: "\<And>ty. apply_subst (compose_subst s s) ty = apply_subst s ty"
+    by (simp add: compose_subst_correct idempotent_subst_twice[OF assms])
+  show ?thesis
+    unfolding apply_subst_to_term_compose
+    by (rule apply_subst_to_term_cong_subst[OF eq])
+qed
+
+
 (* Substitution preserves array types (it only rewrites the element type). *)
 lemma is_array_type_apply_subst [simp]:
   "is_array_type ty \<Longrightarrow> is_array_type (apply_subst subst ty)"

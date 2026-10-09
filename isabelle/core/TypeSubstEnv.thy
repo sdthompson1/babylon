@@ -1,5 +1,5 @@
 theory TypeSubstEnv
-  imports TypeSubst CoreTyEnv
+  imports TypeSubstTerm CoreTyEnv
 begin
 
 (* ========================================================================== *)
@@ -16,14 +16,16 @@ begin
 (* ========================================================================== *)
 
 
-(* Substitute through a FunInfo: argument types (keeping their VarOrRef tags)   *)
-(* and the return type. The type parameters (FI_TyArgs) and the ghost/impure    *)
-(* flags carry no CoreType, so they are unchanged.                              *)
+(* Substitute through a FunInfo: argument types (keeping their VarOrRef tags),  *)
+(* the return type, and the contract terms. The type parameters (FI_TyArgs)     *)
+(* and the ghost/impure flags carry no CoreType, so they are unchanged.         *)
 definition apply_subst_to_funinfo :: "TypeSubst \<Rightarrow> FunInfo \<Rightarrow> FunInfo" where
   "apply_subst_to_funinfo subst info =
     info \<lparr>
       FI_TmArgs := map (\<lambda>(ty, vr). (apply_subst subst ty, vr)) (FI_TmArgs info),
-      FI_ReturnType := apply_subst subst (FI_ReturnType info)
+      FI_ReturnType := apply_subst subst (FI_ReturnType info),
+      FI_Requires := map (apply_subst_to_term subst) (FI_Requires info),
+      FI_Ensures := map (apply_subst_to_term subst) (FI_Ensures info)
     \<rparr>"
 
 (* Substitute through a data-constructor entry (datatype name, type variables,  *)
@@ -77,6 +79,16 @@ lemma apply_subst_to_funinfo_FI_Ghost [simp]:
 
 lemma apply_subst_to_funinfo_FI_Impure [simp]:
   "FI_Impure (apply_subst_to_funinfo subst info) = FI_Impure info"
+  by (simp add: apply_subst_to_funinfo_def)
+
+lemma apply_subst_to_funinfo_FI_Requires [simp]:
+  "FI_Requires (apply_subst_to_funinfo subst info)
+     = map (apply_subst_to_term subst) (FI_Requires info)"
+  by (simp add: apply_subst_to_funinfo_def)
+
+lemma apply_subst_to_funinfo_FI_Ensures [simp]:
+  "FI_Ensures (apply_subst_to_funinfo subst info)
+     = map (apply_subst_to_term subst) (FI_Ensures info)"
   by (simp add: apply_subst_to_funinfo_def)
 
 lemma apply_subst_to_datactor_simps [simp]:

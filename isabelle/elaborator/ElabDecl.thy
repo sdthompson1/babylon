@@ -292,7 +292,7 @@ definition check_const_type_annot ::
 definition ghost_const_fun_info :: "CoreType \<Rightarrow> FunInfo" where
   "ghost_const_fun_info retTy =
      \<lparr> FI_TyArgs = [], FI_TmArgs = [], FI_ReturnType = retTy,
-       FI_Ghost = Ghost, FI_Impure = False \<rparr>"
+       FI_Ghost = Ghost, FI_Impure = False, FI_Requires = [], FI_Ensures = [] \<rparr>"
 
 (* Return a CoreFunction to represent a ghost constant. *)
 definition ghost_const_fun :: "CoreTerm \<Rightarrow> CoreFunction" where
@@ -515,7 +515,9 @@ definition elab_fun_signature ::
                        FI_TmArgs = zip argTys (map (\<lambda>(_, vor, _, gh). (vor, gh)) (DF_TmArgs df)),
                        FI_ReturnType = retTy,
                        FI_Ghost = ghost,
-                       FI_Impure = DF_Impure df \<rparr>))"
+                       FI_Impure = DF_Impure df,
+                       FI_Requires = [],
+                       FI_Ensures = [] \<rparr>))"
 
 (* Typecheck a function's contract attributes and drop the results. (FunInfo
    and CoreFunction have no contract fields yet, so this exists purely to flag

@@ -19,6 +19,17 @@ record FunInfo =
   (* Impure flag - impure functions may modify the world state *)
   FI_Impure :: bool
 
+  (* Preconditions: Ghost-mode boolean terms. Parameters are referred to by
+     positional names (arg@@0, arg@@1, ...), not by their declared names, since
+     the interface and implementation declarations of a function may name its
+     parameters differently. *)
+  FI_Requires :: "CoreTerm list"
+
+  (* Postconditions: as FI_Requires, but may also refer to old@@i (the value
+     of the i-th parameter on entry to the function) and to return (the return
+     value). *)
+  FI_Ensures :: "CoreTerm list"
+
 
 record CoreTyEnv =
   (* Local variable bindings (mutable or const-local, e.g. let-bindings, function params).

@@ -1040,7 +1040,8 @@ lemma apply_subst_to_funinfo_idem:
   shows "apply_subst_to_funinfo s (apply_subst_to_funinfo s info)
        = apply_subst_to_funinfo s info"
   unfolding apply_subst_to_funinfo_def
-  by (simp add: idempotent_subst_twice[OF idem] case_prod_beta o_def)
+  by (simp add: idempotent_subst_twice[OF idem] apply_subst_to_term_idem[OF idem]
+                case_prod_beta o_def)
 
 lemma apply_subst_to_datactor_idem:
   assumes idem: "idempotent_subst s"
@@ -2340,7 +2341,8 @@ proof -
 qed
 
 (* A FunInfo whose types are well-kinded over type variables that avoid a
-   substitution's domain is untouched by that substitution. *)
+   substitution's domain (and whose contract terms mention only such type
+   variables) is untouched by that substitution. *)
 lemma funinfo_subst_id:
   assumes disj: "(TE_AbstractTypes env |\<union>| fset_of_list (FI_TyArgs info))
                    |\<inter>| fmdom s = {||}"
@@ -2350,6 +2352,9 @@ lemma funinfo_subst_id:
       and wk_ret: "is_well_kinded (env \<lparr> TE_TypeVars := TE_AbstractTypes env
                                            |\<union>| fset_of_list (FI_TyArgs info) \<rparr>)
                      (FI_ReturnType info)"
+      and ctr_tv: "\<forall>tm \<in> set (FI_Requires info) \<union> set (FI_Ensures info).
+                     core_term_free_tyvars tm
+                       \<subseteq> fset (TE_AbstractTypes env |\<union>| fset_of_list (FI_TyArgs info))"
   shows "apply_subst_to_funinfo s info = info"
 proof -
   let ?wkEnv = "env \<lparr> TE_TypeVars := TE_AbstractTypes env
@@ -2369,8 +2374,24 @@ proof -
   qed
   have ret_eq: "apply_subst s (FI_ReturnType info) = FI_ReturnType info"
     using apply_subst_id_on_env_type[OF tv_disj wk_ret] .
+  have tv_disj': "fset (TE_AbstractTypes env |\<union>| fset_of_list (FI_TyArgs info))
+                    \<inter> fset (fmdom s) = {}"
+    using disj by (metis bot_fset.rep_eq inf_fset.rep_eq)
+  have tm_eq: "apply_subst_to_term s tm = tm"
+    if mem: "tm \<in> set (FI_Requires info) \<union> set (FI_Ensures info)" for tm
+  proof (rule apply_subst_to_term_disjoint_id)
+    have "core_term_free_tyvars tm
+            \<subseteq> fset (TE_AbstractTypes env |\<union>| fset_of_list (FI_TyArgs info))"
+      using ctr_tv mem by blast
+    then show "core_term_free_tyvars tm \<inter> fset (fmdom s) = {}"
+      using tv_disj' by blast
+  qed
+  have req_eq: "map (apply_subst_to_term s) (FI_Requires info) = FI_Requires info"
+    by (rule map_idI) (simp add: tm_eq)
+  have ens_eq: "map (apply_subst_to_term s) (FI_Ensures info) = FI_Ensures info"
+    by (rule map_idI) (simp add: tm_eq)
   show ?thesis
-    unfolding apply_subst_to_funinfo_def by (simp add: args_eq ret_eq)
+    unfolding apply_subst_to_funinfo_def by (simp add: args_eq ret_eq req_eq ens_eq)
 qed
 
 (* tyenv_add_function commutes with module_context_env, provided the new
@@ -2495,6 +2516,8 @@ lemma elab_fun_signature_correct:
                (FI_ReturnType info)"
     and "DF_ReturnType df = None \<Longrightarrow> FI_ReturnType info = CoreTy_Record []"
     and "DF_Ghost df = NotGhost \<Longrightarrow> is_complete_type (FI_ReturnType info)"
+    and "FI_Requires info = []"
+    and "FI_Ensures info = []"
 proof -
   let ?tyvars = "DF_TyArgs df"
   let ?ghost = "DF_Ghost df"
@@ -2522,7 +2545,9 @@ proof -
                        FI_TmArgs = zip argTys ?flags,
                        FI_ReturnType = retTy,
                        FI_Ghost = ?ghost,
-                       FI_Impure = DF_Impure df \<rparr>"
+                       FI_Impure = DF_Impure df,
+                       FI_Requires = [],
+                       FI_Ensures = [] \<rparr>"
     unfolding elab_fun_signature_def Let_def
     by (cases "case DF_ReturnType df of
                  None \<Rightarrow> Inr (CoreTy_Record [])
@@ -2534,6 +2559,8 @@ proof -
   show tyargs: "FI_TyArgs info = DF_TyArgs df" by (simp add: info_eq)
   show "FI_Ghost info = DF_Ghost df" by (simp add: info_eq)
   show "FI_Impure info = DF_Impure df" by (simp add: info_eq)
+  show "FI_Requires info = []" by (simp add: info_eq)
+  show "FI_Ensures info = []" by (simp add: info_eq)
   have len_args: "length argTys = length (DF_TmArgs df)"
     using list_all2_lengthD[OF la] by simp
   show "length (FI_TmArgs info) = length (DF_TmArgs df)"
@@ -2693,6 +2720,9 @@ lemma elab_decls_invariant_add_function:
                                 |\<union>| fset_of_list (FI_TyArgs info) \<rparr>)
                        (FI_ReturnType info)"
       and ret_cp: "FI_Ghost info = NotGhost \<Longrightarrow> is_complete_type (FI_ReturnType info)"
+      and ctr_tv: "\<forall>tm \<in> set (FI_Requires info) \<union> set (FI_Ensures info).
+                     core_term_free_tyvars tm
+                       \<subseteq> fset (TE_AbstractTypes env |\<union>| fset_of_list (FI_TyArgs info))"
   shows "elab_decls_invariant env0 ownAbstract ctxGlobals
            (tyenv_add_function name info env) elabEnv
            (m \<lparr> CM_TyEnv := tyenv_add_function name info (CM_TyEnv m) \<rparr>)"
@@ -2736,7 +2766,7 @@ proof -
                    |\<inter>| fmdom (CM_TypeSubst m) = {||}"
     by (simp add: abs_tv inf_sup_distrib2 tv_disj fi_dom)
   have subst_id: "apply_subst_to_funinfo (CM_TypeSubst m) info = info"
-    using funinfo_subst_id[OF wk_disj wk_args wk_ret] .
+    using funinfo_subst_id[OF wk_disj wk_args wk_ret ctr_tv] .
   have fresh_fn: "name |\<notin>| fmdom (TE_Functions env)"
     using notin unfolding term_name_in_scope_def by blast
   have ext: "tyenv_extends env ?env'"
@@ -3619,6 +3649,10 @@ proof -
   qed
   have ret_cp': "FI_Ghost funInfo = NotGhost \<Longrightarrow> is_complete_type (FI_ReturnType funInfo)"
     using sigc(9) sigc(2) by simp
+  have ctr_tv': "\<forall>tm \<in> set (FI_Requires funInfo) \<union> set (FI_Ensures funInfo).
+                   core_term_free_tyvars tm
+                     \<subseteq> fset (TE_AbstractTypes env |\<union>| fset_of_list (FI_TyArgs funInfo))"
+    using sigc(10) sigc(11) by simp
   \<comment> \<open>Dispatch on whether the function is already declared.\<close>
   from elab show ?thesis
   proof (cases rule: elab_function_decl_Inr_elim)
@@ -3662,7 +3696,7 @@ proof -
       using Declare(8) fi by simp
     have inv1: "elab_decls_invariant env0 ownAbstract ctxGlobals ?env1 elabEnv ?m1"
       by (rule elab_decls_invariant_add_function
-                 [OF inv notin fi_cap fi_fresh dist_fi wk_args' wk_ret' rt_p' ret_cp'])
+                 [OF inv notin fi_cap fi_fresh dist_fi wk_args' wk_ret' rt_p' ret_cp' ctr_tv'])
     have ee_td: "EE_Typedefs ?ee1 = EE_Typedefs elabEnv"
       by (cases "DF_ReturnType df = None") simp_all
     have ee_vc: "EE_NullaryDataCtors ?ee1 = EE_NullaryDataCtors elabEnv"
@@ -4067,11 +4101,15 @@ proof -
       condition is vacuous.\<close>
   have ret_cp: "FI_Ghost ?info = NotGhost \<Longrightarrow> is_complete_type (FI_ReturnType ?info)"
     by (simp add: ghost_const_fun_info_def)
+  have ctr_tv: "\<forall>tm \<in> set (FI_Requires ?info) \<union> set (FI_Ensures ?info).
+                  core_term_free_tyvars tm
+                    \<subseteq> fset (TE_AbstractTypes env |\<union>| fset_of_list (FI_TyArgs ?info))"
+    by (simp add: ghost_const_fun_info_def)
   have inv1: "elab_decls_invariant env0 ownAbstract ctxGlobals
                 (tyenv_add_function name ?info env) elabEnv
                 (m \<lparr> CM_TyEnv := tyenv_add_function name ?info (CM_TyEnv m) \<rparr>)"
     by (rule elab_decls_invariant_add_function
-               [OF inv notin fi_cap fi_fresh dist_fi wk_args wk_ret rt_p ret_cp])
+               [OF inv notin fi_cap fi_fresh dist_fi wk_args wk_ret rt_p ret_cp ctr_tv])
   have lk1: "fmlookup (TE_Functions (tyenv_add_function name ?info env)) name
                = Some ?info"
     by (simp add: tyenv_add_function_def)
@@ -4444,7 +4482,7 @@ lemma apply_subst_to_funinfo_compose:
   "apply_subst_to_funinfo (compose_subst s2 s1) info
      = apply_subst_to_funinfo s2 (apply_subst_to_funinfo s1 info)"
   unfolding apply_subst_to_funinfo_def
-  by (simp add: compose_subst_correct case_prod_beta o_def)
+  by (simp add: compose_subst_correct apply_subst_to_term_compose case_prod_beta o_def)
 
 lemma apply_subst_to_datactor_compose:
   "apply_subst_to_datactor (compose_subst s2 s1) e
@@ -5086,17 +5124,20 @@ proof -
     then obtain retTy where
       lk: "fmlookup (TE_Functions env) gname =
              Some \<lparr> FI_TyArgs = [], FI_TmArgs = [], FI_ReturnType = retTy,
-                    FI_Ghost = Ghost, FI_Impure = False \<rparr>"
+                    FI_Ghost = Ghost, FI_Impure = False,
+                    FI_Requires = [], FI_Ensures = [] \<rparr>"
       using gc unfolding ghost_constants_consistent_def by blast
     have lk': "fmlookup (TE_Functions env') gname =
                  Some \<lparr> FI_TyArgs = [], FI_TmArgs = [],
                         FI_ReturnType = apply_subst ?s retTy,
-                        FI_Ghost = Ghost, FI_Impure = False \<rparr>"
+                        FI_Ghost = Ghost, FI_Impure = False,
+                    FI_Requires = [], FI_Ensures = [] \<rparr>"
       unfolding env'_eq apply_subst_to_tyenv_def
       by (simp add: lk apply_subst_to_funinfo_def)
     then show "\<exists>retTy. fmlookup (TE_Functions env') gname =
                  Some \<lparr> FI_TyArgs = [], FI_TmArgs = [], FI_ReturnType = retTy,
-                        FI_Ghost = Ghost, FI_Impure = False \<rparr>" by blast
+                        FI_Ghost = Ghost, FI_Impure = False,
+                    FI_Requires = [], FI_Ensures = [] \<rparr>" by blast
   qed
 qed
 

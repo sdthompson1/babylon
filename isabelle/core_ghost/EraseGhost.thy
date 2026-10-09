@@ -159,10 +159,12 @@ and erase_ghost_statement_list ::
 (* Ghost-erasing function signatures and definitions *)
 (* ========================================================================== *)
 
-(* Remove the ghost parameters from a function signature. *)
+(* Remove the ghost parameters and the contract from a function signature. *)
 definition erase_ghost_funinfo :: "FunInfo \<Rightarrow> FunInfo" where
   "erase_ghost_funinfo info =
-    info \<lparr> FI_TmArgs := filter (\<lambda>(_, _, gh). gh = NotGhost) (FI_TmArgs info) \<rparr>"
+    info \<lparr> FI_TmArgs := filter (\<lambda>(_, _, gh). gh = NotGhost) (FI_TmArgs info),
+           FI_Requires := [],
+           FI_Ensures := [] \<rparr>"
 
 (* Ghost-erase the definition of the function `name`: remove the names of
    its ghost parameters, and ghost-erase its body. *)
@@ -179,6 +181,8 @@ lemma erase_ghost_funinfo_simps [simp]:
   "FI_ReturnType (erase_ghost_funinfo info) = FI_ReturnType info"
   "FI_Ghost (erase_ghost_funinfo info) = FI_Ghost info"
   "FI_Impure (erase_ghost_funinfo info) = FI_Impure info"
+  "FI_Requires (erase_ghost_funinfo info) = []"
+  "FI_Ensures (erase_ghost_funinfo info) = []"
   by (simp_all add: erase_ghost_funinfo_def)
 
 lemma no_ghost_params_erase_ghost_funinfo [simp]:

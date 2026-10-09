@@ -61,6 +61,7 @@ and core_statement_list_ghost_free :: "CoreStatement list \<Rightarrow> bool" wh
 (* A module is ghost-free if:
     - no function is ghost;
     - no function has a ghost parameter;
+    - no function has a contract (requires/ensures);
     - no datatype is ghost;
     - every abstract type is a runtime type;
     - every function body is ghost-free.
@@ -68,7 +69,8 @@ and core_statement_list_ghost_free :: "CoreStatement list \<Rightarrow> bool" wh
 definition core_module_ghost_free :: "CoreModule \<Rightarrow> bool" where
   "core_module_ghost_free m =
     ((\<forall>name info. fmlookup (TE_Functions (CM_TyEnv m)) name = Some info
-                    \<longrightarrow> FI_Ghost info = NotGhost \<and> no_ghost_params info)
+                    \<longrightarrow> FI_Ghost info = NotGhost \<and> no_ghost_params info
+                        \<and> FI_Requires info = [] \<and> FI_Ensures info = [])
      \<and> TE_GhostDatatypes (CM_TyEnv m) = {||}
      \<and> TE_TypeVars (CM_TyEnv m) |\<subseteq>| TE_RuntimeTypeVars (CM_TyEnv m)
      \<and> (\<forall>name f body. fmlookup (CM_Functions m) name = Some f \<and> CF_Body f = Some body

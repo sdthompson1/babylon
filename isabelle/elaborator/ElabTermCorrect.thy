@@ -1692,7 +1692,8 @@ next
       \<comment> \<open>From elabenv_well_formed: the desugared FunInfo is nullary, ghost, pure.\<close>
       from "2.prems"(3) True fn_lookup obtain retTy where
         info_eq: "funInfo = \<lparr> FI_TyArgs = [], FI_TmArgs = [], FI_ReturnType = retTy,
-                              FI_Ghost = Ghost, FI_Impure = False \<rparr>"
+                              FI_Ghost = Ghost, FI_Impure = False,
+                              FI_Requires = [], FI_Ensures = [] \<rparr>"
         unfolding elabenv_well_formed_def ghost_constants_consistent_def by force
       have fn_lookup': "fmlookup (TE_Functions (extend_env_with_tyvars env ghost next_mv next_mv'))
                           name = Some funInfo"

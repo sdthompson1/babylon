@@ -88,7 +88,8 @@ theorem erase_ghost_module_ghost_free:
   "core_module_ghost_free (erase_ghost_module m)"
 proof -
   let ?envE = "erase_ghost_tyenv (CM_TyEnv m)"
-  have fns: "FI_Ghost info = NotGhost \<and> no_ghost_params info"
+  have fns: "FI_Ghost info = NotGhost \<and> no_ghost_params info
+               \<and> FI_Requires info = [] \<and> FI_Ensures info = []"
     if "fmlookup (TE_Functions ?envE) name = Some info" for name info
     using that unfolding erase_ghost_tyenv_fun_lookup by auto
   have gd: "TE_GhostDatatypes ?envE = {||}" by simp

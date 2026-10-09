@@ -245,12 +245,14 @@ proof -
     then obtain retTy where
       "fmlookup (TE_Functions env1) name =
          Some \<lparr> FI_TyArgs = [], FI_TmArgs = [], FI_ReturnType = retTy,
-                FI_Ghost = Ghost, FI_Impure = False \<rparr>"
+                FI_Ghost = Ghost, FI_Impure = False,
+                FI_Requires = [], FI_Ensures = [] \<rparr>"
       using wf
       unfolding elabenv_well_formed_def ghost_constants_consistent_def by blast
     then show "\<exists>retTy. fmlookup (TE_Functions env2) name =
                  Some \<lparr> FI_TyArgs = [], FI_TmArgs = [], FI_ReturnType = retTy,
-                        FI_Ghost = Ghost, FI_Impure = False \<rparr>"
+                        FI_Ghost = Ghost, FI_Impure = False,
+                FI_Requires = [], FI_Ensures = [] \<rparr>"
       using fn by blast
   qed
   show ?thesis
@@ -311,7 +313,8 @@ proof -
       by (auto simp: funion_list_member)
     then show "\<exists>retTy. fmlookup (TE_Functions env) name =
                  Some \<lparr> FI_TyArgs = [], FI_TmArgs = [], FI_ReturnType = retTy,
-                        FI_Ghost = Ghost, FI_Impure = False \<rparr>"
+                        FI_Ghost = Ghost, FI_Impure = False,
+                FI_Requires = [], FI_Ensures = [] \<rparr>"
       using each
       unfolding elabenv_well_formed_def ghost_constants_consistent_def by blast
   qed
@@ -360,7 +363,8 @@ proof -
       by auto
     then show "\<exists>retTy. fmlookup (TE_Functions env) name =
                  Some \<lparr> FI_TyArgs = [], FI_TmArgs = [], FI_ReturnType = retTy,
-                        FI_Ghost = Ghost, FI_Impure = False \<rparr>"
+                        FI_Ghost = Ghost, FI_Impure = False,
+                FI_Requires = [], FI_Ensures = [] \<rparr>"
       using wf
       unfolding elabenv_well_formed_def ghost_constants_consistent_def by blast
   qed

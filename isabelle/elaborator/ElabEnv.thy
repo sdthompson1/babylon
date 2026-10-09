@@ -69,13 +69,14 @@ definition nullary_data_ctors_consistent :: "CoreTyEnv \<Rightarrow> ElabEnv \<R
           fmlookup (TE_DataCtors env) name = Some (dtName, tyvars, CoreTy_Record [])))"
 
 (* EE_GhostConstants is consistent if: every ghost constant has a nullary, ghost,
-   pure FunInfo in TE_Functions. *)
+   pure, contract-free FunInfo in TE_Functions. *)
 definition ghost_constants_consistent :: "CoreTyEnv \<Rightarrow> ElabEnv \<Rightarrow> bool" where
   "ghost_constants_consistent env ee =
     (\<forall>name. name |\<in>| EE_GhostConstants ee \<longrightarrow>
        (\<exists>retTy. fmlookup (TE_Functions env) name =
           Some \<lparr> FI_TyArgs = [], FI_TmArgs = [], FI_ReturnType = retTy,
-                 FI_Ghost = Ghost, FI_Impure = False \<rparr>))"
+                 FI_Ghost = Ghost, FI_Impure = False,
+                 FI_Requires = [], FI_Ensures = [] \<rparr>))"
 
 (* Well-formedness of the elaborator environment:
    - Typedefs are well-formed

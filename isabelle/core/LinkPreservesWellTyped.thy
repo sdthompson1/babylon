@@ -166,35 +166,9 @@ lemma fminus_absorb_subset:
 
 
 (* ========================================================================== *)
-(* Substitutions that agree on all types act identically on terms and         *)
-(* statements                                                                 *)
+(* Substitutions that agree on all types act identically on statements        *)
+(* (the term version, apply_subst_to_term_cong_subst, is in TypeSubstTerm)    *)
 (* ========================================================================== *)
-
-lemma apply_subst_to_term_cong_subst:
-  assumes eq: "\<And>ty. apply_subst s1 ty = apply_subst s2 ty"
-  shows "apply_subst_to_term s1 tm = apply_subst_to_term s2 tm"
-proof (induction tm)
-  case (CoreTm_LitArray elemTy tms)
-  then show ?case by (simp add: eq cong: map_cong)
-next
-  case (CoreTm_FunctionCall fnName tyArgs args)
-  then show ?case by (simp add: eq cong: map_cong)
-next
-  case (CoreTm_Record flds)
-  have "map (\<lambda>(name, tm). (name, apply_subst_to_term s1 tm)) flds
-      = map (\<lambda>(name, tm). (name, apply_subst_to_term s2 tm)) flds"
-    by (rule map_cong[OF refl]) (use CoreTm_Record.IH in \<open>auto split: prod.splits\<close>)
-  then show ?case by simp
-next
-  case (CoreTm_ArrayProj arr idxs)
-  then show ?case by (simp add: cong: map_cong)
-next
-  case (CoreTm_Match scrut arms)
-  have "map (\<lambda>(pat, tm). (pat, apply_subst_to_term s1 tm)) arms
-      = map (\<lambda>(pat, tm). (pat, apply_subst_to_term s2 tm)) arms"
-    by (rule map_cong[OF refl]) (use CoreTm_Match.IH in \<open>auto split: prod.splits\<close>)
-  then show ?case using CoreTm_Match.IH by simp
-qed (simp_all add: eq)
 
 lemma apply_subst_to_statement_cong_subst:
   "(\<And>ty. apply_subst s1 ty = apply_subst s2 ty) \<Longrightarrow>
@@ -313,7 +287,12 @@ proof -
       = map (\<lambda>(ty, vr). (apply_subst \<tau> ty, vr)) (FI_TmArgs info)"
     unfolding map_map
     by (rule map_cong[OF refl]) (auto simp: abs split: prod.splits)
-  then show ?thesis
+  moreover have "\<And>tms. map (apply_subst_to_term \<tau>) (map (apply_subst_to_term \<sigma>) tms)
+                       = map (apply_subst_to_term \<tau>) tms"
+    and "\<And>tms. map (apply_subst_to_term \<tau> \<circ> apply_subst_to_term \<sigma>) tms
+                = map (apply_subst_to_term \<tau>) tms"
+    by (simp_all add: subst_absorb_term[OF abs] comp_def)
+  ultimately show ?thesis
     unfolding apply_subst_to_funinfo_def by (simp add: abs)
 qed
 
