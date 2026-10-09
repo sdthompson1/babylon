@@ -41,10 +41,12 @@ function f()
 }
 
 
-// Uninterpreted ghost function, with preconditions - allowed
-ghost function uninterp_1(x: i32): i32
+// Uninterpreted ghost function, marked "extern" - allowed
+extern ghost function uninterp_1(x: i32): i32
     requires x > 10;
 
-// Uninterpreted ghost function, with postcondition - not allowed
-ghost function uninterp_2(): i32
+// Uninterpreted ghost functions, not marked "extern" - not allowed
+ghost function uninterp_2(x: i32): i32
+    requires x > 10;
+ghost function uninterp_3(): i32
     ensures return > 10;

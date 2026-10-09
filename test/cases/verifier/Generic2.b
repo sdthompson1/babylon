@@ -12,7 +12,7 @@ function is_just<T> (x: Maybe<T>): bool
     }
 }
 
-ghost function inspect(x: Maybe<i32>): i32;
+extern ghost function inspect(x: Maybe<i32>): i32;
 
 extern function foo(): Maybe<i32>
     ensures is_just<i32>(return) ==> inspect(return) == 10;

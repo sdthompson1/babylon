@@ -3839,8 +3839,8 @@ static void typecheck_const_decl(struct TypecheckContext *tc_context,
 
         } else if (decl->const_data.type != NULL) {
             // Type annotation only, without a rhs.
-            // Valid only in interface or ghost code.
-            if (implementation && !decl->ghost) {
+            // Valid only in interface.
+            if (implementation) {
                 report_incomplete_definition(decl->location);
                 ++tc_context->num_errors;
             }
@@ -3905,29 +3905,15 @@ static void evaluate_constant(struct TypecheckContext *tc_context,
     }
 }
 
-static bool has_postcondition(struct Attribute *attr)
-{
-    for (; attr; attr = attr->next) {
-        if (attr->tag == ATTR_ENSURES) {
-            return true;
-        }
-    }
-    return false;
-}
-
 static bool function_body_required(struct Decl *decl)
 {
-    // extern => no body required
-    // ghost, without post-conditions => no body required
-    // all other cases => a function body is required.
-    return !(decl->function_data.is_extern
-             || (decl->ghost && !has_postcondition(decl->attributes)));
+    // Extern functions don't require a body; all others do.
+    return !decl->function_data.is_extern;
 }
 
 static bool function_body_allowed(struct Decl *decl)
 {
-    // extern => body not allowed
-    // all other cases => a body can be supplied if wanted
+    // Extern functions are not allowed to have a body; all others are.
     return !decl->function_data.is_extern;
 }
 
@@ -4635,9 +4621,9 @@ static bool requires_impl(struct Decl *interface)
 {
     switch (interface->tag) {
     case DECL_CONST:
-        // Impl only required for nonghost, and only if we don't
-        // already have a rhs
-        return !interface->ghost && interface->const_data.rhs == NULL;
+        // Impl is required if we didn't have an rhs already in the
+        // interface.
+        return interface->const_data.rhs == NULL;
 
     case DECL_FUNCTION:
         // Impl required only when (a) there is no function body given

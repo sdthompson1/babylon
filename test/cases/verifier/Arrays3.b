@@ -4,7 +4,7 @@ interface{}
 
 import Test;
 
-ghost function f(x: i32): i32;
+extern ghost function f(x: i32): i32;
 
 // Regression test for bug relating to "default" arrays
 function foo(ref a: i32[])

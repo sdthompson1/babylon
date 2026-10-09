@@ -2,14 +2,14 @@ module Uninterpreted
 
 interface {}
 
-ghost function f(): i8;     // Uninterpreted ghost function
-ghost const c: i32;         // Uninterpreted ghost constant
+ghost extern function f(): i8;     // Uninterpreted ghost function
+
 
 function test()
 {
     assert f() == f();
-    assert c == c;
-    assert c == 0;  // Fails
+
+
 }
 
 function test2()
@@ -20,9 +20,9 @@ function test2()
 function test3()
 {
     // Test the assume statement
-    assume c > 35;
-    assert c > 30;  // Succeeds
-    assert c > 40;  // Fails e.g. c could be 36
+    assume f() > 35;
+    assert f() > 30;  // Succeeds
+    assert f() > 40;  // Fails e.g. f() could be 36
 }
 
 function test4()
@@ -39,7 +39,7 @@ function test5()
     assert f() <= 127;   // Should be true since return type is i8
 }
 
-ghost function f2(ref x: i32): bool;
+ghost extern function f2(ref x: i32): bool;
 
 function test6()
 {
@@ -50,7 +50,7 @@ function test6()
 
 
 // Uninterpreted function with precondition.
-ghost function with_precond(x: i32): bool;
+ghost extern function with_precond(x: i32): bool;
     requires x > 10;
 
 function test7()
