@@ -1058,6 +1058,8 @@ lemma erase_ghost_interp_fun_simps [simp]:
   "IF_Impure (erase_ghost_interp_fun funInfos name f) = IF_Impure f"
   "IF_Body (erase_ghost_interp_fun funInfos name f)
      = map_sum (erase_ghost_statement_list funInfos) id (IF_Body f)"
+  "IF_Requires (erase_ghost_interp_fun funInfos name f) = []"
+  "IF_Ensures (erase_ghost_interp_fun funInfos name f) = []"
   by (simp_all add: erase_ghost_interp_fun_def)
 
 (* A function that is not ghost is, in the erased state, the erased function:

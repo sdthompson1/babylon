@@ -2,25 +2,6 @@ theory TypeSoundnessHelpers4
   imports TypeSoundnessHelpers3
 begin
 
-(* Checking the invariants of a loop is not a TypeError when their values are
-   booleans. (It can still be a RuntimeError: an invariant can be false.) *)
-lemma invariants_error_sound:
-  assumes "list_all2 (value_has_type env) vals (replicate n CoreTy_Bool)"
-  shows "invariants_error vals \<noteq> Some TypeError"
-proof -
-  have "\<exists>b. v = CV_Bool b" if "v \<in> set vals" for v
-  proof -
-    from that obtain i where i: "i < length vals" "vals ! i = v"
-      by (auto simp: in_set_conv_nth)
-    from assms have len: "length vals = n"
-      by (auto dest: list_all2_lengthD)
-    from list_all2_nthD[OF assms i(1)] i len
-    have "value_has_type env v CoreTy_Bool" by simp
-    then show ?thesis by (cases v) (auto split: CoreType.splits)
-  qed
-  then show ?thesis by (auto simp: invariants_error_def)
-qed
-
 (* Checking the value of a decreases-term is not a TypeError when the value
    has a valid decreases type. (It can still be a RuntimeError: a mathematical
    integer in it can be negative.) *)
@@ -1933,7 +1914,7 @@ next
               to hold. \<close>
           have loop_sound: ?thesis
             if iv [simp]: "interp_term_list d fuel state invars = Inr invarVals"
-            and ie [simp]: "invariants_error invarVals = None" for invarVals
+            and ie [simp]: "conditions_error invarVals = None" for invarVals
           proof (cases "interp_term d fuel state condTm")
             case (Inl err)
             with cond_sound have "sound_error_result err" by simp
@@ -2183,7 +2164,7 @@ next
           next
             case (Inr invarVals)
             show ?thesis
-            proof (cases "invariants_error invarVals")
+            proof (cases "conditions_error invarVals")
               case None
               show ?thesis by (rule loop_sound[OF Inr None])
             next
@@ -2192,7 +2173,7 @@ next
               have "list_all2 (value_has_type env) invarVals
                       (replicate (length invars) CoreTy_Bool)"
                 by simp
-              from invariants_error_sound[OF this] Some
+              from conditions_error_sound[OF this] Some
               have "err \<noteq> TypeError" by auto
               hence "sound_error_result err" by (cases err) simp_all
               moreover have "interp_statement d (Suc fuel) state
@@ -2703,10 +2684,36 @@ next
                 TE_ProofGoal env0 = None \<Longrightarrow> core_statement_list_type env0 ghost0 stmts0 = Some env0' \<Longrightarrow>
                   sound_statement_result env0 env0' storeTyping0 (interp_statement_list d fuel state0 stmts0)"
       using Suc.IH(5) by simp
+    \<comment> \<open>The contract of the callee: a list of boolean terms. \<close>
+    have IH_conds: "\<And>env' (state' :: 'w InterpState) storeTyping' tms'.
+                state_matches_env state' env' storeTyping' \<Longrightarrow>
+                tyenv_well_formed env' \<Longrightarrow>
+                (\<forall>tm \<in> set tms'. core_term_type env' Ghost tm = Some CoreTy_Bool) \<Longrightarrow>
+                  sound_term_results state' env' (replicate (length tms') CoreTy_Bool)
+                    (interp_term_list d fuel state' tms')"
+    proof -
+      fix env' and state' :: "'w InterpState" and storeTyping' tms'
+      assume sme: "state_matches_env state' env' storeTyping'"
+        and wf: "tyenv_well_formed env'"
+        and typed: "\<forall>tm \<in> set tms'. core_term_type env' Ghost tm = Some CoreTy_Bool"
+      have m: "map (core_term_type env' Ghost) tms' = map (\<lambda>_. Some CoreTy_Bool) tms'"
+        using typed by simp
+      have a: "list_all (\<lambda>ty. ty \<noteq> None) (map (\<lambda>_. Some CoreTy_Bool) tms')"
+        by (simp add: list_all_iff)
+      have r: "map the (map (\<lambda>_. Some CoreTy_Bool) tms') = replicate (length tms') CoreTy_Bool"
+        by (simp add: comp_def map_replicate_const)
+      from Suc.IH(2)[OF sme wf] m a
+      have "sound_term_results state' env' (map the (map (\<lambda>_. Some CoreTy_Bool) tms'))
+              (interp_term_list d fuel state' tms')"
+        by blast
+      then show "sound_term_results state' env' (replicate (length tms') CoreTy_Bool)
+                   (interp_term_list d fuel state' tms')"
+        unfolding r .
+    qed
     show ?case
       by (rule type_soundness_function_call
             [OF state_env wf_env fn_lookup args_typed retTy_eq
-                ty_len ty_wk ref_writable IH_term IH_lvalue IH_stmts])
+                ty_len ty_wk ref_writable IH_term IH_lvalue IH_stmts IH_conds])
   }
 qed
 

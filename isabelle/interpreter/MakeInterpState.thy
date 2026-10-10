@@ -58,9 +58,9 @@ definition base_interp_state :: "CoreTyEnv \<Rightarrow> 'w \<Rightarrow> 'w Int
 (* Functions                                                                  *)
 (* ========================================================================== *)
 
-(* The InterpFun for one function: type parameters, argument Var/Ref tags
-   and the impure flag come from the FunInfo; argument names from the
-   CoreFunction; the body is supplied by the caller (the Core body, or the
+(* The InterpFun for one function: type parameters, argument Var/Ref tags,
+   the impure flag and the contract come from the FunInfo; argument names from
+   the CoreFunction; the body is supplied by the caller (the Core body, or the
    ExternFunc for an extern function). *)
 definition make_interp_fun ::
   "FunInfo \<Rightarrow> CoreFunction \<Rightarrow> (CoreStatement list + 'w ExternFunc) \<Rightarrow> 'w InterpFun" where
@@ -68,7 +68,9 @@ definition make_interp_fun ::
      \<lparr> IF_TyArgs = FI_TyArgs info,
        IF_Args = zip (CF_Args f) (map (fst \<circ> snd) (FI_TmArgs info)),
        IF_Body = body,
-       IF_Impure = FI_Impure info \<rparr>"
+       IF_Impure = FI_Impure info,
+       IF_Requires = FI_Requires info,
+       IF_Ensures = FI_Ensures info \<rparr>"
 
 (* Build the IS_Functions map from the (name, CoreFunction) pairs of
    CM_Functions. Ghost functions are included. *)

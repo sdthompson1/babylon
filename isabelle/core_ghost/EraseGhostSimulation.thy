@@ -1071,12 +1071,12 @@ next
               trivially (given some fuel, which the full run shows there is). \<close>
           from H CoreStmt_While obtain invarVals where
             iv: "interp_term_list d fuel full invars = Inr invarVals" and
-            ie: "invariants_error invarVals = None"
+            ie: "conditions_error invarVals = None"
             by (auto split: sum.splits option.splits)
           from iv have ivE: "interp_term_list d fuel erased [] = Inr []"
             by (cases fuel) simp_all
-          have ieE: "invariants_error [] = None"
-            by (simp add: invariants_error_def)
+          have ieE: "conditions_error [] = None"
+            by (simp add: conditions_error_def)
           note [simp] = iv ie ivE ieE
           from H CoreStmt_While obtain condVal where
             cv: "interp_term d fuel full condTm = Inr condVal"
@@ -1410,32 +1410,33 @@ next
         and info: "fmlookup (TE_Functions env) fnName = Some info"
         and ngI: "FI_Ghost info = NotGhost"
         and cargs: "call_args_notghost env info argTms"
-        and H: "interp_function_call d (Suc fuel) full fnName argTys argTms
+        and H0: "interp_function_call d (Suc fuel) full fnName argTys argTms
                   = Inr (newFull, retVal)"
       note D = state_erasedD[OF rel]
-
-      \<comment> \<open>Unfold the call in the full state enough to name each intermediate
-          state. \<close>
-      obtain f where f_lookup: "fmlookup (IS_Functions full) fnName = Some f"
-        using H by (cases "fmlookup (IS_Functions full) fnName") simp_all
-      from H f_lookup have len_eq: "length argTms = length (IF_Args f)"
-        by (cases "length argTms = length (IF_Args f)") simp_all
-      from H f_lookup len_eq have tyLen_eq: "length argTys = length (IF_TyArgs f)"
-        by (cases "length argTys = length (IF_TyArgs f)") simp_all
+      \<comment> \<open>Take the full call apart: the function, the state with the arguments
+          bound, and the body's result. The contract checks of the full call passed
+          and did not change the state, so the body's result is the call's result.
+          (The erased function has no contract, see lookE below.) \<close>
       let ?refsF = "map (interp_writable_lvalue d fuel full) argTms"
       let ?valsF = "map (interp_term d fuel full) argTms"
+      from interp_function_call_InrE[OF H0] obtain f preF where
+        f_lookup: "fmlookup (IS_Functions full) fnName = Some f" and
+        len_eq: "length argTms = length (IF_Args f)" and
+        tyLen_eq: "length argTys = length (IF_TyArgs f)" and
+        foldF: "fold process_one_arg (zip (IF_Args f) (zip ?refsF ?valsF))
+                  (Inr (full \<lparr> IS_Locals := fmempty, IS_Refs := fmempty,
+                               IS_ConstLocals := {||},
+                               IS_TyArgs := fmap_of_list (zip (IF_TyArgs f)
+                                              (map (apply_subst (IS_TyArgs full)) argTys)) \<rparr>))
+                = Inr preF" and
+        bodyF: "call_body (interp_statement_list d fuel) full f ?refsF ?valsF preF
+                  = Inr (newFull, retVal)" .
       let ?tyArgs = "fmap_of_list (zip (IF_TyArgs f)
                                        (map (apply_subst (IS_TyArgs full)) argTys))"
       let ?clearedF = "full \<lparr> IS_Locals := fmempty, IS_Refs := fmempty,
                               IS_ConstLocals := {||}, IS_TyArgs := ?tyArgs \<rparr>"
       let ?clearedE = "erased \<lparr> IS_Locals := fmempty, IS_Refs := fmempty,
                                 IS_ConstLocals := {||}, IS_TyArgs := ?tyArgs \<rparr>"
-      obtain preF where
-        foldF: "fold process_one_arg (zip (IF_Args f) (zip ?refsF ?valsF)) (Inr ?clearedF)
-                  = Inr preF"
-        using H f_lookup len_eq tyLen_eq
-        by (cases "fold process_one_arg (zip (IF_Args f) (zip ?refsF ?valsF)) (Inr ?clearedF)")
-           (simp_all add: Let_def)
 
       \<comment> \<open>The function in the state, against its signature: the same Var/Ref
           flags, and distinct parameter names. The ghost flags of the
@@ -1475,7 +1476,8 @@ next
                         = map ?tmE (drop_ghost ?flagsF argTms)"
         unfolding argsE_eq by (simp add: comp_def)
 
-      \<comment> \<open>The erased state holds the erased function. \<close>
+      \<comment> \<open>The erased state holds the erased function. Its contract is empty, so
+          the erased call has no contract checks (checked_call_no_contract). \<close>
       note lookE = funs_erased_lookup[OF D(4) info ngI f_lookup, unfolded fn_eq]
 
       \<comment> \<open>The environment of the callee's body. Its ghost variables are the
@@ -1584,22 +1586,22 @@ next
       proof (cases "IF_Body f")
         case (Inl bodyStmts)
         \<comment> \<open>Babylon body. \<close>
-        from H f_lookup len_eq tyLen_eq foldF Inl
+        from bodyF Inl
         obtain bodyRes where bodyEval:
           "interp_statement_list d fuel preF bodyStmts = Inr bodyRes"
           by (cases "interp_statement_list d fuel preF bodyStmts")
-             (simp_all add: Let_def)
+             (simp_all add: call_body_def)
         show ?thesis
         proof (cases bodyRes)
           case (Continue _)
-          with H f_lookup len_eq tyLen_eq foldF Inl bodyEval show ?thesis
-            by (simp add: Let_def)
+          with bodyF Inl bodyEval show ?thesis
+            by (simp add: call_body_def)
         next
           case (Return postF bodyRetVal)
-          from H f_lookup len_eq tyLen_eq foldF Inl bodyEval Return
+          from bodyF Inl bodyEval Return
           have newFull_eq: "newFull = restore_scope full postF"
             and ret_eq: "retVal = bodyRetVal"
-            by (simp_all add: Let_def)
+            by (simp_all add: call_body_def)
 
           \<comment> \<open>The body is well-typed in the mode of the callee, which is
               NotGhost, so its erasure runs in the erased callee frame. \<close>
@@ -1646,7 +1648,7 @@ next
           have callE: "interp_function_call d (Suc fuel) erased fnName argTys ?argsE
                          = Inr (restore_scope erased postE, retVal)"
             using lookE lenE tyLen_eq foldE Inl bodyE bE_eq ret_eq
-            by (simp add: Let_def paramsE_eq' D(6))
+            by (simp add: checked_call_no_contract call_body_def Let_def paramsE_eq' D(6))
           from callE relN' show ?thesis by blast
         qed
       next
@@ -1664,12 +1666,13 @@ next
           by (cases "externFun (IS_World full) (rights ?valsF)") auto
         let ?fullW = "full \<lparr> IS_World := newWorld \<rparr>"
         let ?erasedW = "erased \<lparr> IS_World := newWorld \<rparr>"
-        from H f_lookup len_eq tyLen_eq foldF Inr ext_eq
+        from bodyF Inr ext_eq
         obtain finalState where
           final_eq: "apply_ref_updates ?fullW ?refsXF refUpdates = Inr finalState"
           and newFull_eq: "newFull = finalState"
           and ret_eq: "retVal = externRetVal"
-          by (cases "apply_ref_updates ?fullW ?refsXF refUpdates") (simp_all add: Let_def)
+          by (cases "apply_ref_updates ?fullW ?refsXF refUpdates")
+             (simp_all add: call_body_def Let_def)
 
         \<comment> \<open>Every argument has a value in the full state. \<close>
         have lenA: "length (IF_Args f) = length ?refsF" using len_eq by simp
@@ -1789,7 +1792,7 @@ next
         have callE: "interp_function_call d (Suc fuel) erased fnName argTys ?argsE
                        = Inr (newErased, retVal)"
           using lookE lenE tyLen_eq foldE Inr valsE_drop extE finalE ret_eq
-          by (simp add: Let_def paramsE_eq' D(3) D(6))
+          by (simp add: checked_call_no_contract call_body_def Let_def paramsE_eq' D(3) D(6))
         from callE relN' show ?thesis by blast
       qed
     qed

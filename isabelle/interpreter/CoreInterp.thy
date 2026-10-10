@@ -1,5 +1,5 @@
 theory CoreInterp
-  imports InterpState "../util/NatToString" "HOL.Bit_Operations"
+  imports InterpState "../util/NatToString" "../core/ContractNames" "HOL.Bit_Operations"
 begin 
 
 (* ========================================================================== *)
@@ -789,11 +789,12 @@ definition choose_witness ::
         then Inr (SOME v. v \<in> vals \<and> r v = Inr (CV_Bool True))
         else Inl RuntimeError)"
 
-(* Given the values of the invariants of a loop, return None if all of them are
-   true, or an error otherwise. A false invariant is a RuntimeError, and a
-   non-boolean invariant is a TypeError. *)
-definition invariants_error :: "CoreValue list \<Rightarrow> InterpError option" where
-  "invariants_error vals =
+(* Given the values of a list of conditions (the invariants of a loop, or the
+   preconditions or postconditions of a function), return None if all of them
+   are true, or an error otherwise. A false condition is a RuntimeError, and a
+   non-boolean condition is a TypeError. *)
+definition conditions_error :: "CoreValue list \<Rightarrow> InterpError option" where
+  "conditions_error vals =
     (if \<exists>v \<in> set vals. \<forall>b. v \<noteq> CV_Bool b then Some TypeError
      else if CV_Bool False \<in> set vals then Some RuntimeError
      else None)"
@@ -892,6 +893,252 @@ lemma eval_decreases_Inl:
    \<exists>tm. decr = Some tm
         \<and> (ev tm = Inl err \<or> (\<exists>v. ev tm = Inr v \<and> decreases_value_error v = Some err))"
   by (cases decr) (auto split: sum.splits option.splits)
+
+(* ========================================================================== *)
+(* Function contracts *)
+(* ========================================================================== *)
+
+(* This inputs a list of lvalue results for the arguments of a call,
+   and returns a new list where the entries for the Ref-parameters are left
+   unchanged, but the entries for the Var-parameters are replaced with a
+   dummy Inl TypeError. (This is valid because process_one_arg never looks
+   at the lvalue result for a Var argument.) *)
+definition ref_arg_results ::
+    "(string \<times> VarOrRef) list \<Rightarrow> (InterpError + (nat \<times> LValuePath list)) list
+     \<Rightarrow> (InterpError + (nat \<times> LValuePath list)) list" where
+  "ref_arg_results args refResults =
+     map (\<lambda>((_, vr), refResult). if vr = Ref then refResult else Inl TypeError)
+         (zip args refResults)"
+
+(* Pre- and post-condition terms have free variables: arg@@i for preconditions, and
+   arg@@i, old@@i and return for postconditions.
+   To evaluate a pre- or post-condition, we therefore need to construct a state containing these
+   variables. We do this by starting from the "cleared state" produced by interp_function_call, and
+   then adding the new variables one by one, by means of calls to process_one_arg.
+   The arguments to be passed to process_one_arg are calculated by the functions "contract_pre_args"
+   and "contract_post_args", defined below. *)
+
+(* For a precondition: the list needs to contain one item per function argument, to represent
+   each arg@@i variable. This is straightforward: we can use the same `refResults` and `varResults`
+   that were used to generate the pre-call state; we just need to install them under different
+   names (arg@@i, instead of the actual names from IF_Args). *)
+definition contract_pre_args ::
+    "(string \<times> VarOrRef) list \<Rightarrow> (InterpError + (nat \<times> LValuePath list)) list
+     \<Rightarrow> (InterpError + CoreValue) list
+     \<Rightarrow> ((string \<times> VarOrRef) \<times> (InterpError + (nat \<times> LValuePath list))
+          \<times> (InterpError + CoreValue)) list" where
+  "contract_pre_args args refResults valResults =
+     zip (zip (contract_arg_names (length args)) (map snd args))
+         (zip (ref_arg_results args refResults) valResults)"
+
+(* For a postcondition: it is a little more complicated. We need to create list entries not only
+   for arg@@i (which now represents the value 'after' the call), but old@@i (the values before the
+   call) and return (the function return value) as well. *)
+definition contract_post_args ::
+    "(string \<times> VarOrRef) list \<Rightarrow> (InterpError + (nat \<times> LValuePath list)) list
+     \<Rightarrow> (InterpError + CoreValue) list \<Rightarrow> CoreValue
+     \<Rightarrow> ((string \<times> VarOrRef) \<times> (InterpError + (nat \<times> LValuePath list))
+          \<times> (InterpError + CoreValue)) list" where
+  "contract_post_args args refResults valResults retVal =
+     \<comment> \<open>First, we need the argument names (arg@@i, old@@i, return), which come from
+        contract_post_names.\<close>
+     zip (zip (contract_post_names (length args))
+              \<comment> \<open>Next, we need the VarOrRef flag for each argument. arg@@i retains its flag
+                 from the original declaration; old@@i and return are always Var.\<close>
+              (map snd args @ replicate (Suc (length args)) Var))
+         \<comment> \<open>Now we pass the 'address and lvalue path' for each argument. This is only relevant for
+            Ref arguments, and it can be taken directly from refResults (this was computed before
+            the call, but that's OK, because the addresses and paths haven't changed since then).
+            For the old@@i and return arguments, which are Var, no address or path is needed, so we
+            can just pass a dummy error value.\<close>
+         (zip (ref_arg_results args refResults @ replicate (Suc (length args)) (Inl TypeError))
+              \<comment> \<open>Finally, we need the 'value' for each argument. This is only really relevant for
+                 Var arguments, and the values of those don't change across the call, hence the
+                 duplicated `valResults` below (i.e. arg@@i = old@@i for each i, for Var arguments).
+                 The retVal follows afterwards.\<close>
+              (valResults @ valResults @ [Inr retVal]))"
+
+(* Check a list of pre- or post-conditions of a function.
+
+   The inputs are an evaluator function (interp_term_list, partially applied to
+   depth and fuel); a list of contract terms to be checked; and the argument tuples
+   (contract_pre_args or contract_post_args).
+
+   The function evaluates all the terms and checks the result, returning None
+   if all conditions hold, or the error otherwise. *)
+definition check_conditions ::
+    "('w InterpState \<Rightarrow> CoreTerm list \<Rightarrow> InterpError + CoreValue list) \<Rightarrow> CoreTerm list
+     \<Rightarrow> ((string \<times> VarOrRef) \<times> (InterpError + (nat \<times> LValuePath list))
+          \<times> (InterpError + CoreValue)) list
+     \<Rightarrow> 'w InterpState \<Rightarrow> InterpError option" where
+  "check_conditions ev tms args st =
+    (if tms = [] then None
+     else case fold process_one_arg args (Inr st) of
+            Inl err \<Rightarrow> Some err
+          | Inr st' \<Rightarrow>
+              (case ev st' tms of
+                 Inl err \<Rightarrow> Some err
+               | Inr vals \<Rightarrow> conditions_error vals))"
+
+(* The evaluator is only ever applied to the conditions themselves. *)
+lemma check_conditions_cong:
+  assumes "tms = tms'" and "args = args'" and "st = st'"
+    and "\<And>s. ev s tms' = ev' s tms'"
+  shows "check_conditions ev tms args st = check_conditions ev' tms' args' st'"
+proof (cases "fold process_one_arg args' (Inr st')")
+  case (Inl err)
+  then show ?thesis using assms(1-3) by (simp add: check_conditions_def)
+next
+  case (Inr s)
+  have "ev s tms' = ev' s tms'" by (rule assms(4))
+  with Inr show ?thesis using assms(1-3) by (simp add: check_conditions_def)
+qed
+
+lemma check_conditions_Nil [simp]: "check_conditions ev [] args st = None"
+  by (simp add: check_conditions_def)
+
+(* This wrapper adds pre- and post-condition checks to a function call
+   (see also interp_function_call).
+
+   Inputs: 
+    - ev: term-list evaluator (interp_term_list, partially applied to fuel and depth)
+    - f: the InterpFun to be called
+    - refResults, valResults: term arguments (already evaluated)
+    - calleeTyArgs: type arguments
+    - clearedState: the "cleared state" (the initial state before the call, with the
+        calling frame's local variables removed)
+    - bodyResult: the result of running the function body
+
+   We first check all the preconditions of f, in the cleared state. If any fail, the error is
+   returned as the result, and bodyResult is not used.
+
+   Otherwise, if bodyResult was successful, the postconditions are checked, in an appropriate
+   state (based on the bodyResult). If any postcondition fails, the error is returned the result.
+
+   Otherwise, bodyResult is returned, as if the contracts weren't there at all. *)
+definition checked_call ::
+    "('w InterpState \<Rightarrow> CoreTerm list \<Rightarrow> InterpError + CoreValue list) \<Rightarrow> 'w InterpFun
+     \<Rightarrow> (InterpError + (nat \<times> LValuePath list)) list \<Rightarrow> (InterpError + CoreValue) list
+     \<Rightarrow> (string, CoreType) fmap \<Rightarrow> 'w InterpState
+     \<Rightarrow> InterpError + ('w InterpState \<times> CoreValue)
+     \<Rightarrow> InterpError + ('w InterpState \<times> CoreValue)" where
+  "checked_call ev f refResults valResults calleeTyArgs clearedState bodyResult =
+    (case check_conditions ev (IF_Requires f)
+            (contract_pre_args (IF_Args f) refResults valResults) clearedState of
+       Some err \<Rightarrow> Inl err
+     | None \<Rightarrow>
+         (case bodyResult of
+            Inl err \<Rightarrow> Inl err
+          | Inr (newState, retVal) \<Rightarrow>
+              (case check_conditions ev (IF_Ensures f)
+                      (contract_post_args (IF_Args f) refResults valResults retVal)
+                      (newState \<lparr> IS_Locals := fmempty,
+                                  IS_Refs := fmempty,
+                                  IS_ConstLocals := {||},
+                                  IS_TyArgs := calleeTyArgs \<rparr>) of
+                 Some err \<Rightarrow> Inl err
+               | None \<Rightarrow> Inr (newState, retVal))))"
+
+(* The evaluator is only ever applied to the contract. This congruence rule
+   lets the interpreter below pass interp_term_list, partially applied, to
+   checked_call. (The order of the premises fixes the order of the induction
+   hypotheses of the interpreter: the body first, then the preconditions, then
+   the postconditions.) *)
+lemma checked_call_cong [fundef_cong]:
+  assumes "f = f'" and "refResults = refResults'" and "valResults = valResults'"
+    and "calleeTyArgs = calleeTyArgs'" and "clearedState = clearedState'"
+    and "bodyResult = bodyResult'"
+    and "\<And>s. ev s (IF_Requires f') = ev' s (IF_Requires f')"
+    and "\<And>s. ev s (IF_Ensures f') = ev' s (IF_Ensures f')"
+  shows "checked_call ev f refResults valResults calleeTyArgs clearedState bodyResult
+         = checked_call ev' f' refResults' valResults' calleeTyArgs' clearedState' bodyResult'"
+  using assms(1-6)
+  by (simp add: checked_call_def
+                check_conditions_cong[where ev = ev and ev' = ev' and tms' = "IF_Requires f'",
+                                      OF refl refl refl assms(7)]
+                check_conditions_cong[where ev = ev and ev' = ev' and tms' = "IF_Ensures f'",
+                                      OF refl refl refl assms(8)]
+           cong: option.case_cong sum.case_cong prod.case_cong)
+
+(* A successful checked call is a successful body. *)
+lemma checked_call_Inr:
+  "checked_call ev f refResults valResults calleeTyArgs clearedState bodyResult = Inr r
+   \<Longrightarrow> bodyResult = Inr r"
+  by (auto simp: checked_call_def split: option.splits sum.splits)
+
+(* Without a contract, a checked call is just the body. *)
+lemma checked_call_no_contract:
+  "IF_Requires f = [] \<Longrightarrow> IF_Ensures f = []
+   \<Longrightarrow> checked_call ev f refResults valResults calleeTyArgs clearedState bodyResult
+       = bodyResult"
+  by (cases bodyResult) (auto simp: checked_call_def)
+
+(* This is the last step of a function call. It runs the body statement list, or calls the
+   external function, and returns the resulting post-call interpreter state, and the return value.
+
+   Inputs:
+    - run: statement-list evaluator (interp_statement_list, partially applied to depth and fuel)
+    - state: the caller's state (just before the call)
+    - f: the InterpFun being called
+    - refResults, valResults: term arguments (already evaluated)
+    - preCallState: the state at the start of the call body (i.e. 'state', but with the caller's
+        local variables removed, and the callee's argument variables bound instead)
+   
+   Returns: new state (after the function has returned) and return value; or an error.
+   (This is the "bodyResult" that is passed to checked_call.)
+*)
+definition call_body ::
+    "('w InterpState \<Rightarrow> CoreStatement list \<Rightarrow> InterpError + 'w ExecResult)
+     \<Rightarrow> 'w InterpState \<Rightarrow> 'w InterpFun
+     \<Rightarrow> (InterpError + (nat \<times> LValuePath list)) list \<Rightarrow> (InterpError + CoreValue) list
+     \<Rightarrow> 'w InterpState \<Rightarrow> InterpError + ('w InterpState \<times> CoreValue)" where
+  "call_body run state f refResults valResults preCallState =
+    (case IF_Body f of
+      Inl bodyStmts \<Rightarrow>
+        \<comment> \<open>For a Core body, interpret the body statements in the preCallState,
+           producing postCallState and a return value.\<close>
+        (case run preCallState bodyStmts of
+          Inr (Return postCallState retVal) \<Rightarrow>
+            \<comment> \<open>Restore the state how it was before the call (keeping ref updates)
+               and pass the return value back to the caller.\<close>
+            Inr (restore_scope state postCallState, retVal)
+        | Inr (Continue _) \<Rightarrow>
+            Inl RuntimeError  \<comment> \<open>Reached end of function without return statement\<close>
+        | Inl err \<Rightarrow>
+            Inl err)
+    | Inr externFun \<Rightarrow>
+        \<comment> \<open>For an external function, we need to call the externFun and apply any ref updates
+           that it gives us. The external 'world' might change as well.\<close>
+        (let vals = rights valResults;
+             refs = rights (map (\<lambda>((_, vr), refResult).
+                                    if vr = Ref then refResult else Inl TypeError)
+                                (zip (IF_Args f) refResults));
+             (newWorld, refUpdates, retVal) = externFun (IS_World state) vals;
+             state' = state \<lparr> IS_World := newWorld \<rparr>
+        in case apply_ref_updates state' refs refUpdates of
+          Inr finalState \<Rightarrow> Inr (finalState, retVal)
+        | Inl err \<Rightarrow> Inl err))"
+
+(* The evaluator is only ever applied to the body statements, in preCallState.
+   This congruence rule lets the interpreter below pass interp_statement_list,
+   partially applied, to call_body. (The premise is conditional on IF_Body
+   so that the induction hypothesis the function package generates for the body
+   is the same as the one it would generate for an inline case split.) *)
+lemma call_body_cong [fundef_cong]:
+  assumes "state = state'" and "f = f'" and "refResults = refResults'"
+    and "valResults = valResults'" and "preCallState = preCallState'"
+    and "\<And>bodyStmts. IF_Body f' = Inl bodyStmts
+                     \<Longrightarrow> run preCallState' bodyStmts = run' preCallState' bodyStmts"
+  shows "call_body run state f refResults valResults preCallState
+         = call_body run' state' f' refResults' valResults' preCallState'"
+proof (cases "IF_Body f'")
+  case (Inl bodyStmts)
+  then have "run preCallState' bodyStmts = run' preCallState' bodyStmts" by (rule assms(6))
+  with Inl assms(1-5) show ?thesis by (simp add: call_body_def)
+next
+  case (Inr externFun)
+  with assms(1-5) show ?thesis by (simp add: call_body_def)
+qed
 
 (* ========================================================================== *)
 (* The main intepreter definitions *)
@@ -1241,7 +1488,7 @@ where
     (case interp_term_list d fuel state invars of
       Inl err \<Rightarrow> Inl err
     | Inr invarVals \<Rightarrow>
-        (case invariants_error invarVals of
+        (case conditions_error invarVals of
           Some err \<Rightarrow> Inl err
         | None \<Rightarrow>
             (case interp_term d fuel state condTm of
@@ -1331,11 +1578,15 @@ where
   (* Interpret a function call *)
 | "interp_function_call _ 0 _ _ _ _ = Inl InsufficientFuel"
 | "interp_function_call d (Suc fuel) state fnName argTys argTms =
+    \<comment> \<open>Look up the function and check we have the correct number of arguments.\<close>
     (case fmlookup (IS_Functions state) fnName of
       Some f \<Rightarrow>
         (if length argTms \<noteq> length (IF_Args f) then Inl TypeError  \<comment> \<open>wrong number of term args\<close>
         else if length argTys \<noteq> length (IF_TyArgs f) then Inl TypeError  \<comment> \<open>wrong number of type args\<close>
         else
+            \<comment> \<open>Evaluate each argument, both as an lvalue and as an rvalue.\<close>
+            \<comment> \<open>(Both are needed, because, e.g., `a[10]` might evaluate successfully as an
+                lvalue, but fail as an rvalue, if 10 was out of bounds for the array.)\<close>
             let refResults = map (interp_writable_lvalue d fuel state) argTms;
                 valResults = map (interp_term d fuel state) argTms;
                 argTuples = zip (IF_Args f) (zip refResults valResults);
@@ -1345,33 +1596,23 @@ where
                 calleeTyArgs = fmap_of_list
                   (zip (IF_TyArgs f)
                        (map (apply_subst (IS_TyArgs state)) argTys));
+                \<comment> \<open>Create a 'cleared state' for running the function body.\<close>
                 clearedState = state \<lparr> IS_Locals := fmempty,
-                                          IS_Refs := fmempty,
-                                          IS_ConstLocals := {||},
-                                          IS_TyArgs := calleeTyArgs \<rparr>
+                                       IS_Refs := fmempty,
+                                       IS_ConstLocals := {||},
+                                       IS_TyArgs := calleeTyArgs \<rparr>
             in
+              \<comment> \<open>Create a 'pre call state' by adding the arguments, one by one, into the
+                  cleared state.\<close>
               (case fold process_one_arg argTuples (Inr clearedState) of
                 Inl err \<Rightarrow> Inl err
               | Inr preCallState \<Rightarrow>
-                  (case IF_Body f of
-                    Inl bodyStmts \<Rightarrow>
-                      (case interp_statement_list d fuel preCallState bodyStmts of
-                        Inr (Return postCallState retVal) \<Rightarrow>
-                          Inr (restore_scope state postCallState, retVal)
-                      | Inr (Continue _) \<Rightarrow>
-                          Inl RuntimeError  \<comment> \<open>Reached end of function without return statement\<close>
-                      | Inl err \<Rightarrow>
-                          Inl err)
-                  | Inr externFun \<Rightarrow>
-                      (let vals = rights valResults;
-                           refs = rights (map (\<lambda>((_, vr), refResult).
-                                                  if vr = Ref then refResult else Inl TypeError)
-                                              (zip (IF_Args f) refResults));
-                           (newWorld, refUpdates, retVal) = externFun (IS_World state) vals;
-                           state' = state \<lparr> IS_World := newWorld \<rparr>
-                      in case apply_ref_updates state' refs refUpdates of
-                        Inr finalState \<Rightarrow> Inr (finalState, retVal)
-                      | Inl err \<Rightarrow> Inl err))))
+                  \<comment> \<open>Now delegate to 'checked_call' to run the pre- and post-condition checks,
+                     and 'call_body' to run the function itself.\<close>
+                  checked_call (interp_term_list d fuel) f refResults valResults
+                    calleeTyArgs clearedState
+                    (call_body (interp_statement_list d fuel) state f refResults valResults
+                       preCallState)))
     | None \<Rightarrow> Inl TypeError)"
 
   by pat_completeness auto
@@ -1387,5 +1628,73 @@ termination by (relation "inv_image (less_than <*lex*> less_than) (\<lambda>x. c
   | Inr (Inr (Inl (d, fuel, _))) \<Rightarrow> (d, fuel)
   | Inr (Inr (Inr (d, fuel, _))) \<Rightarrow> (d, fuel)
 )", auto)
+
+
+(* ========================================================================== *)
+(* Taking a successful function call apart *)
+(* ========================================================================== *)
+
+(* A call that succeeds found its function, was given the right numbers of
+   arguments, bound them successfully, and then its body (call_body) produced
+   the call's result. The contract checks are gone from the conclusion: they
+   passed, and a passing check does not change anything (checked_call_Inr).
+
+   This is the elimination rule that the frame, preservation, world and ghost
+   erasure proofs use to get at the body of a call. *)
+lemma interp_function_call_InrE:
+  assumes H: "interp_function_call d (Suc fuel) state fnName argTys argTms = Inr r"
+  obtains f preCallState where
+    "fmlookup (IS_Functions state) fnName = Some f"
+    and "length argTms = length (IF_Args f)"
+    and "length argTys = length (IF_TyArgs f)"
+    and "fold process_one_arg
+           (zip (IF_Args f) (zip (map (interp_writable_lvalue d fuel state) argTms)
+                                 (map (interp_term d fuel state) argTms)))
+           (Inr (state \<lparr> IS_Locals := fmempty, IS_Refs := fmempty, IS_ConstLocals := {||},
+                         IS_TyArgs := fmap_of_list (zip (IF_TyArgs f)
+                                        (map (apply_subst (IS_TyArgs state)) argTys)) \<rparr>))
+         = Inr preCallState"
+    and "call_body (interp_statement_list d fuel) state f
+           (map (interp_writable_lvalue d fuel state) argTms)
+           (map (interp_term d fuel state) argTms) preCallState = Inr r"
+proof (cases "fmlookup (IS_Functions state) fnName")
+  case None
+  with H show ?thesis by simp
+next
+  case lk: (Some f)
+  show ?thesis
+  proof (cases "length argTms \<noteq> length (IF_Args f) \<or> length argTys \<noteq> length (IF_TyArgs f)")
+    case True
+    with H lk show ?thesis by (auto split: if_split_asm)
+  next
+    case len: False
+    hence len_args: "length argTms = length (IF_Args f)"
+      and len_tys: "length argTys = length (IF_TyArgs f)" by auto
+    let ?refResults = "map (interp_writable_lvalue d fuel state) argTms"
+    let ?valResults = "map (interp_term d fuel state) argTms"
+    let ?calleeTyArgs = "fmap_of_list (zip (IF_TyArgs f) (map (apply_subst (IS_TyArgs state)) argTys))"
+    let ?clearedState = "state \<lparr> IS_Locals := fmempty, IS_Refs := fmempty,
+                                  IS_ConstLocals := {||},
+                                  IS_TyArgs := ?calleeTyArgs \<rparr>"
+    show ?thesis
+    proof (cases "fold process_one_arg (zip (IF_Args f) (zip ?refResults ?valResults))
+                    (Inr ?clearedState)")
+      case (Inl err)
+      with H lk len show ?thesis by (simp add: Let_def)
+    next
+      case fold: (Inr preCallState)
+      from H lk len fold
+      have "checked_call (interp_term_list d fuel) f ?refResults ?valResults
+              ?calleeTyArgs ?clearedState
+              (call_body (interp_statement_list d fuel) state f ?refResults ?valResults
+                 preCallState) = Inr r"
+        by (simp add: Let_def)
+      from checked_call_Inr[OF this]
+      have body: "call_body (interp_statement_list d fuel) state f ?refResults ?valResults
+                    preCallState = Inr r" .
+      show ?thesis by (rule that[OF lk len_args len_tys fold body])
+    qed
+  qed
+qed
 
 end

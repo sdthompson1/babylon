@@ -213,8 +213,10 @@ definition fun_info_matches_interp_fun :: "CoreTyEnv \<Rightarrow> FunInfo \<Rig
     distinct (map fst (IF_Args interpFun)) \<and>
     \<comment> \<open>Impure flag matches\<close>
     FI_Impure funInfo = IF_Impure interpFun \<and>
-    \<comment> \<open>The contract typechecks (CoreContractTypecheck.thy), in the body envs
-        of the contract signatures.\<close>
+    \<comment> \<open>The contract matches, and it typechecks (CoreContractTypecheck.thy) in
+        the body envs of the contract signatures.\<close>
+    FI_Requires funInfo = IF_Requires interpFun \<and>
+    FI_Ensures funInfo = IF_Ensures interpFun \<and>
     contracts_typed_in (body_env_for env) funInfo \<and>
     \<comment> \<open>Body certification: for Babylon functions, the body statement list
         typechecks in an appropriate env and ghost-mode; for external functions,
@@ -448,6 +450,16 @@ lemma body_env_for_well_formed:
       and len_names: "length names = length (FI_TmArgs funInfo)"
   shows "tyenv_well_formed (body_env_for env names funInfo)"
   using module_body_env_for_well_formed[OF wf fn_lookup len_names]
+  by (simp add: module_body_env_for_eq_body_env_for[OF abs_empty])
+
+(* Likewise for the body env of a postcondition (see post_funinfo). *)
+lemma body_env_for_well_formed_post:
+  assumes wf: "tyenv_well_formed env"
+      and fn_lookup: "fmlookup (TE_Functions env) fnName = Some funInfo"
+      and abs_empty: "TE_AbstractTypes env = {||}"
+      and len_names: "length names = length (FI_TmArgs (post_funinfo funInfo))"
+  shows "tyenv_well_formed (body_env_for env names (post_funinfo funInfo))"
+  using module_body_env_for_well_formed_post[OF wf fn_lookup len_names]
   by (simp add: module_body_env_for_eq_body_env_for[OF abs_empty])
 
 (* body_env_for only depends on the "global" fields of env (TE_GlobalVars,

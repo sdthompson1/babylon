@@ -274,13 +274,15 @@ proof -
         using ctr_wt info'_eq unfolding fun_contracts_well_typed_def by simp
     qed
 
-    \<comment> \<open>The five conjuncts of fun_info_matches_interp_fun.\<close>
+    \<comment> \<open>The conjuncts of fun_info_matches_interp_fun.\<close>
     have if_sel:
       "IF_TyArgs (make_interp_fun info f body) = FI_TyArgs info"
       "IF_Args (make_interp_fun info f body)
          = zip (CF_Args f) (map (fst \<circ> snd) (FI_TmArgs info))"
       "IF_Body (make_interp_fun info f body) = body"
       "IF_Impure (make_interp_fun info f body) = FI_Impure info"
+      "IF_Requires (make_interp_fun info f body) = FI_Requires info"
+      "IF_Ensures (make_interp_fun info f body) = FI_Ensures info"
       by (simp_all add: make_interp_fun_def)
     have mapfst: "map fst (zip (CF_Args f) (map (fst \<circ> snd) (FI_TmArgs info))) = CF_Args f"
       by (simp add: len)

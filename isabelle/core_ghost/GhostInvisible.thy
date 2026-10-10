@@ -1151,7 +1151,7 @@ next
         \<comment> \<open>The run succeeded, so the invariants were evaluated and all held. \<close>
         from H CoreStmt_While obtain invarVals where
           iv: "interp_term_list d fuel full invars = Inr invarVals" and
-          ie: "invariants_error invarVals = None"
+          ie: "conditions_error invarVals = None"
           by (auto split: sum.splits option.splits)
         note [simp] = iv ie
         from H CoreStmt_While obtain condVal where

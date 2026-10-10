@@ -558,8 +558,7 @@ lemma process_one_arg_step_sound:
     and storeTyping :: "CoreType list"
     and k :: nat
   assumes sme_caller: "state_matches_env state env storeTyping"  \<comment> \<open>caller state (for value/lvalue soundness)\<close>
-      and wf_env: "tyenv_well_formed env"
-      and fn_lookup: "fmlookup (TE_Functions env) fnName = Some funInfo"
+      and params_tyvars: "\<forall>ty \<in> fst ` set (FI_TmArgs funInfo). type_tyvars ty \<subseteq> set (FI_TyArgs funInfo)"
       and k_bound: "k < length (FI_TmArgs funInfo)"
       and k_names: "k < length names"
       and dist_names: "distinct names"
@@ -606,7 +605,7 @@ proof -
   proof -
     have "paramTy \<in> fst ` set (FI_TmArgs funInfo)"
       using kth_arg k_bound image_iff nth_mem by fastforce
-    with fun_info_types_tyvars_subset(1)[OF wf_env abs_empty fn_lookup]
+    with params_tyvars
     have "type_tyvars paramTy \<subseteq> set (FI_TyArgs funInfo)" by blast
     thus ?thesis by (simp add: fset_of_list.rep_eq)
   qed
@@ -962,8 +961,7 @@ lemma fold_process_one_arg_sound_gen:
     and storeTyping :: "CoreType list"
     and state :: "'w InterpState"
   assumes sme_caller: "state_matches_env state env storeTyping"
-      and wf_env: "tyenv_well_formed env"
-      and fn_lookup: "fmlookup (TE_Functions env) fnName = Some funInfo"
+      and params_tyvars: "\<forall>ty \<in> fst ` set (FI_TmArgs funInfo). type_tyvars ty \<subseteq> set (FI_TyArgs funInfo)"
       and dist_names: "distinct names"
       and names_len: "length names = length (FI_TmArgs funInfo)"
       and suffix_at_k:
@@ -1071,7 +1069,7 @@ next
     show ?thesis by simp
   next
     case (Inr partialState)
-    from process_one_arg_step_sound[OF sme_caller wf_env fn_lookup k_bound
+    from process_one_arg_step_sound[OF sme_caller params_tyvars k_bound
                                        k_names dist_names kth_arg paramName_eq
                                        val_sound_head lval_sound_head]
          Cons.prems(9) Inr
@@ -1147,45 +1145,38 @@ qed
 (* and the k=0 partial env, folding produces a state matching the full        *)
 (* body env.                                                                   *)
 (* -------------------------------------------------------------------------- *)
-(* The vals/lvals soundness preconditions are stated using the *outer*
-   substitution outerSubst = fmap_of_list (zip (FI_TyArgs funInfo) tyArgs),
-   which is exactly the shape produced by the IH (via args_typed at the
-   call site). The internal proof bridges to tySubst (which has the caller's
-   IS_TyArgs pre-applied to the range) via apply_subst_compose_zip. *)
-lemma fold_process_one_arg_sound:
-  fixes env :: CoreTyEnv
-    and funInfo :: FunInfo
-    and tyArgs :: "CoreType list"
-    and storeTyping :: "CoreType list"
-    and state :: "'w InterpState"
-    and f :: "'w InterpFun"
-  defines "outerSubst \<equiv> fmap_of_list (zip (FI_TyArgs funInfo) tyArgs)"
-      and "tySubst \<equiv> fmap_of_list
-              (zip (FI_TyArgs funInfo)
-                   (map (apply_subst (IS_TyArgs state)) tyArgs))"
+(* The general form: any parameter list ifArgs (names and Var/Ref markers)
+   that agrees with the signature funInfo, any argument results, sound at the
+   parameter types under tySubst. funInfo need not be a declared function, and
+   the names need not be those of the function's definition: this is also used
+   for the states in which a function's contract is evaluated (with the
+   positional names, and with post_funinfo for a postcondition). *)
+lemma fold_process_one_arg_sound_subst:
+  fixes state :: "'w InterpState"
   assumes sme_caller: "state_matches_env state env storeTyping"
-      and wf_env: "tyenv_well_formed env"
-      and fn_lookup: "fmlookup (TE_Functions env) fnName = Some funInfo"
-      and fi_match: "fun_info_matches_interp_fun env funInfo f"
+      and params_tyvars: "\<forall>ty \<in> fst ` set (FI_TmArgs funInfo). type_tyvars ty \<subseteq> set (FI_TyArgs funInfo)"
       and ty_len: "length tyArgs = length (FI_TyArgs funInfo)"
-      and ty_wk:  "list_all (is_well_kinded env) tyArgs"
+      and ty_wk: "list_all (is_well_kinded env) tyArgs"
+      and tySubst_eq: "tySubst = fmap_of_list
+                                   (zip (FI_TyArgs funInfo)
+                                        (map (apply_subst (IS_TyArgs state)) tyArgs))"
+      and vor_match: "list_all2 (\<lambda>(_, vor1, _) (_, vor2). vor1 = vor2) (FI_TmArgs funInfo) ifArgs"
+      and dist_names: "distinct (map fst ifArgs)"
+      and len_vals: "length ifArgs = length valResults"
+      and len_refs: "length ifArgs = length refResults"
       and vals_sound:
             "\<forall>i < length (FI_TmArgs funInfo).
                sound_term_result state env
-                 (apply_subst outerSubst (fst (FI_TmArgs funInfo ! i)))
-                 (map (interp_term d fuel state) argTms ! i)"
+                 (apply_subst tySubst (fst (FI_TmArgs funInfo ! i)))
+                 (valResults ! i)"
       and lvals_sound:
             "\<forall>i < length (FI_TmArgs funInfo).
                fst (snd (FI_TmArgs funInfo ! i)) = Ref \<longrightarrow>
                  sound_lvalue_result state env storeTyping
-                   (apply_subst outerSubst (fst (FI_TmArgs funInfo ! i)))
-                   (map (interp_writable_lvalue d fuel state) argTms ! i)"
-      and len_argTms: "length argTms = length (FI_TmArgs funInfo)"
-  shows "sound_arg_processing_result env (map fst (IF_Args f)) funInfo tySubst storeTyping
-           (fold process_one_arg
-              (zip (IF_Args f)
-                   (zip (map (interp_writable_lvalue d fuel state) argTms)
-                        (map (interp_term d fuel state) argTms)))
+                   (apply_subst tySubst (fst (FI_TmArgs funInfo ! i)))
+                   (refResults ! i)"
+  shows "sound_arg_processing_result env (map fst ifArgs) funInfo tySubst storeTyping
+           (fold process_one_arg (zip ifArgs (zip refResults valResults))
               (Inr (state \<lparr> IS_Locals := fmempty,
                              IS_Refs := fmempty,
                              IS_ConstLocals := {||},
@@ -1194,37 +1185,100 @@ proof -
   let ?clearedState = "state \<lparr> IS_Locals := fmempty, IS_Refs := fmempty,
                                 IS_ConstLocals := {||},
                                 IS_TyArgs := tySubst \<rparr>"
-  let ?valResults = "map (interp_term d fuel state) argTms"
-  let ?refResults = "map (interp_writable_lvalue d fuel state) argTms"
-  let ?names = "map fst (IF_Args f)"
-
-  \<comment> \<open>From fi_match: parameter names are distinct, the Var/Ref markers align with
-      FI_TmArgs, and the arg lists have equal length. \<close>
-  from fi_match have vor_match:
-    "list_all2 (\<lambda>(_, vor1, _) (_, vor2). vor1 = vor2) (FI_TmArgs funInfo) (IF_Args f)"
-    and dist_names: "distinct ?names"
-    unfolding fun_info_matches_interp_fun_def by simp_all
-  from vor_match have len_ifargs: "length (IF_Args f) = length (FI_TmArgs funInfo)"
+  let ?names = "map fst ifArgs"
+  from vor_match have len_ifargs: "length ifArgs = length (FI_TmArgs funInfo)"
     by (simp add: list_all2_lengthD)
   hence names_len: "length ?names = length (FI_TmArgs funInfo)" by simp
-
-  \<comment> \<open>The caller's env has no unresolved abstract types (interpreter runs only on
-      fully-resolved programs), so the fun_ghost_constraint env shapes collapse. \<close>
-  have abs_empty: "TE_AbstractTypes env = {||}"
-    using sme_caller unfolding state_matches_env_def by blast
 
   \<comment> \<open>H2a: initial state is sound at k=0. \<close>
   have sme_cleared:
     "state_matches_env ?clearedState (partial_body_env_for env ?names funInfo 0) storeTyping"
-    using cleared_state_matches_partial_env_zero
-            [OF sme_caller ty_len ty_wk,
-             where tySubst=tySubst and names="map fst (IF_Args f)"]
-    by (simp add: tySubst_def)
+    by (rule cleared_state_matches_partial_env_zero[OF sme_caller ty_len ty_wk tySubst_eq])
   have partial_sound_zero:
     "sound_partial_arg_processing_result env ?names funInfo tySubst 0 storeTyping
        (Inr ?clearedState)"
     unfolding sound_partial_arg_processing_result_def
     using sme_cleared storeTyping_extends_refl by auto
+
+  \<comment> \<open>Invoke H2c with k=0. \<close>
+  have k_plus_len_zero: "(0::nat) + length (FI_TmArgs funInfo) = length (FI_TmArgs funInfo)"
+    by simp
+  have suffix_at_zero: "FI_TmArgs funInfo = drop 0 (FI_TmArgs funInfo)" by simp
+  have suffix_names_zero: "map fst ifArgs = drop 0 ?names" by simp
+  from fold_process_one_arg_sound_gen[
+      OF sme_caller params_tyvars dist_names names_len suffix_at_zero
+         suffix_names_zero vor_match
+         len_vals len_refs k_plus_len_zero vals_sound lvals_sound
+         partial_sound_zero]
+  have gen_result:
+    "sound_partial_arg_processing_result env ?names funInfo tySubst
+       (0 + length (FI_TmArgs funInfo)) storeTyping
+       (fold process_one_arg
+         (zip ifArgs (zip refResults valResults)) (Inr ?clearedState))" .
+
+  \<comment> \<open>Bridge from partial_body_env_for at length FI_TmArgs to body_env_for. \<close>
+  have pbe_full:
+    "partial_body_env_for env ?names funInfo (length (FI_TmArgs funInfo))
+       = body_env_for env ?names funInfo"
+    using partial_body_env_for_full[of funInfo ?names env] names_len by simp
+
+  show ?thesis
+    unfolding sound_arg_processing_result_def
+    using gen_result pbe_full
+    unfolding sound_partial_arg_processing_result_def
+    by (auto split: sum.splits)
+qed
+
+(* The argument results of a call of a declared function, sound at the
+   parameter types under the *outer* substitution
+   outerSubst = fmap_of_list (zip (FI_TyArgs funInfo) tyArgs) (which is
+   exactly the shape produced by the IH, via args_typed at the call site), are
+   sound at the parameter types under tySubst (which has the caller's
+   IS_TyArgs pre-applied to the range). The proof uses
+   apply_subst_compose_zip. *)
+lemma arg_results_sound_subst:
+  fixes env :: CoreTyEnv
+    and funInfo :: FunInfo
+    and tyArgs :: "CoreType list"
+    and storeTyping :: "CoreType list"
+    and state :: "'w InterpState"
+  defines "outerSubst \<equiv> fmap_of_list (zip (FI_TyArgs funInfo) tyArgs)"
+      and "tySubst \<equiv> fmap_of_list
+              (zip (FI_TyArgs funInfo)
+                   (map (apply_subst (IS_TyArgs state)) tyArgs))"
+  assumes sme_caller: "state_matches_env state env storeTyping"
+      and wf_env: "tyenv_well_formed env"
+      and fn_lookup: "fmlookup (TE_Functions env) fnName = Some funInfo"
+      and ty_len: "length tyArgs = length (FI_TyArgs funInfo)"
+      and ty_wk:  "list_all (is_well_kinded env) tyArgs"
+      and vals_sound:
+            "\<forall>i < length (FI_TmArgs funInfo).
+               sound_term_result state env
+                 (apply_subst outerSubst (fst (FI_TmArgs funInfo ! i)))
+                 (valResults ! i)"
+      and lvals_sound:
+            "\<forall>i < length (FI_TmArgs funInfo).
+               fst (snd (FI_TmArgs funInfo ! i)) = Ref \<longrightarrow>
+                 sound_lvalue_result state env storeTyping
+                   (apply_subst outerSubst (fst (FI_TmArgs funInfo ! i)))
+                   (refResults ! i)"
+  shows "\<forall>i < length (FI_TmArgs funInfo).
+           sound_term_result state env
+             (apply_subst tySubst (fst (FI_TmArgs funInfo ! i)))
+             (valResults ! i)"
+    and "\<forall>i < length (FI_TmArgs funInfo).
+           fst (snd (FI_TmArgs funInfo ! i)) = Ref \<longrightarrow>
+             sound_lvalue_result state env storeTyping
+               (apply_subst tySubst (fst (FI_TmArgs funInfo ! i)))
+               (refResults ! i)"
+proof -
+  let ?valResults = "valResults"
+  let ?refResults = "refResults"
+
+  \<comment> \<open>The caller's env has no unresolved abstract types (interpreter runs only on
+      fully-resolved programs), so the fun_ghost_constraint env shapes collapse. \<close>
+  have abs_empty: "TE_AbstractTypes env = {||}"
+    using sme_caller unfolding state_matches_env_def by blast
 
   \<comment> \<open>Translate vals_sound / lvals_sound from outerSubst-form to tySubst-form.
       The translation uses apply_subst_compose_zip plus apply_state_id (ground). \<close>
@@ -1399,42 +1453,87 @@ proof -
     qed
   qed
 
-  \<comment> \<open>length agreement on IF_Args (var_ref_match = vor_match from above). \<close>
+  show "\<forall>i < length (FI_TmArgs funInfo).
+          sound_term_result state env
+            (apply_subst tySubst (fst (FI_TmArgs funInfo ! i)))
+            (valResults ! i)"
+    by (rule vals_sound_tySubst)
+  show "\<forall>i < length (FI_TmArgs funInfo).
+          fst (snd (FI_TmArgs funInfo ! i)) = Ref \<longrightarrow>
+            sound_lvalue_result state env storeTyping
+              (apply_subst tySubst (fst (FI_TmArgs funInfo ! i)))
+              (refResults ! i)"
+    by (rule lvals_sound_tySubst)
+qed
+
+(* The fold over the arguments of a call of a declared function is sound. *)
+lemma fold_process_one_arg_sound:
+  fixes env :: CoreTyEnv
+    and funInfo :: FunInfo
+    and tyArgs :: "CoreType list"
+    and storeTyping :: "CoreType list"
+    and state :: "'w InterpState"
+    and f :: "'w InterpFun"
+  defines "outerSubst \<equiv> fmap_of_list (zip (FI_TyArgs funInfo) tyArgs)"
+      and "tySubst \<equiv> fmap_of_list
+              (zip (FI_TyArgs funInfo)
+                   (map (apply_subst (IS_TyArgs state)) tyArgs))"
+  assumes sme_caller: "state_matches_env state env storeTyping"
+      and wf_env: "tyenv_well_formed env"
+      and fn_lookup: "fmlookup (TE_Functions env) fnName = Some funInfo"
+      and fi_match: "fun_info_matches_interp_fun env funInfo f"
+      and ty_len: "length tyArgs = length (FI_TyArgs funInfo)"
+      and ty_wk:  "list_all (is_well_kinded env) tyArgs"
+      and vals_sound:
+            "\<forall>i < length (FI_TmArgs funInfo).
+               sound_term_result state env
+                 (apply_subst outerSubst (fst (FI_TmArgs funInfo ! i)))
+                 (map (interp_term d fuel state) argTms ! i)"
+      and lvals_sound:
+            "\<forall>i < length (FI_TmArgs funInfo).
+               fst (snd (FI_TmArgs funInfo ! i)) = Ref \<longrightarrow>
+                 sound_lvalue_result state env storeTyping
+                   (apply_subst outerSubst (fst (FI_TmArgs funInfo ! i)))
+                   (map (interp_writable_lvalue d fuel state) argTms ! i)"
+      and len_argTms: "length argTms = length (FI_TmArgs funInfo)"
+  shows "sound_arg_processing_result env (map fst (IF_Args f)) funInfo tySubst storeTyping
+           (fold process_one_arg
+              (zip (IF_Args f)
+                   (zip (map (interp_writable_lvalue d fuel state) argTms)
+                        (map (interp_term d fuel state) argTms)))
+              (Inr (state \<lparr> IS_Locals := fmempty,
+                             IS_Refs := fmempty,
+                             IS_ConstLocals := {||},
+                             IS_TyArgs := tySubst \<rparr>)))"
+proof -
+  \<comment> \<open>From fi_match: parameter names are distinct, the Var/Ref markers align with
+      FI_TmArgs, and the arg lists have equal length. \<close>
+  from fi_match have vor_match:
+    "list_all2 (\<lambda>(_, vor1, _) (_, vor2). vor1 = vor2) (FI_TmArgs funInfo) (IF_Args f)"
+    and dist_names: "distinct (map fst (IF_Args f))"
+    unfolding fun_info_matches_interp_fun_def by simp_all
   from vor_match have len_ifArgs: "length (FI_TmArgs funInfo) = length (IF_Args f)"
     by (rule list_all2_lengthD)
-
-  have len_vals: "length (IF_Args f) = length ?valResults"
+  have len_vals: "length (IF_Args f) = length (map (interp_term d fuel state) argTms)"
     using len_ifArgs len_argTms by simp
-  have len_refs: "length (IF_Args f) = length ?refResults"
+  have len_refs: "length (IF_Args f) = length (map (interp_writable_lvalue d fuel state) argTms)"
     using len_ifArgs len_argTms by simp
 
-  \<comment> \<open>Invoke H2c with k=0. \<close>
-  have k_plus_len_zero: "(0::nat) + length (FI_TmArgs funInfo) = length (FI_TmArgs funInfo)"
-    by simp
-  have suffix_at_zero: "FI_TmArgs funInfo = drop 0 (FI_TmArgs funInfo)" by simp
-  have suffix_names_zero: "map fst (IF_Args f) = drop 0 ?names" by simp
-  from fold_process_one_arg_sound_gen[
-      OF sme_caller wf_env fn_lookup dist_names names_len suffix_at_zero
-         suffix_names_zero vor_match
-         len_vals len_refs k_plus_len_zero vals_sound_tySubst lvals_sound_tySubst
-         partial_sound_zero]
-  have gen_result:
-    "sound_partial_arg_processing_result env ?names funInfo tySubst
-       (0 + length (FI_TmArgs funInfo)) storeTyping
-       (fold process_one_arg
-         (zip (IF_Args f) (zip ?refResults ?valResults)) (Inr ?clearedState))" .
+  have abs_empty: "TE_AbstractTypes env = {||}"
+    using sme_caller unfolding state_matches_env_def by blast
+  have params_tyvars:
+    "\<forall>ty \<in> fst ` set (FI_TmArgs funInfo). type_tyvars ty \<subseteq> set (FI_TyArgs funInfo)"
+    by (rule fun_info_types_tyvars_subset(1)[OF wf_env abs_empty fn_lookup])
 
-  \<comment> \<open>Bridge from partial_body_env_for at length FI_TmArgs to body_env_for. \<close>
-  have pbe_full:
-    "partial_body_env_for env ?names funInfo (length (FI_TmArgs funInfo))
-       = body_env_for env ?names funInfo"
-    using partial_body_env_for_full[of funInfo ?names env] names_len by simp
+  note args_subst = arg_results_sound_subst
+                      [OF sme_caller wf_env fn_lookup ty_len ty_wk
+                          vals_sound[unfolded outerSubst_def] lvals_sound[unfolded outerSubst_def]]
 
   show ?thesis
-    unfolding sound_arg_processing_result_def
-    using gen_result pbe_full
-    unfolding sound_partial_arg_processing_result_def
-    by (auto split: sum.splits)
+    unfolding tySubst_def
+    by (rule fold_process_one_arg_sound_subst
+               [OF sme_caller params_tyvars ty_len ty_wk refl vor_match dist_names
+                   len_vals len_refs args_subst])
 qed
 
 

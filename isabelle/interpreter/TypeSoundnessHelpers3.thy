@@ -1664,6 +1664,229 @@ qed
 
 
 (*-----------------------------------------------------------------------------*)
+(* Type soundness for conditions (loop invariants and function contracts) *)
+(*-----------------------------------------------------------------------------*)
+
+(* Checking a list of conditions is not a TypeError when their values are
+   booleans. (It can still be a RuntimeError: a condition can be false.) *)
+lemma conditions_error_sound:
+  assumes "list_all2 (value_has_type env) vals (replicate n CoreTy_Bool)"
+  shows "conditions_error vals \<noteq> Some TypeError"
+proof -
+  have "\<exists>b. v = CV_Bool b" if "v \<in> set vals" for v
+  proof -
+    from that obtain i where i: "i < length vals" "vals ! i = v"
+      by (auto simp: in_set_conv_nth)
+    from assms have len: "length vals = n"
+      by (auto dest: list_all2_lengthD)
+    from list_all2_nthD[OF assms i(1)] i len
+    have "value_has_type env v CoreTy_Bool" by simp
+    then show ?thesis by (cases v) (auto split: CoreType.splits)
+  qed
+  then show ?thesis by (auto simp: conditions_error_def)
+qed
+
+(* Checking a function's preconditions or postconditions is not a TypeError,
+   if binding the positional names is sound (it gives a state matching the body
+   env of the contract signature), and evaluating the conditions in a state
+   that matches that env is sound (it gives booleans). *)
+lemma check_conditions_sound:
+  fixes ev :: "'w InterpState \<Rightarrow> CoreTerm list \<Rightarrow> InterpError + CoreValue list"
+  assumes fold_sound: "sound_arg_processing_result env names info tySubst storeTyping
+                         (fold process_one_arg args (Inr st))"
+    and ev_sound: "\<And>s st'. state_matches_env s (body_env_for env names info) st' \<Longrightarrow>
+                     sound_term_results s (body_env_for env names info)
+                       (replicate (length tms) CoreTy_Bool) (ev s tms)"
+  shows "check_conditions ev tms args st \<noteq> Some TypeError"
+proof (cases "tms = []")
+  case True
+  then show ?thesis by simp
+next
+  case nonempty: False
+  show ?thesis
+  proof (cases "fold process_one_arg args (Inr st)")
+    case (Inl err)
+    with fold_sound have "sound_error_result err"
+      by (simp add: sound_arg_processing_result_def)
+    then have "err \<noteq> TypeError" by (cases err) simp_all
+    with nonempty Inl show ?thesis by (simp add: check_conditions_def)
+  next
+    case fold_ok: (Inr st')
+    from fold_sound fold_ok obtain st'' where
+      sme: "state_matches_env st' (body_env_for env names info) st''"
+      by (auto simp: sound_arg_processing_result_def)
+    note es = ev_sound[OF sme]
+    show ?thesis
+    proof (cases "ev st' tms")
+      case (Inl err)
+      with es have "sound_error_result err" by simp
+      then have "err \<noteq> TypeError" by (cases err) simp_all
+      with nonempty fold_ok Inl show ?thesis by (simp add: check_conditions_def)
+    next
+      case (Inr vals)
+      with es have "list_all2 (value_has_type (body_env_for env names info)) vals
+                      (replicate (length tms) CoreTy_Bool)"
+        by simp
+      from conditions_error_sound[OF this] nonempty fold_ok Inr show ?thesis
+        by (simp add: check_conditions_def)
+    qed
+  qed
+qed
+
+(* The contract checks around a call keep it sound, if neither check can be a
+   TypeError. *)
+lemma checked_call_sound:
+  assumes body_sound: "sound_function_call_result state env storeTyping retTy b"
+    and pre_ok: "check_conditions ev (IF_Requires f) (contract_pre_args (IF_Args f) rr vr) st
+                   \<noteq> Some TypeError"
+    and post_ok: "\<And>newState retVal. b = Inr (newState, retVal) \<Longrightarrow>
+                    check_conditions ev (IF_Ensures f) (contract_post_args (IF_Args f) rr vr retVal)
+                      (newState \<lparr> IS_Locals := fmempty, IS_Refs := fmempty,
+                                  IS_ConstLocals := {||}, IS_TyArgs := ta \<rparr>)
+                    \<noteq> Some TypeError"
+  shows "sound_function_call_result state env storeTyping retTy (checked_call ev f rr vr ta st b)"
+proof (cases "check_conditions ev (IF_Requires f) (contract_pre_args (IF_Args f) rr vr) st")
+  case (Some err)
+  with pre_ok have "err \<noteq> TypeError" by simp
+  then have "sound_error_result err" by (cases err) simp_all
+  with Some show ?thesis by (simp add: checked_call_def)
+next
+  case pre_none: None
+  show ?thesis
+  proof (cases b)
+    case (Inl err)
+    with body_sound pre_none show ?thesis by (simp add: checked_call_def)
+  next
+    case (Inr p)
+    obtain newState retVal where p: "p = (newState, retVal)" by (cases p)
+    let ?post = "check_conditions ev (IF_Ensures f) (contract_post_args (IF_Args f) rr vr retVal)
+                   (newState \<lparr> IS_Locals := fmempty, IS_Refs := fmempty,
+                               IS_ConstLocals := {||}, IS_TyArgs := ta \<rparr>)"
+    show ?thesis
+    proof (cases ?post)
+      case (Some err)
+      with post_ok[of newState retVal] Inr p have "err \<noteq> TypeError" by simp
+      then have "sound_error_result err" by (cases err) simp_all
+      with pre_none Inr p Some show ?thesis by (simp add: checked_call_def)
+    next
+      case None
+      with body_sound pre_none Inr p show ?thesis by (simp add: checked_call_def)
+    qed
+  qed
+qed
+
+(* Renaming the parameters keeps the Var/Ref markers. *)
+lemma vor_match_rename:
+  assumes vm: "list_all2 (\<lambda>(_, vor1, _) (_, vor2). vor1 = vor2) tmArgs args"
+    and len: "length names = length args"
+  shows "list_all2 (\<lambda>(_, vor1, _) (_, vor2). vor1 = vor2) tmArgs (zip names (map snd args))"
+  using vm len unfolding list_all2_conv_all_nth by (auto simp: case_prod_beta)
+
+(* The parameters of a postcondition (see post_funinfo and contract_post_args)
+   have the right Var/Ref markers. *)
+lemma vor_match_post:
+  assumes vm: "list_all2 (\<lambda>(_, vor1, _) (_, vor2). vor1 = vor2) (FI_TmArgs info) args"
+  shows "list_all2 (\<lambda>(_, vor1, _) (_, vor2). vor1 = vor2) (FI_TmArgs (post_funinfo info))
+           (zip (contract_post_names (length args))
+                (map snd args @ replicate (Suc (length args)) Var))"
+proof -
+  let ?n = "length args"
+  have len: "length (FI_TmArgs info) = ?n" using vm by (rule list_all2_lengthD)
+  have first: "list_all2 (\<lambda>(_, vor1, _) (_, vor2). vor1 = vor2) (FI_TmArgs info)
+                 (zip (contract_arg_names ?n) (map snd args))"
+    by (rule vor_match_rename[OF vm]) simp
+  have rest: "list_all2 (\<lambda>(_, vor1, _) (_, vor2). vor1 = vor2)
+                (map (\<lambda>(ty, _, _). (ty, Var, Ghost)) (FI_TmArgs info)
+                 @ [(FI_ReturnType info, Var, Ghost)])
+                (zip (contract_old_names ?n @ [''return'']) (replicate (Suc ?n) Var))"
+    unfolding list_all2_conv_all_nth using len
+    by (auto simp: case_prod_beta nth_append simp del: replicate_Suc)
+  have zip_eq: "zip (contract_post_names ?n) (map snd args @ replicate (Suc ?n) Var)
+                = zip (contract_arg_names ?n) (map snd args)
+                  @ zip (contract_old_names ?n @ [''return'']) (replicate (Suc ?n) Var)"
+    unfolding contract_post_names_def by (rule zip_append) simp
+  show ?thesis
+    unfolding zip_eq post_funinfo_simps
+    by (rule list_all2_appendI[OF first rest])
+qed
+
+(* The values bound to the parameters of a postcondition: the argument values
+   (for arg@@i and old@@i), then the return value. *)
+lemma post_vals_sound:
+  assumes vs: "\<forall>i < length (FI_TmArgs info).
+                 sound_term_result s env (apply_subst \<sigma> (fst (FI_TmArgs info ! i))) (vals ! i)"
+    and len: "length vals = length (FI_TmArgs info)"
+    and rv: "sound_term_result s env (apply_subst \<sigma> (FI_ReturnType info)) (Inr retVal)"
+  shows "\<forall>i < length (FI_TmArgs (post_funinfo info)).
+           sound_term_result s env (apply_subst \<sigma> (fst (FI_TmArgs (post_funinfo info) ! i)))
+             ((vals @ vals @ [Inr retVal]) ! i)"
+proof (intro allI impI)
+  fix i assume i: "i < length (FI_TmArgs (post_funinfo info))"
+  let ?n = "length (FI_TmArgs info)"
+  have i_lt: "i < ?n + ?n + 1" using i by simp
+  show "sound_term_result s env (apply_subst \<sigma> (fst (FI_TmArgs (post_funinfo info) ! i)))
+          ((vals @ vals @ [Inr retVal]) ! i)"
+  proof (cases "i < ?n")
+    case True
+    have "sound_term_result s env (apply_subst \<sigma> (fst (FI_TmArgs info ! i))) (vals ! i)"
+      using vs True by blast
+    then show ?thesis using True len by (simp add: nth_append)
+  next
+    case not_first: False
+    show ?thesis
+    proof (cases "i < ?n + ?n")
+      case True
+      have k: "i - ?n < ?n" using not_first True by linarith
+      have v: "(vals @ vals @ [Inr retVal]) ! i = vals ! (i - ?n)"
+        using not_first k len by (simp add: nth_append)
+      have t: "fst (FI_TmArgs (post_funinfo info) ! i) = fst (FI_TmArgs info ! (i - ?n))"
+        using not_first k by (simp add: nth_append case_prod_beta)
+      from vs k have "sound_term_result s env (apply_subst \<sigma> (fst (FI_TmArgs info ! (i - ?n))))
+                        (vals ! (i - ?n))" by blast
+      then show ?thesis using v t by simp
+    next
+      case False
+      have i_eq: "i = ?n + ?n" using i_lt False by linarith
+      have v: "(vals @ vals @ [Inr retVal]) ! i = Inr retVal"
+        using i_eq len by (simp add: nth_append)
+      have t: "fst (FI_TmArgs (post_funinfo info) ! i) = FI_ReturnType info"
+        using i_eq by (simp add: nth_append)
+      show ?thesis using v t rv by simp
+    qed
+  qed
+qed
+
+lemma sound_term_result_tyargs_cong:
+  "IS_TyArgs s' = IS_TyArgs s \<Longrightarrow> sound_term_result s' env ty r = sound_term_result s env ty r"
+  by (cases r) simp_all
+
+(* A sound lvalue stays sound in a later state with an extended store typing
+   (and the same type arguments). *)
+lemma sound_lvalue_result_extend:
+  assumes sound: "sound_lvalue_result s env st ty r"
+    and tyargs: "IS_TyArgs s' = IS_TyArgs s"
+    and ext: "storeTyping_extends st st'"
+    and len_st: "length st = length (IS_Store s)"
+    and len_st': "length st' = length (IS_Store s')"
+  shows "sound_lvalue_result s' env st' ty r"
+proof (cases r)
+  case (Inl err)
+  with sound show ?thesis by simp
+next
+  case (Inr ap)
+  obtain addr path where ap: "ap = (addr, path)" by (cases ap)
+  from sound Inr ap have a: "addr < length (IS_Store s)"
+    and t: "type_at_path env (st ! addr) path = Some (apply_subst (IS_TyArgs s) ty)"
+    by simp_all
+  from ext obtain suffix where st'_eq: "st' = st @ suffix"
+    unfolding storeTyping_extends_def by blast
+  have "addr < length (IS_Store s')" using a len_st len_st' st'_eq by simp
+  moreover have "st' ! addr = st ! addr" using a len_st st'_eq by (simp add: nth_append)
+  ultimately show ?thesis using Inr ap t tyargs by simp
+qed
+
+
+(*-----------------------------------------------------------------------------*)
 (* Type soundness for function calls *)
 (*-----------------------------------------------------------------------------*)
 
@@ -1697,6 +1920,12 @@ lemma type_soundness_function_call:
                 TE_ProofGoal env0 = None \<Longrightarrow>
                 core_statement_list_type env0 ghost0 stmts0 = Some env0' \<Longrightarrow>
                   sound_statement_result env0 env0' storeTyping0 (interp_statement_list d fuel state0 stmts0)"
+    and IH_conds: "\<And>env' (state' :: 'w InterpState) storeTyping' tms'.
+                state_matches_env state' env' storeTyping' \<Longrightarrow>
+                tyenv_well_formed env' \<Longrightarrow>
+                (\<forall>tm \<in> set tms'. core_term_type env' Ghost tm = Some CoreTy_Bool) \<Longrightarrow>
+                  sound_term_results state' env' (replicate (length tms') CoreTy_Bool)
+                    (interp_term_list d fuel state' tms')"
   shows "sound_function_call_result state env storeTyping retTy
            (interp_function_call d (Suc fuel) state fnName tyArgs argTms)"
 proof -
@@ -1797,31 +2026,18 @@ proof -
                                 IS_ConstLocals := {||},
                                 IS_TyArgs := tySubst \<rparr>"
 
-  \<comment> \<open>The interpreter reduces to a fold + body dispatch. \<close>
+  \<comment> \<open>The interpreter reduces to a fold, then the body inside the contract
+      checks. \<close>
   have interp_eq:
     "interp_function_call d (Suc fuel) state fnName tyArgs argTms
      = (case fold process_one_arg ?argTuples (Inr ?clearedState) of
           Inl err \<Rightarrow> Inl err
         | Inr preCallState \<Rightarrow>
-            (case IF_Body f of
-               Inl bodyStmts \<Rightarrow>
-                 (case interp_statement_list d fuel preCallState bodyStmts of
-                    Inr (Return postCallState retVal) \<Rightarrow>
-                      Inr (restore_scope state postCallState, retVal)
-                  | Inr (Continue _) \<Rightarrow> Inl RuntimeError
-                  | Inl err \<Rightarrow> Inl err)
-             | Inr externFun \<Rightarrow>
-                 (let vals = rights ?valResults;
-                      refs = rights (map (\<lambda>((_, vr), refResult).
-                                            if vr = Ref then refResult else Inl TypeError)
-                                        (zip (IF_Args f) ?refResults));
-                      (newWorld, refUpdates, retVal) = externFun (IS_World state) vals;
-                      state' = state \<lparr> IS_World := newWorld \<rparr>
-                  in case apply_ref_updates state' refs refUpdates of
-                       Inr finalState \<Rightarrow> Inr (finalState, retVal)
-                     | Inl err \<Rightarrow> Inl err)))"
+            checked_call (interp_term_list d fuel) f ?refResults ?valResults
+              tySubst ?clearedState
+              (call_body (interp_statement_list d fuel) state f?refResults ?valResults preCallState))"
     using f_lookup len_argTms len_tyArgs tySubst_def tyargs_eq
-    by (simp add: Let_def)
+    by (simp add: Let_def cong: sum.case_cong)
 
   \<comment> \<open>Build the per-argument soundness facts from the IH. The IH gives us
       sound_term_result / sound_lvalue_result at the type produced by
@@ -1969,7 +2185,10 @@ proof -
     have wf_bodyEnv: "tyenv_well_formed (body_env_for env (map fst (IF_Args f)) funInfo)"
       using body_env_for_well_formed[OF wf_env fn_lookup abs_empty len_names] .
 
-    show ?thesis
+    \<comment> \<open>First, the body (or extern function) is sound; then so is the call,
+        which wraps the contract checks around it. \<close>
+    have call_sound: "sound_function_call_result state env storeTyping retTy
+                        (call_body (interp_statement_list d fuel) state f?refResults ?valResults preCallState)"
     proof (cases "IF_Body f")
       case body_babylon: (Inl bodyStmts)
       \<comment> \<open>Babylon body. The fi_match assumption certifies that bodyStmts
@@ -1997,9 +2216,9 @@ proof -
         case body_Inl: (Inl err)
         \<comment> \<open>Body errored. Sound by body_sound. \<close>
         from body_sound body_Inl have err_sound: "sound_error_result err" by simp
-        from interp_eq fold_Inr body_babylon body_Inl
-        have "interp_function_call d (Suc fuel) state fnName tyArgs argTms = Inl err"
-          by simp
+        from body_babylon body_Inl
+        have "call_body (interp_statement_list d fuel) state f?refResults ?valResults preCallState = Inl err"
+          by (simp add: call_body_def)
         thus ?thesis using err_sound by simp
       next
         case body_Inr: (Inr execRes)
@@ -2007,9 +2226,9 @@ proof -
         proof (cases execRes)
           case (Continue contState)
           \<comment> \<open>Body reached end without Return — interpreter returns RuntimeError. \<close>
-          from interp_eq fold_Inr body_babylon body_Inr Continue
-          have "interp_function_call d (Suc fuel) state fnName tyArgs argTms = Inl RuntimeError"
-            by simp
+          from body_babylon body_Inr Continue
+          have "call_body (interp_statement_list d fuel) state f?refResults ?valResults preCallState = Inl RuntimeError"
+            by (simp add: call_body_def)
           thus ?thesis by simp
         next
           case (Return postCallState retVal)
@@ -2028,11 +2247,12 @@ proof -
             and ext_post: "storeTyping_extends bodyStoreTyping postStoreTyping"
             by auto
 
-          \<comment> \<open>Concrete form of the interpreter result. \<close>            from interp_eq fold_Inr body_babylon body_Inr Return
+          \<comment> \<open>Concrete form of the body result. \<close>
+          from body_babylon body_Inr Return
           have interp_result:
-            "interp_function_call d (Suc fuel) state fnName tyArgs argTms
+            "call_body (interp_statement_list d fuel) state f?refResults ?valResults preCallState
                = Inr (restore_scope state postCallState, retVal)"
-            by simp
+            by (simp add: call_body_def)
 
           \<comment> \<open>preCallState's IS_Globals / IS_Functions = state's (cleared state preserves
               them; the fold preserves them too). \<close>
@@ -2684,13 +2904,13 @@ proof -
         by simp
 
       \<comment> \<open>Compute the concrete interp result and discharge sound_function_call_result. \<close>
-      from interp_eq fold_Inr body_extern ext_call
+      from body_extern ext_call
       have interp_result:
-        "interp_function_call d (Suc fuel) state fnName tyArgs argTms
+        "call_body (interp_statement_list d fuel) state f?refResults ?valResults preCallState
            = (case apply_ref_updates ?stateW ?refs refUpdates of
                 Inr finalState \<Rightarrow> Inr (finalState, retVal)
               | Inl err \<Rightarrow> Inl err)"
-        by simp
+        by (simp add: call_body_def)
 
       show ?thesis
       proof (cases "apply_ref_updates ?stateW ?refs refUpdates")
@@ -2698,7 +2918,7 @@ proof -
         \<comment> \<open>apply_ref_updates errored — sound. \<close>
         from apply_refs_sound Inl have "sound_error_result err" by simp
         moreover from interp_result Inl have
-          "interp_function_call d (Suc fuel) state fnName tyArgs argTms = Inl err" by simp
+          "call_body (interp_statement_list d fuel) state f?refResults ?valResults preCallState = Inl err" by simp
         ultimately show ?thesis by simp
       next
         case (Inr finalState)
@@ -2738,6 +2958,280 @@ proof -
         show ?thesis by simp
       qed
     qed
+
+    \<comment> \<open>The contract. Its terms are typed in the body envs of the contract
+        signatures (fi_match), and evaluated in states that are built in the
+        same way as preCallState, so they match those envs. \<close>
+    let ?n = "length (FI_TmArgs funInfo)"
+    from fi_match have req_eq: "IF_Requires f = FI_Requires funInfo"
+      and ens_eq: "IF_Ensures f = FI_Ensures funInfo"
+      and ctr: "contracts_typed_in (body_env_for env) funInfo"
+      and vor_match: "list_all2 (\<lambda>(_, vor1, _) (_, vor2). vor1 = vor2)
+                        (FI_TmArgs funInfo) (IF_Args f)"
+      unfolding fun_info_matches_interp_fun_def by simp_all
+    have len_n: "length (IF_Args f) = ?n" using len_fi by simp
+    have len_vals: "length ?valResults = ?n" using len_argTms_fi by simp
+    have len_refs: "length ?refResults = ?n" using len_argTms_fi by simp
+    have params_tyvars:
+      "\<forall>ty \<in> fst ` set (FI_TmArgs funInfo). type_tyvars ty \<subseteq> set (FI_TyArgs funInfo)"
+      by (rule fun_info_types_tyvars_subset(1)[OF wf_env abs_empty fn_lookup])
+    have len_ra: "length (ref_arg_results (IF_Args f) ?refResults) = ?n"
+      using len_n len_refs by (simp add: ref_arg_results_def)
+
+    \<comment> \<open>The argument results, at the parameter types under tySubst. \<close>
+    note args_subst = arg_results_sound_subst
+                        [OF state_env wf_env fn_lookup ty_len ty_wk vals_sound lvals_sound,
+                         folded tySubst_def]
+    note vals_subst = args_subst(1) and lvals_subst = args_subst(2)
+
+    \<comment> \<open>The lvalue results kept by ref_arg_results are those of the Ref
+        parameters. \<close>
+    have ref_arg_nth: "ref_arg_results (IF_Args f) ?refResults ! i = ?refResults ! i"
+      if i_n: "i < ?n" and r: "fst (snd (FI_TmArgs funInfo ! i)) = Ref" for i
+    proof -
+      have vm_i: "fst (snd (FI_TmArgs funInfo ! i)) = snd (IF_Args f ! i)"
+        using list_all2_nthD[OF vor_match, of i] i_n by (simp add: case_prod_beta)
+      have ref_vr: "snd (IF_Args f ! i) = Ref" using vm_i r by simp
+      show ?thesis
+        using i_n ref_vr len_n len_refs by (simp add: ref_arg_results_def case_prod_beta)
+    qed
+
+    \<comment> \<open>The preconditions. \<close>
+    let ?preIf = "zip (contract_arg_names ?n) (map snd (IF_Args f))"
+    let ?preRefs = "ref_arg_results (IF_Args f) ?refResults"
+    have pre_args_eq: "contract_pre_args (IF_Args f) ?refResults ?valResults
+                         = zip ?preIf (zip ?preRefs ?valResults)"
+      by (simp add: contract_pre_args_def len_n)
+    have pre_vor: "list_all2 (\<lambda>(_, vor1, _) (_, vor2). vor1 = vor2) (FI_TmArgs funInfo) ?preIf"
+      by (rule vor_match_rename[OF vor_match]) (simp add: len_n)
+    have map_fst_pre: "map fst ?preIf = contract_arg_names ?n" by (simp add: len_n)
+    have pre_dist: "distinct (map fst ?preIf)"
+      unfolding map_fst_pre by (rule distinct_contract_arg_names)
+    have pre_len_vals: "length ?preIf = length ?valResults" using len_fi len_vals by auto
+    have pre_len_refs: "length ?preIf = length ?preRefs" by (simp add: len_n len_ra)
+    have pre_lvals:
+      "\<forall>i < ?n. fst (snd (FI_TmArgs funInfo ! i)) = Ref \<longrightarrow>
+         sound_lvalue_result state env storeTyping
+           (apply_subst tySubst (fst (FI_TmArgs funInfo ! i))) (?preRefs ! i)"
+    proof (intro allI impI)
+      fix i assume i_n: "i < ?n" and r: "fst (snd (FI_TmArgs funInfo ! i)) = Ref"
+      from lvals_subst i_n r
+      have "sound_lvalue_result state env storeTyping
+              (apply_subst tySubst (fst (FI_TmArgs funInfo ! i))) (?refResults ! i)"
+        by blast
+      then show "sound_lvalue_result state env storeTyping
+                   (apply_subst tySubst (fst (FI_TmArgs funInfo ! i))) (?preRefs ! i)"
+        unfolding ref_arg_nth[OF i_n r] .
+    qed
+    have pre_fold_sound:
+      "sound_arg_processing_result env (map fst ?preIf) funInfo tySubst storeTyping
+         (fold process_one_arg (zip ?preIf (zip ?preRefs ?valResults)) (Inr ?clearedState))"
+      by (rule fold_process_one_arg_sound_subst
+                 [OF state_env params_tyvars ty_len ty_wk tySubst_def pre_vor pre_dist
+                     pre_len_vals pre_len_refs vals_subst pre_lvals])
+    have wf_pre: "tyenv_well_formed (body_env_for env (contract_arg_names ?n) funInfo)"
+      by (rule body_env_for_well_formed[OF wf_env fn_lookup abs_empty]) simp
+    have typed_pre: "\<forall>tm \<in> set (IF_Requires f).
+                       core_term_type (body_env_for env (contract_arg_names ?n) funInfo) Ghost tm
+                         = Some CoreTy_Bool"
+      using ctr req_eq unfolding contracts_typed_in_def by simp
+    have pre_ok: "check_conditions (interp_term_list d fuel) (IF_Requires f)
+                    (contract_pre_args (IF_Args f) ?refResults ?valResults) ?clearedState
+                  \<noteq> Some TypeError"
+      unfolding pre_args_eq
+    proof (rule check_conditions_sound[where names = "contract_arg_names ?n" and info = funInfo
+                                         and tySubst = tySubst and storeTyping = storeTyping])
+      show "sound_arg_processing_result env (contract_arg_names ?n) funInfo tySubst storeTyping
+              (fold process_one_arg (zip ?preIf (zip ?preRefs ?valResults)) (Inr ?clearedState))"
+        using pre_fold_sound unfolding map_fst_pre .
+    next
+      fix s :: "'w InterpState" and st'
+      assume sme: "state_matches_env s (body_env_for env (contract_arg_names ?n) funInfo) st'"
+      show "sound_term_results s (body_env_for env (contract_arg_names ?n) funInfo)
+              (replicate (length (IF_Requires f)) CoreTy_Bool)
+              (interp_term_list d fuel s (IF_Requires f))"
+        by (rule IH_conds[OF sme wf_pre typed_pre])
+    qed
+
+    \<comment> \<open>The postconditions, after a successful body. \<close>
+    have post_ok:
+      "\<And>newState retVal.
+         call_body (interp_statement_list d fuel) state f?refResults ?valResults preCallState = Inr (newState, retVal) \<Longrightarrow>
+         check_conditions (interp_term_list d fuel) (IF_Ensures f)
+           (contract_post_args (IF_Args f) ?refResults ?valResults retVal)
+           (newState \<lparr> IS_Locals := fmempty, IS_Refs := fmempty,
+                       IS_ConstLocals := {||}, IS_TyArgs := tySubst \<rparr>)
+         \<noteq> Some TypeError"
+    proof -
+      fix newState retVal
+      assume res: "call_body (interp_statement_list d fuel) state f?refResults ?valResults preCallState
+                     = Inr (newState, retVal)"
+      from call_sound res obtain storeTyping' where
+        sme_new: "state_matches_env newState env storeTyping'"
+        and ext_new: "storeTyping_extends storeTyping storeTyping'"
+        and tyargs_new: "IS_TyArgs newState = IS_TyArgs state"
+        and ret_typed: "value_has_type env retVal (apply_subst (IS_TyArgs state) retTy)"
+        by auto
+
+      \<comment> \<open>The return value, at the return type under tySubst (which is ground). \<close>
+      have ret_compose:
+        "apply_subst tySubst (FI_ReturnType funInfo)
+          = apply_subst (IS_TyArgs state)
+              (apply_subst (fmap_of_list (zip (FI_TyArgs funInfo) tyArgs)) (FI_ReturnType funInfo))"
+        unfolding tySubst_def
+        using apply_subst_compose_zip[OF ty_len[symmetric] ret_tyvars_sub ty_dist] .
+      have ret_ground: "type_tyvars (apply_subst tySubst (FI_ReturnType funInfo)) = {}"
+      proof -
+        have "type_tyvars (apply_subst tySubst (FI_ReturnType funInfo))
+                \<subseteq> (type_tyvars (FI_ReturnType funInfo) - fset (fmdom tySubst))
+                  \<union> subst_range_tyvars tySubst"
+          by (rule apply_subst_tyvars_result)
+        also have "\<dots> = {}"
+          using ret_tyvars_sub fmdom_tySubst tySubst_range
+          by (auto simp: subst_range_tyvars_def fset_of_list.rep_eq)
+        finally show ?thesis by simp
+      qed
+      have ret_id: "apply_subst (IS_TyArgs newState) (apply_subst tySubst (FI_ReturnType funInfo))
+                      = apply_subst tySubst (FI_ReturnType funInfo)"
+        by (rule apply_subst_disjoint_id) (simp add: ret_ground)
+      have ret_vt: "value_has_type env retVal (apply_subst tySubst (FI_ReturnType funInfo))"
+        using ret_typed retTy_eq ret_compose by simp
+      have ret_sound: "sound_term_result newState env (apply_subst tySubst (FI_ReturnType funInfo))
+                         (Inr retVal)"
+        using ret_vt ret_id by simp
+
+      \<comment> \<open>The values bound in the postcondition state. \<close>
+      have vals_new: "\<forall>i < ?n. sound_term_result newState env
+                         (apply_subst tySubst (fst (FI_TmArgs funInfo ! i))) (?valResults ! i)"
+        using vals_subst sound_term_result_tyargs_cong[OF tyargs_new] by simp
+      let ?postIf = "zip (contract_post_names ?n) (map snd (IF_Args f) @ replicate (Suc ?n) Var)"
+      let ?postRefs = "ref_arg_results (IF_Args f) ?refResults @ replicate (Suc ?n) (Inl TypeError)"
+      let ?postVals = "?valResults @ ?valResults @ [Inr retVal]"
+      have post_vals:
+        "\<forall>i < length (FI_TmArgs (post_funinfo funInfo)).
+           sound_term_result newState env
+             (apply_subst tySubst (fst (FI_TmArgs (post_funinfo funInfo) ! i))) (?postVals ! i)"
+        by (rule post_vals_sound[OF vals_new len_vals ret_sound])
+
+      \<comment> \<open>The lvalues bound in the postcondition state: only arg@@i of a Ref
+          parameter is bound by reference, to the same lvalue as in the caller. \<close>
+      have len_st: "length storeTyping = length (IS_Store state)"
+        using state_env unfolding state_matches_env_def store_well_typed_def by simp
+      have len_st': "length storeTyping' = length (IS_Store newState)"
+        using sme_new unfolding state_matches_env_def store_well_typed_def by simp
+      have post_lvals:
+        "\<forall>i < length (FI_TmArgs (post_funinfo funInfo)).
+           fst (snd (FI_TmArgs (post_funinfo funInfo) ! i)) = Ref \<longrightarrow>
+             sound_lvalue_result newState env storeTyping'
+               (apply_subst tySubst (fst (FI_TmArgs (post_funinfo funInfo) ! i))) (?postRefs ! i)"
+      proof (intro allI impI)
+        fix i
+        assume i: "i < length (FI_TmArgs (post_funinfo funInfo))"
+          and r: "fst (snd (FI_TmArgs (post_funinfo funInfo) ! i)) = Ref"
+        have i_n: "i < ?n"
+        proof (rule ccontr)
+          assume not_n: "\<not> i < ?n"
+          have i_lt: "i < ?n + ?n + 1" using i by simp
+          have "fst (snd (FI_TmArgs (post_funinfo funInfo) ! i)) = Var"
+          proof (cases "i < ?n + ?n")
+            case True
+            have k: "i - ?n < ?n" using not_n True by linarith
+            then show ?thesis using not_n by (simp add: nth_append case_prod_beta)
+          next
+            case False
+            have "i = ?n + ?n" using i_lt False by linarith
+            then show ?thesis by (simp add: nth_append)
+          qed
+          with r show False by simp
+        qed
+        have tm: "FI_TmArgs (post_funinfo funInfo) ! i = FI_TmArgs funInfo ! i"
+          using i_n by (simp add: nth_append)
+        have r': "fst (snd (FI_TmArgs funInfo ! i)) = Ref" using r unfolding tm .
+        have refs_i: "?postRefs ! i = ?refResults ! i"
+          using i_n len_ra ref_arg_nth[OF i_n r'] by (simp add: nth_append)
+        from lvals_subst i_n r'
+        have "sound_lvalue_result state env storeTyping
+                (apply_subst tySubst (fst (FI_TmArgs funInfo ! i))) (?refResults ! i)"
+          by blast
+        then have "sound_lvalue_result newState env storeTyping'
+                     (apply_subst tySubst (fst (FI_TmArgs funInfo ! i))) (?refResults ! i)"
+          by (rule sound_lvalue_result_extend[OF _ tyargs_new ext_new len_st len_st'])
+        then show "sound_lvalue_result newState env storeTyping'
+                     (apply_subst tySubst (fst (FI_TmArgs (post_funinfo funInfo) ! i))) (?postRefs ! i)"
+          unfolding tm refs_i .
+      qed
+
+      \<comment> \<open>So binding the postcondition's parameters is sound. \<close>
+      have post_params_tyvars:
+        "\<forall>ty \<in> fst ` set (FI_TmArgs (post_funinfo funInfo)).
+           type_tyvars ty \<subseteq> set (FI_TyArgs (post_funinfo funInfo))"
+        using params_tyvars ret_tyvars_sub by (auto simp: case_prod_beta; fastforce)
+      have post_ty_len: "length tyArgs = length (FI_TyArgs (post_funinfo funInfo))"
+        using ty_len by simp
+      have post_tySubst: "tySubst = fmap_of_list (zip (FI_TyArgs (post_funinfo funInfo))
+                                     (map (apply_subst (IS_TyArgs newState)) tyArgs))"
+        using tySubst_def tyargs_new by simp
+      have post_vor: "list_all2 (\<lambda>(_, vor1, _) (_, vor2). vor1 = vor2)
+                        (FI_TmArgs (post_funinfo funInfo)) ?postIf"
+        using vor_match_post[OF vor_match] unfolding len_n .
+      have map_fst_post: "map fst ?postIf = contract_post_names ?n" by (simp add: len_n)
+      have post_dist: "distinct (map fst ?postIf)"
+        unfolding map_fst_post by (rule distinct_contract_post_names)
+      have post_len_vals: "length ?postIf = length ?postVals"
+        using len_n len_argTms_fi by simp
+      have post_len_refs: "length ?postIf = length ?postRefs" by (simp add: len_n len_ra)
+      have post_fold_sound:
+        "sound_arg_processing_result env (map fst ?postIf) (post_funinfo funInfo) tySubst storeTyping'
+           (fold process_one_arg (zip ?postIf (zip ?postRefs ?postVals))
+              (Inr (newState \<lparr> IS_Locals := fmempty, IS_Refs := fmempty,
+                               IS_ConstLocals := {||}, IS_TyArgs := tySubst \<rparr>)))"
+        by (rule fold_process_one_arg_sound_subst
+                   [OF sme_new post_params_tyvars post_ty_len ty_wk post_tySubst post_vor post_dist
+                       post_len_vals post_len_refs post_vals post_lvals])
+
+      have post_args_eq: "contract_post_args (IF_Args f) ?refResults ?valResults retVal
+                            = zip ?postIf (zip ?postRefs ?postVals)"
+        by (simp add: contract_post_args_def len_n)
+      have wf_post: "tyenv_well_formed (body_env_for env (contract_post_names ?n) (post_funinfo funInfo))"
+        by (rule body_env_for_well_formed_post[OF wf_env fn_lookup abs_empty]) simp
+      have typed_post: "\<forall>tm \<in> set (IF_Ensures f).
+                          core_term_type (body_env_for env (contract_post_names ?n) (post_funinfo funInfo))
+                            Ghost tm = Some CoreTy_Bool"
+        using ctr ens_eq unfolding contracts_typed_in_def by simp
+      show "check_conditions (interp_term_list d fuel) (IF_Ensures f)
+              (contract_post_args (IF_Args f) ?refResults ?valResults retVal)
+              (newState \<lparr> IS_Locals := fmempty, IS_Refs := fmempty,
+                          IS_ConstLocals := {||}, IS_TyArgs := tySubst \<rparr>)
+            \<noteq> Some TypeError"
+        unfolding post_args_eq
+      proof (rule check_conditions_sound[where names = "contract_post_names ?n"
+                                           and info = "post_funinfo funInfo"
+                                           and tySubst = tySubst and storeTyping = storeTyping'])
+        show "sound_arg_processing_result env (contract_post_names ?n) (post_funinfo funInfo)
+                tySubst storeTyping'
+                (fold process_one_arg (zip ?postIf (zip ?postRefs ?postVals))
+                   (Inr (newState \<lparr> IS_Locals := fmempty, IS_Refs := fmempty,
+                                    IS_ConstLocals := {||}, IS_TyArgs := tySubst \<rparr>)))"
+          using post_fold_sound unfolding map_fst_post .
+      next
+        fix s :: "'w InterpState" and st'
+        assume sme: "state_matches_env s
+                       (body_env_for env (contract_post_names ?n) (post_funinfo funInfo)) st'"
+        show "sound_term_results s (body_env_for env (contract_post_names ?n) (post_funinfo funInfo))
+                (replicate (length (IF_Ensures f)) CoreTy_Bool)
+                (interp_term_list d fuel s (IF_Ensures f))"
+          by (rule IH_conds[OF sme wf_post typed_post])
+      qed
+    qed
+
+    \<comment> \<open>Assemble. \<close>
+    have call_eq:
+      "interp_function_call d (Suc fuel) state fnName tyArgs argTms
+         = checked_call (interp_term_list d fuel) f ?refResults ?valResults tySubst ?clearedState
+             (call_body (interp_statement_list d fuel) state f?refResults ?valResults preCallState)"
+      unfolding interp_eq using fold_Inr by simp
+    show ?thesis
+      unfolding call_eq by (rule checked_call_sound[OF call_sound pre_ok post_ok])
   qed
 qed
 

@@ -402,6 +402,96 @@ qed
 
 
 (* ========================================================================== *)
+(* Helper lemmas about contract checks *)
+(* ========================================================================== *)
+
+(* The contract argument tuples depend on the lvalue results only through
+   ref_arg_results. *)
+lemma contract_args_agree:
+  assumes "ref_arg_results args rr' = ref_arg_results args rr"
+    and "vr' = vr"
+  shows "contract_pre_args args rr' vr' = contract_pre_args args rr vr"
+    and "contract_post_args args rr' vr' v = contract_post_args args rr vr v"
+  using assms by (simp_all add: contract_pre_args_def contract_post_args_def)
+
+(* check_conditions gives the same answer with a second evaluator, if that
+   agrees with the first wherever the first is not out of fuel. *)
+lemma check_conditions_agree:
+  assumes ne: "check_conditions ev tms args st \<noteq> Some InsufficientFuel"
+    and agree: "\<And>s. ev s tms \<noteq> Inl InsufficientFuel \<Longrightarrow> ev' s tms = ev s tms"
+  shows "check_conditions ev' tms args st = check_conditions ev tms args st"
+proof (cases "tms = []")
+  case True
+  then show ?thesis by simp
+next
+  case nonempty: False
+  show ?thesis
+  proof (cases "fold process_one_arg args (Inr st)")
+    case (Inl err)
+    with nonempty show ?thesis by (simp add: check_conditions_def)
+  next
+    case (Inr st')
+    have "ev st' tms \<noteq> Inl InsufficientFuel"
+      using ne nonempty Inr by (auto simp: check_conditions_def)
+    with agree have "ev' st' tms = ev st' tms" .
+    with nonempty Inr show ?thesis by (simp add: check_conditions_def)
+  qed
+qed
+
+(* checked_call gives the same answer on a second set of arguments, if these
+   agree with the first wherever the first are not out of fuel. *)
+lemma checked_call_agree:
+  assumes ne: "checked_call ev f rr vr ta st b \<noteq> Inl InsufficientFuel"
+    and pre_args: "contract_pre_args (IF_Args f) rr' vr' = contract_pre_args (IF_Args f) rr vr"
+    and post_args: "\<And>v. contract_post_args (IF_Args f) rr' vr' v
+                         = contract_post_args (IF_Args f) rr vr v"
+    and agree_pre: "\<And>s. ev s (IF_Requires f) \<noteq> Inl InsufficientFuel
+                          \<Longrightarrow> ev' s (IF_Requires f) = ev s (IF_Requires f)"
+    and agree_post: "\<And>s. ev s (IF_Ensures f) \<noteq> Inl InsufficientFuel
+                           \<Longrightarrow> ev' s (IF_Ensures f) = ev s (IF_Ensures f)"
+    and agree_body: "b \<noteq> Inl InsufficientFuel \<Longrightarrow> b' = b"
+  shows "checked_call ev' f rr' vr' ta st b' = checked_call ev f rr vr ta st b"
+proof -
+  let ?pre = "check_conditions ev (IF_Requires f) (contract_pre_args (IF_Args f) rr vr) st"
+  have pre_ne: "?pre \<noteq> Some InsufficientFuel"
+    using ne by (auto simp: checked_call_def)
+  have pre_eq: "check_conditions ev' (IF_Requires f) (contract_pre_args (IF_Args f) rr vr) st
+                  = ?pre"
+    by (rule check_conditions_agree[where ev' = ev', OF pre_ne agree_pre])
+  show ?thesis
+  proof (cases ?pre)
+    case (Some err)
+    then show ?thesis using pre_args pre_eq by (simp add: checked_call_def)
+  next
+    case pre_ok: None
+    have b_ne: "b \<noteq> Inl InsufficientFuel"
+      using ne pre_ok by (auto simp: checked_call_def)
+    have b_eq: "b' = b" by (rule agree_body[OF b_ne])
+    show ?thesis
+    proof (cases b)
+      case (Inl err)
+      then show ?thesis using pre_ok pre_args pre_eq b_eq by (simp add: checked_call_def)
+    next
+      case (Inr p)
+      obtain s v where p: "p = (s, v)" by (cases p)
+      let ?st' = "s \<lparr> IS_Locals := fmempty, IS_Refs := fmempty, IS_ConstLocals := {||},
+                      IS_TyArgs := ta \<rparr>"
+      let ?post = "check_conditions ev (IF_Ensures f)
+                     (contract_post_args (IF_Args f) rr vr v) ?st'"
+      have post_ne: "?post \<noteq> Some InsufficientFuel"
+        using ne pre_ok Inr p by (auto simp: checked_call_def)
+      have post_eq: "check_conditions ev' (IF_Ensures f)
+                       (contract_post_args (IF_Args f) rr vr v) ?st' = ?post"
+        by (rule check_conditions_agree[where ev' = ev', OF post_ne agree_post])
+      show ?thesis
+        using pre_ok pre_args pre_eq b_eq Inr p post_args post_eq
+        by (simp add: checked_call_def)
+    qed
+  qed
+qed
+
+
+(* ========================================================================== *)
 (* Fuel monotonicity for default_value *)
 (* ========================================================================== *)
 
@@ -1459,7 +1549,7 @@ next
     next
       case Invs: (Inr invarVals)
       show ?thesis
-      proof (cases "invariants_error invarVals")
+      proof (cases "conditions_error invarVals")
         case (Some err)
         thus ?thesis using Invs invs_eq f'_eq by simp
       next
@@ -1941,52 +2031,103 @@ next
             thus ?thesis using Some False tyLen f'_eq fold_eq by (simp add: Let_def)
           next
             case PreCall: (Inr preCallState)
-            (* Now case-analyze on whether the function is internal or external *)
-            show ?thesis
-            proof (cases "IF_Body fn")
-              case (Inl bodyStmts)
-              (* Internal function: execute body statements *)
-              hence body_noFuel: "interp_statement_list d fuel preCallState bodyStmts \<noteq> Inl InsufficientFuel"
-                using noFuel Some False tyLen PreCall by (auto split: sum.splits ExecResult.splits simp: Let_def)
-              hence IH_body: "\<forall>f'\<ge>fuel. interp_statement_list d f' preCallState bodyStmts =
-                                        interp_statement_list d fuel preCallState bodyStmts"
-                using "51.IH"(3) Some False tyLen PreCall Inl by blast
-              have "interp_statement_list d f'' preCallState bodyStmts =
-                    interp_statement_list d fuel preCallState bodyStmts"
-                using IH_body f''_ge by metis
-              thus ?thesis using Some False tyLen PreCall f'_eq fold_eq Inl by (simp add: Let_def)
-            next
-              case (Inr externFun)
-              (* External function: the result depends on valResults and refResults directly,
-                 not on the fold result (preCallState). We need to show these maps are equal. *)
-              let ?filter_refs = "\<lambda>refResults. map (\<lambda>((_, vr), refResult).
-                                      if vr = Ref then refResult else Inl TypeError)
-                                    (zip ?fnArgs refResults)"
-              have valResults_eq: "map (interp_term d f'' state) argTms = ?valResults"
-                by (rule fold_process_one_arg_ok_results_agree(1)[OF tm_agree lv_agree len_eq PreCall])
-              have filtered_refs_eq: "?filter_refs (map (interp_writable_lvalue d f'' state) argTms) =
-                                      ?filter_refs ?refResults"
-                by (rule fold_process_one_arg_ok_results_agree(2)[OF tm_agree lv_agree len_eq PreCall])
+            let ?refs'' = "map (interp_writable_lvalue d f'' state) argTms"
+            let ?vals'' = "map (interp_term d f'' state) argTms"
+            have len_args: "length argTms = length (IF_Args fn)" using False by simp
+            have len_tys: "length argTys = length (IF_TyArgs fn)" using tyLen by simp
 
-              (* Now show the full expressions are equal *)
-              have rights_vals_eq: "rights (map (interp_term d f'' state) argTms) = rights ?valResults"
-                using valResults_eq by metis
+            (* The fold succeeded, so the argument values, and the lvalues of the Ref
+               arguments, are the same with more fuel. *)
+            let ?filter_refs = "\<lambda>refResults. map (\<lambda>((_, vr), refResult).
+                                    if vr = Ref then refResult else Inl TypeError)
+                                  (zip ?fnArgs refResults)"
+            have valResults_eq: "?vals'' = ?valResults"
+              by (rule fold_process_one_arg_ok_results_agree(1)[OF tm_agree lv_agree len_eq PreCall])
+            have filtered_refs_eq: "?filter_refs ?refs'' = ?filter_refs ?refResults"
+              by (rule fold_process_one_arg_ok_results_agree(2)[OF tm_agree lv_agree len_eq PreCall])
+            have refs_eq: "ref_arg_results ?fnArgs ?refs'' = ref_arg_results ?fnArgs ?refResults"
+              unfolding ref_arg_results_def by (rule filtered_refs_eq)
+            note args_eq = contract_args_agree[OF refs_eq valResults_eq]
 
-              have rights_refs_eq: "rights (?filter_refs (map (interp_writable_lvalue d f'' state) argTms)) =
-                                    rights (?filter_refs ?refResults)"
-                using filtered_refs_eq by simp
+            have fold'': "fold process_one_arg (zip ?fnArgs (zip ?refs'' ?vals'')) (Inr ?clearedState)
+                            = Inr preCallState"
+              using fold_eq PreCall by simp
 
-              (* Rewrite fold_eq using valResults_eq to get the fold result in terms of f'' *)
-              have fold_eq': "fold process_one_arg (zip ?fnArgs (zip (map (interp_writable_lvalue d f'' state) argTms)
-                                                                (map (interp_term d f'' state) argTms))) (Inr ?clearedState) =
-                             Inr preCallState"
-                using fold_eq PreCall valResults_eq by argo
+            (* Both sides, in terms of checked_call and call_body. *)
+            have lhs: "interp_function_call d f' state fnName argTys argTms
+                         = checked_call (interp_term_list d f'') fn ?refs'' ?vals''
+                             ?calleeTyArgs ?clearedState
+                             (call_body (interp_statement_list d f'') state fn?refs'' ?vals'' preCallState)"
+              using f'_eq using Some len_args len_tys fold'' by (simp add: Let_def)
+            have rhs: "interp_function_call d (Suc fuel) state fnName argTys argTms
+                         = checked_call (interp_term_list d fuel) fn ?refResults ?valResults
+                             ?calleeTyArgs ?clearedState
+                             (call_body (interp_statement_list d fuel) state fn?refResults ?valResults preCallState)"
+              using Some len_args len_tys PreCall by (simp add: Let_def)
+            have noFuel': "checked_call (interp_term_list d fuel) fn ?refResults ?valResults
+                             ?calleeTyArgs ?clearedState
+                             (call_body (interp_statement_list d fuel) state fn?refResults ?valResults preCallState)
+                           \<noteq> Inl InsufficientFuel"
+              using noFuel rhs by argo
 
-              (* Both LHS and RHS compute the same result for external functions *)
-              show ?thesis using Some False tyLen Inr f'_eq fold_eq' PreCall
-                                 rights_vals_eq rights_refs_eq filtered_refs_eq
-                by (simp add: Let_def)
+            (* The contract: by the IH for interp_term_list. *)
+            have IH_pre0: "\<And>s :: 'w InterpState. interp_term_list d fuel s (IF_Requires fn) \<noteq> Inl InsufficientFuel
+                             \<Longrightarrow> \<forall>f'\<ge>fuel. interp_term_list d f' s (IF_Requires fn)
+                                             = interp_term_list d fuel s (IF_Requires fn)"
+              by (rule "51.IH"(4)[OF Some False tyLen refl refl refl refl refl PreCall])
+            have IH_pre: "\<And>s :: 'w InterpState. interp_term_list d fuel s (IF_Requires fn) \<noteq> Inl InsufficientFuel
+                            \<Longrightarrow> interp_term_list d f'' s (IF_Requires fn)
+                                  = interp_term_list d fuel s (IF_Requires fn)"
+              using IH_pre0 f''_ge by blast
+            have IH_post0: "\<And>s :: 'w InterpState. interp_term_list d fuel s (IF_Ensures fn) \<noteq> Inl InsufficientFuel
+                              \<Longrightarrow> \<forall>f'\<ge>fuel. interp_term_list d f' s (IF_Ensures fn)
+                                              = interp_term_list d fuel s (IF_Ensures fn)"
+              by (rule "51.IH"(5)[OF Some False tyLen refl refl refl refl refl PreCall])
+            have IH_post: "\<And>s :: 'w InterpState. interp_term_list d fuel s (IF_Ensures fn) \<noteq> Inl InsufficientFuel
+                             \<Longrightarrow> interp_term_list d f'' s (IF_Ensures fn)
+                                   = interp_term_list d fuel s (IF_Ensures fn)"
+              using IH_post0 f''_ge by blast
+
+            (* The body: by the IH for interp_statement_list (internal function), or
+               because the extern function sees the same arguments. *)
+            have agree_body:
+              "call_body (interp_statement_list d fuel) state fn?refResults ?valResults preCallState \<noteq> Inl InsufficientFuel
+               \<Longrightarrow> call_body (interp_statement_list d f'') state fn?refs'' ?vals'' preCallState
+                     = call_body (interp_statement_list d fuel) state fn?refResults ?valResults preCallState"
+            proof -
+              assume body_ne: "call_body (interp_statement_list d fuel) state fn?refResults ?valResults preCallState
+                                 \<noteq> Inl InsufficientFuel"
+              show "call_body (interp_statement_list d f'') state fn?refs'' ?vals'' preCallState
+                      = call_body (interp_statement_list d fuel) state fn?refResults ?valResults preCallState"
+              proof (cases "IF_Body fn")
+                case (Inl bodyStmts)
+                (* Internal function: execute body statements *)
+                have body_noFuel: "interp_statement_list d fuel preCallState bodyStmts \<noteq> Inl InsufficientFuel"
+                  using body_ne Inl by (auto split: sum.splits ExecResult.splits simp: call_body_def)
+                hence IH_body: "\<forall>f'\<ge>fuel. interp_statement_list d f' preCallState bodyStmts =
+                                          interp_statement_list d fuel preCallState bodyStmts"
+                  using "51.IH"(3) Some False tyLen PreCall Inl by blast
+                have "interp_statement_list d f'' preCallState bodyStmts =
+                      interp_statement_list d fuel preCallState bodyStmts"
+                  using IH_body f''_ge by metis
+                thus ?thesis using Inl by (simp add: call_body_def)
+              next
+                case (Inr externFun)
+                (* External function: the result depends on valResults and refResults
+                   directly, not on the fold result (preCallState). *)
+                show ?thesis
+                  using Inr unfolding call_body_def valResults_eq filtered_refs_eq by simp
+              qed
             qed
+
+            have "checked_call (interp_term_list d f'') fn ?refs'' ?vals'' ?calleeTyArgs ?clearedState
+                    (call_body (interp_statement_list d f'') state fn?refs'' ?vals'' preCallState)
+                  = checked_call (interp_term_list d fuel) fn ?refResults ?valResults
+                      ?calleeTyArgs ?clearedState
+                      (call_body (interp_statement_list d fuel) state fn?refResults ?valResults preCallState)"
+              by (rule checked_call_agree[where ev' = "interp_term_list d f''",
+                                          OF noFuel' args_eq(1) args_eq(2) IH_pre IH_post agree_body])
+            then show ?thesis unfolding lhs rhs .
           qed
         qed
       qed
@@ -2718,7 +2859,7 @@ next
     next
       case Invs: (Inr invarVals)
       show ?thesis
-      proof (cases "invariants_error invarVals")
+      proof (cases "conditions_error invarVals")
         case (Some err)
         thus ?thesis using Invs invs_eq by simp
       next
@@ -3105,48 +3246,103 @@ next
             thus ?thesis using Some False tyLen fold_eq by (simp add: Let_def)
           next
             case PreCall: (Inr preCallState)
-            show ?thesis
-            proof (cases "IF_Body fn")
-              case (Inl bodyStmts)
-              (* Internal function: execute body statements *)
-              hence body_noFuel: "interp_statement_list d fuel preCallState bodyStmts \<noteq> Inl InsufficientFuel"
-                using noFuel Some False tyLen PreCall by (auto split: sum.splits ExecResult.splits simp: Let_def)
-              hence IH_body: "\<forall>d'\<ge>d. interp_statement_list d' fuel preCallState bodyStmts =
-                                      interp_statement_list d fuel preCallState bodyStmts"
-                using "51.IH"(3) Some False tyLen PreCall Inl by blast
-              have "interp_statement_list d' fuel preCallState bodyStmts =
-                    interp_statement_list d fuel preCallState bodyStmts"
-                using IH_body d'_ge by metis
-              thus ?thesis using Some False tyLen PreCall fold_eq Inl by (simp add: Let_def)
-            next
-              case (Inr externFun)
-              (* External function: the result depends on valResults and refResults
-                 directly, so we need these to be the same at both depths. *)
-              let ?filter_refs = "\<lambda>refResults. map (\<lambda>((_, vr), refResult).
-                                      if vr = Ref then refResult else Inl TypeError)
-                                    (zip ?fnArgs refResults)"
-              have valResults_eq: "map (interp_term d' fuel state) argTms = ?valResults"
-                by (rule fold_process_one_arg_ok_results_agree(1)[OF tm_agree lv_agree len_eq PreCall])
-              have filtered_refs_eq: "?filter_refs (map (interp_writable_lvalue d' fuel state) argTms) =
-                                      ?filter_refs ?refResults"
-                by (rule fold_process_one_arg_ok_results_agree(2)[OF tm_agree lv_agree len_eq PreCall])
+            let ?refs' = "map (interp_writable_lvalue d' fuel state) argTms"
+            let ?vals' = "map (interp_term d' fuel state) argTms"
+            have len_args: "length argTms = length (IF_Args fn)" using False by simp
+            have len_tys: "length argTys = length (IF_TyArgs fn)" using tyLen by simp
 
-              have rights_vals_eq: "rights (map (interp_term d' fuel state) argTms) = rights ?valResults"
-                using valResults_eq by metis
+            (* The fold succeeded, so the argument values, and the lvalues of the Ref
+               arguments, are the same at the greater depth. *)
+            let ?filter_refs = "\<lambda>refResults. map (\<lambda>((_, vr), refResult).
+                                    if vr = Ref then refResult else Inl TypeError)
+                                  (zip ?fnArgs refResults)"
+            have valResults_eq: "?vals' = ?valResults"
+              by (rule fold_process_one_arg_ok_results_agree(1)[OF tm_agree lv_agree len_eq PreCall])
+            have filtered_refs_eq: "?filter_refs ?refs' = ?filter_refs ?refResults"
+              by (rule fold_process_one_arg_ok_results_agree(2)[OF tm_agree lv_agree len_eq PreCall])
+            have refs_eq: "ref_arg_results ?fnArgs ?refs' = ref_arg_results ?fnArgs ?refResults"
+              unfolding ref_arg_results_def by (rule filtered_refs_eq)
+            note args_eq = contract_args_agree[OF refs_eq valResults_eq]
 
-              have rights_refs_eq: "rights (?filter_refs (map (interp_writable_lvalue d' fuel state) argTms)) =
-                                    rights (?filter_refs ?refResults)"
-                using filtered_refs_eq by simp
+            have fold': "fold process_one_arg (zip ?fnArgs (zip ?refs' ?vals')) (Inr ?clearedState)
+                           = Inr preCallState"
+              using fold_eq PreCall by simp
 
-              have fold_eq': "fold process_one_arg (zip ?fnArgs (zip (map (interp_writable_lvalue d' fuel state) argTms)
-                                                                (map (interp_term d' fuel state) argTms))) (Inr ?clearedState) =
-                             Inr preCallState"
-                using fold_eq PreCall valResults_eq by argo
+            (* Both sides, in terms of checked_call and call_body. *)
+            have lhs: "interp_function_call d' (Suc fuel) state fnName argTys argTms
+                         = checked_call (interp_term_list d' fuel) fn ?refs' ?vals'
+                             ?calleeTyArgs ?clearedState
+                             (call_body (interp_statement_list d' fuel) state fn?refs' ?vals' preCallState)"
+              using Some len_args len_tys fold' by (simp add: Let_def)
+            have rhs: "interp_function_call d (Suc fuel) state fnName argTys argTms
+                         = checked_call (interp_term_list d fuel) fn ?refResults ?valResults
+                             ?calleeTyArgs ?clearedState
+                             (call_body (interp_statement_list d fuel) state fn?refResults ?valResults preCallState)"
+              using Some len_args len_tys PreCall by (simp add: Let_def)
+            have noFuel': "checked_call (interp_term_list d fuel) fn ?refResults ?valResults
+                             ?calleeTyArgs ?clearedState
+                             (call_body (interp_statement_list d fuel) state fn?refResults ?valResults preCallState)
+                           \<noteq> Inl InsufficientFuel"
+              using noFuel rhs by argo
 
-              show ?thesis using Some False tyLen Inr fold_eq' PreCall
-                                 rights_vals_eq rights_refs_eq filtered_refs_eq
-                by (simp add: Let_def)
+            (* The contract: by the IH for interp_term_list. *)
+            have IH_pre0: "\<And>s :: 'w InterpState. interp_term_list d fuel s (IF_Requires fn) \<noteq> Inl InsufficientFuel
+                             \<Longrightarrow> \<forall>d'\<ge>d. interp_term_list d' fuel s (IF_Requires fn)
+                                          = interp_term_list d fuel s (IF_Requires fn)"
+              by (rule "51.IH"(4)[OF Some False tyLen refl refl refl refl refl PreCall])
+            have IH_pre: "\<And>s :: 'w InterpState. interp_term_list d fuel s (IF_Requires fn) \<noteq> Inl InsufficientFuel
+                            \<Longrightarrow> interp_term_list d' fuel s (IF_Requires fn)
+                                  = interp_term_list d fuel s (IF_Requires fn)"
+              using IH_pre0 d'_ge by blast
+            have IH_post0: "\<And>s :: 'w InterpState. interp_term_list d fuel s (IF_Ensures fn) \<noteq> Inl InsufficientFuel
+                              \<Longrightarrow> \<forall>d'\<ge>d. interp_term_list d' fuel s (IF_Ensures fn)
+                                           = interp_term_list d fuel s (IF_Ensures fn)"
+              by (rule "51.IH"(5)[OF Some False tyLen refl refl refl refl refl PreCall])
+            have IH_post: "\<And>s :: 'w InterpState. interp_term_list d fuel s (IF_Ensures fn) \<noteq> Inl InsufficientFuel
+                             \<Longrightarrow> interp_term_list d' fuel s (IF_Ensures fn)
+                                   = interp_term_list d fuel s (IF_Ensures fn)"
+              using IH_post0 d'_ge by blast
+
+            (* The body: by the IH for interp_statement_list (internal function), or
+               because the extern function sees the same arguments. *)
+            have agree_body:
+              "call_body (interp_statement_list d fuel) state fn?refResults ?valResults preCallState \<noteq> Inl InsufficientFuel
+               \<Longrightarrow> call_body (interp_statement_list d' fuel) state fn?refs' ?vals' preCallState
+                     = call_body (interp_statement_list d fuel) state fn?refResults ?valResults preCallState"
+            proof -
+              assume body_ne: "call_body (interp_statement_list d fuel) state fn?refResults ?valResults preCallState
+                                 \<noteq> Inl InsufficientFuel"
+              show "call_body (interp_statement_list d' fuel) state fn?refs' ?vals' preCallState
+                      = call_body (interp_statement_list d fuel) state fn?refResults ?valResults preCallState"
+              proof (cases "IF_Body fn")
+                case (Inl bodyStmts)
+                (* Internal function: execute body statements *)
+                have body_noFuel: "interp_statement_list d fuel preCallState bodyStmts \<noteq> Inl InsufficientFuel"
+                  using body_ne Inl by (auto split: sum.splits ExecResult.splits simp: call_body_def)
+                hence IH_body: "\<forall>d'\<ge>d. interp_statement_list d' fuel preCallState bodyStmts =
+                                        interp_statement_list d fuel preCallState bodyStmts"
+                  using "51.IH"(3) Some False tyLen PreCall Inl by blast
+                have "interp_statement_list d' fuel preCallState bodyStmts =
+                      interp_statement_list d fuel preCallState bodyStmts"
+                  using IH_body d'_ge by metis
+                thus ?thesis using Inl by (simp add: call_body_def)
+              next
+                case (Inr externFun)
+                (* External function: the result depends on valResults and refResults
+                   directly, so we need these to be the same at both depths. *)
+                show ?thesis
+                  using Inr unfolding call_body_def valResults_eq filtered_refs_eq by simp
+              qed
             qed
+
+            have "checked_call (interp_term_list d' fuel) fn ?refs' ?vals' ?calleeTyArgs ?clearedState
+                    (call_body (interp_statement_list d' fuel) state fn?refs' ?vals' preCallState)
+                  = checked_call (interp_term_list d fuel) fn ?refResults ?valResults
+                      ?calleeTyArgs ?clearedState
+                      (call_body (interp_statement_list d fuel) state fn?refResults ?valResults preCallState)"
+              by (rule checked_call_agree[where ev' = "interp_term_list d' fuel",
+                                          OF noFuel' args_eq(1) args_eq(2) IH_pre IH_post agree_body])
+            then show ?thesis unfolding lhs rhs .
           qed
         qed
       qed

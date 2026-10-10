@@ -926,7 +926,7 @@ next
         \<comment> \<open>The run succeeded, so the invariants were evaluated and all held. \<close>
         from H CoreStmt_While obtain invarVals where
           iv: "interp_term_list d fuel state invars = Inr invarVals" and
-          ie: "invariants_error invarVals = None"
+          ie: "conditions_error invarVals = None"
           by (auto split: sum.splits option.splits)
         note [simp] = iv ie
         from H CoreStmt_While obtain condVal where
@@ -1093,25 +1093,29 @@ next
     case (3 fnName argTys argTms) show ?case
     proof (intro allI impI)
       fix state :: "'w InterpState" and state' :: "'w InterpState" and retVal
-      assume H: "interp_function_call d (Suc fuel) state fnName argTys argTms = Inr (state', retVal)"
-      \<comment> \<open>Unfold the function-call body enough to name each intermediate state. \<close>
-      obtain f where f_lookup: "fmlookup (IS_Functions state) fnName = Some f"
-        using H by (cases "fmlookup (IS_Functions state) fnName") simp_all
-      from H f_lookup have len_eq: "length argTms = length (IF_Args f)"
-        by (cases "length argTms = length (IF_Args f)") simp_all
-      from H f_lookup len_eq have tyLen_eq: "length argTys = length (IF_TyArgs f)"
-        by (cases "length argTys = length (IF_TyArgs f)") simp_all
+      assume H0: "interp_function_call d (Suc fuel) state fnName argTys argTms = Inr (state', retVal)"
+      \<comment> \<open>Take the call apart: the function, the state with the arguments bound, and
+          the body's result. The contract checks passed and did not change the state,
+          so the body's result is the call's result. \<close>
       let ?refResults = "map (interp_writable_lvalue d fuel state) argTms"
       let ?valResults = "map (interp_term d fuel state) argTms"
+      from interp_function_call_InrE[OF H0] obtain f preCallState where
+        f_lookup: "fmlookup (IS_Functions state) fnName = Some f" and
+        len_eq: "length argTms = length (IF_Args f)" and
+        tyLen_eq: "length argTys = length (IF_TyArgs f)" and
+        fold_eq: "fold process_one_arg (zip (IF_Args f) (zip ?refResults ?valResults))
+                    (Inr (state \<lparr> IS_Locals := fmempty, IS_Refs := fmempty,
+                                  IS_ConstLocals := {||},
+                                  IS_TyArgs := fmap_of_list (zip (IF_TyArgs f)
+                                                 (map (apply_subst (IS_TyArgs state)) argTys)) \<rparr>))
+                  = Inr preCallState" and
+        body: "call_body (interp_statement_list d fuel) state f ?refResults ?valResults preCallState
+                 = Inr (state', retVal)" .
       let ?argTuples = "zip (IF_Args f) (zip ?refResults ?valResults)"
       let ?calleeTyArgs = "fmap_of_list (zip (IF_TyArgs f) (map (apply_subst (IS_TyArgs state)) argTys))"
       let ?clearedState = "state \<lparr> IS_Locals := fmempty, IS_Refs := fmempty,
                                      IS_ConstLocals := {||},
                                      IS_TyArgs := ?calleeTyArgs \<rparr>"
-      obtain preCallState where
-        fold_eq: "fold process_one_arg ?argTuples (Inr ?clearedState) = Inr preCallState"
-        using H f_lookup len_eq tyLen_eq
-        by (cases "fold process_one_arg ?argTuples (Inr ?clearedState)") (simp_all add: Let_def)
 
       \<comment> \<open>The callee's frame refers only to the Ref-argument addresses and to
           the cells freshly allocated for its Var parameters. \<close>
@@ -1143,24 +1147,24 @@ next
       proof (cases "IF_Body f")
         case (Inl bodyStmts)
         \<comment> \<open>Babylon body. \<close>
-        from H f_lookup len_eq tyLen_eq fold_eq Inl
+        from body Inl
         obtain bodyRes where bodyEval:
           "interp_statement_list d fuel preCallState bodyStmts = Inr bodyRes"
           by (cases "interp_statement_list d fuel preCallState bodyStmts")
-             (simp_all add: Let_def)
+             (simp_all add: call_body_def)
         show ?thesis
         proof (cases bodyRes)
           case (Continue _)
-          with H f_lookup len_eq tyLen_eq fold_eq Inl bodyEval show ?thesis
-            by (simp add: Let_def)
+          with body Inl bodyEval show ?thesis
+            by (simp add: call_body_def)
         next
           case (Return postCallState bodyRetVal)
           from IH_stmt_list bodyEval
           have "frame_step preCallState (result_state bodyRes)" by blast
           with Return have body_fs: "frame_step preCallState postCallState" by simp
-          from H f_lookup len_eq tyLen_eq fold_eq Inl bodyEval Return
+          from body Inl bodyEval Return
           have state'_eq: "state' = restore_scope state postCallState"
-            by (simp add: Let_def)
+            by (simp add: call_body_def)
           have len2: "length (IS_Store preCallState) \<le> length (IS_Store postCallState)"
             by (rule frame_stepD(1)[OF body_fs])
           have len: "length (IS_Store state) \<le> length (IS_Store postCallState)"
@@ -1206,11 +1210,12 @@ next
           ext_eq: "externFun (IS_World state) ?vals = (newWorld, refUpdates, externRetVal)"
           by (cases "externFun (IS_World state) ?vals") auto
         let ?stateW = "state \<lparr> IS_World := newWorld \<rparr>"
-        from H f_lookup len_eq tyLen_eq fold_eq Inr ext_eq
+        from body Inr ext_eq
         obtain finalState where final_eq:
           "apply_ref_updates ?stateW ?refs refUpdates = Inr finalState"
           and state'_eq: "state' = finalState" and "retVal = externRetVal"
-          by (cases "apply_ref_updates ?stateW ?refs refUpdates") (simp_all add: Let_def)
+          by (cases "apply_ref_updates ?stateW ?refs refUpdates")
+             (simp_all add: call_body_def Let_def)
         note upd = apply_ref_updates_frame[OF final_eq]
         show ?thesis
           unfolding call_frame_def

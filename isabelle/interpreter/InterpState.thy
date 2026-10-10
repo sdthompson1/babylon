@@ -9,17 +9,34 @@ datatype LValuePath =
   | LVPath_ArrayProj "int list"
   | LVPath_ArrayCast "CoreDimension list"
 
+
 (* Externally defined functions *)
 (* The function is passed a "world" and the arguments, and returns new world, new
    values of any ref arguments, and return value *)
 type_synonym 'w ExternFunc = "'w \<Rightarrow> CoreValue list \<Rightarrow> 'w \<times> CoreValue list \<times> CoreValue"
 
+
 (* Function info for the interpreter *)
 record 'w InterpFun =
+  (* Type arguments *)
   IF_TyArgs :: "string list"
+
+  (* Term arguments (name, and whether passed by value or reference) *)
   IF_Args :: "(string \<times> VarOrRef) list"
+
+  (* The function body: Inl for a Babylon body (list of statements), or
+     Inr for an external function. *)
   IF_Body :: "CoreStatement list + 'w ExternFunc"
+
+  (* Whether the function is marked "impure" (i.e. is allowed to read or
+     write to the external world). *)
   IF_Impure :: bool
+
+  (* The function's contract, as in FI_Requires / FI_Ensures. These refer to the
+     parameters by the positional names of ContractNames.thy. *)
+  IF_Requires :: "CoreTerm list"
+  IF_Ensures :: "CoreTerm list"
+
 
 (* Interpreter state *)
 record 'world InterpState =

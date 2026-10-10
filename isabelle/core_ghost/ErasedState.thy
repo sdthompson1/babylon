@@ -25,15 +25,18 @@ begin
 (* Function tables *)
 (* ========================================================================== *)
 
-(* Erase the function named name: drop its ghost parameters, and erase the
-   ghost code from its body. The function signatures funInfos say which
-   parameters of the function are ghost (the InterpFun does not record this),
-   and which arguments of the calls in the body are ghost. *)
+(* Erase the function named name: drop its ghost parameters, erase the ghost
+   code from its body, and drop its contract (which is ghost code). The
+   function signatures funInfos say which parameters of the function are ghost
+   (the InterpFun does not record this), and which arguments of the calls in
+   the body are ghost. *)
 definition erase_ghost_interp_fun ::
     "(string, FunInfo) fmap \<Rightarrow> string \<Rightarrow> 'w InterpFun \<Rightarrow> 'w InterpFun" where
   "erase_ghost_interp_fun funInfos name f =
     f \<lparr> IF_Args := erase_ghost_args funInfos name (IF_Args f),
-        IF_Body := map_sum (erase_ghost_statement_list funInfos) id (IF_Body f) \<rparr>"
+        IF_Body := map_sum (erase_ghost_statement_list funInfos) id (IF_Body f),
+        IF_Requires := [],
+        IF_Ensures := [] \<rparr>"
 
 (* Each non-ghost function is, in the erased state, the erased function. (Ghost
    functions are never called by the erased program, so nothing is said about

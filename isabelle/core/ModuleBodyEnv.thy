@@ -1,5 +1,5 @@
 theory ModuleBodyEnv
-  imports CoreTyEnvWellFormed "../util/NatToString"
+  imports CoreTyEnvWellFormed ContractNames
 begin
 
 (* The type environment in which a function body is typechecked
@@ -66,65 +66,30 @@ definition module_body_env_for :: "CoreTyEnv \<Rightarrow> string list \<Rightar
 
 
 (* ========================================================================== *)
-(* Contract names and signatures                                              *)
+(* Contract signatures                                                         *)
 (* ========================================================================== *)
 
-(* A function's contract (FI_Requires, FI_Ensures) cannot refer to the
-   parameters by their declared names, because FunInfo carries no parameter
-   names. Instead it uses positional names:
-     - arg@@i is the i-th parameter (by value or by reference, as declared);
-     - old@@i is the value the i-th parameter had on entry to the function
-       (postconditions only);
-     - return is the return value (postconditions only).
-   None of these can be written in Babylon source. *)
+(* The environment for typechecking contracts is slightly different from the
+   usual module_body_env_for environment.
 
-definition contract_arg_names :: "nat \<Rightarrow> string list" where
-  "contract_arg_names n = map (\<lambda>i. ''arg@@'' @ nat_to_string i) [0..<n]"
+   For a precondition, the argument names are changed to "arg@@i" (see comment
+   at top of ContractNames.thy). This environment is constructed by calling
+   module_body_env_for in the usual way, but using contract_arg_names (from
+   ContractNames.thy) instead of the original parameter names.
 
-definition contract_old_names :: "nat \<Rightarrow> string list" where
-  "contract_old_names n = map (\<lambda>i. ''old@@'' @ nat_to_string i) [0..<n]"
+   For a postcondition, we must also add new variables to the environment:
+   "old@@i" for the original (entry) values of each parameter, and "return"
+   for the function's return value. This environment is constructed by
+   calling `module_body_env_for` with a modified FunInfo (post_funinfo,
+   defined below), which adds the extra variables (by pretending that they
+   are function arguments), and using contract_post_names (from
+   ContractNames.thy) as the parameter names. *)
 
-(* The names in scope in a postcondition, in the order of post_funinfo's
-   parameters. *)
-definition contract_post_names :: "nat \<Rightarrow> string list" where
-  "contract_post_names n = contract_arg_names n @ contract_old_names n @ [''return'']"
-
-(* A precondition is typechecked, and evaluated, as if it were a body of the
-   function itself, with parameter names contract_arg_names. A postcondition is
-   treated likewise, but for the extended signature below: the function's own
-   parameters, then one ghost by-value parameter per original parameter
-   (holding its entry value), then one ghost by-value parameter holding the
-   return value. Its parameter names are contract_post_names. *)
 definition post_funinfo :: "FunInfo \<Rightarrow> FunInfo" where
   "post_funinfo info =
      info \<lparr> FI_TmArgs := FI_TmArgs info
                          @ map (\<lambda>(ty, _, _). (ty, Var, Ghost)) (FI_TmArgs info)
                          @ [(FI_ReturnType info, Var, Ghost)] \<rparr>"
-
-(* Note: nat_to_string.simps must be kept out of the simp set in the following
-   proofs, since it unfolds forever on a variable argument. *)
-
-lemma length_contract_arg_names [simp]: "length (contract_arg_names n) = n"
-  by (simp add: contract_arg_names_def del: nat_to_string.simps)
-
-lemma length_contract_old_names [simp]: "length (contract_old_names n) = n"
-  by (simp add: contract_old_names_def del: nat_to_string.simps)
-
-lemma length_contract_post_names [simp]: "length (contract_post_names n) = n + n + 1"
-  by (simp add: contract_post_names_def)
-
-lemma distinct_contract_arg_names: "distinct (contract_arg_names n)"
-  unfolding contract_arg_names_def distinct_map
-  by (auto intro!: inj_onI dest: nat_to_string_injective simp del: nat_to_string.simps)
-
-lemma distinct_contract_old_names: "distinct (contract_old_names n)"
-  unfolding contract_old_names_def distinct_map
-  by (auto intro!: inj_onI dest: nat_to_string_injective simp del: nat_to_string.simps)
-
-lemma distinct_contract_post_names: "distinct (contract_post_names n)"
-  using distinct_contract_arg_names[of n] distinct_contract_old_names[of n]
-  unfolding contract_post_names_def
-  by (auto simp: contract_arg_names_def contract_old_names_def simp del: nat_to_string.simps)
 
 lemma post_funinfo_simps [simp]:
   "FI_TyArgs (post_funinfo info) = FI_TyArgs info"
