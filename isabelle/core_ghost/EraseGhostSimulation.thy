@@ -465,9 +465,6 @@ next
         case (CoreTm_Allocated argTy arg)
         with W show ?thesis by simp
       next
-        case (CoreTm_Old arg)
-        with W show ?thesis by simp
-      next
         case (CoreTm_Default dty)
         have dv: "default_value fuel erased (apply_subst (IS_TyArgs full) dty)
                     = default_value fuel full (apply_subst (IS_TyArgs full) dty)"

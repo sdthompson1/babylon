@@ -1427,22 +1427,6 @@ next
     ultimately show ?thesis using Ghost ty_eq by simp
   qed
 next
-  case (CoreTm_Old tm)
-  show ?case
-  proof (cases ghost)
-    case NotGhost
-    with CoreTm_Old.prems(1) show ?thesis by simp
-  next
-    case Ghost
-    with CoreTm_Old.prems(1) have inner: "core_term_type env Ghost tm = Some ty" by simp
-    from CoreTm_Old.IH[OF inner CoreTm_Old.prems(2,3)]
-         CoreTm_Old.prems(4) CoreTm_Old.prems(5)
-    have "core_term_type (apply_subst_to_module_env subst targetEnv env) Ghost
-                          (apply_subst_to_term subst tm)
-            = Some (apply_subst subst ty)" by simp
-    with Ghost show ?thesis by simp
-  qed
-next
   case (CoreTm_Default tyD)
   from CoreTm_Default.prems(1) have
     wk: "is_well_kinded env tyD" and

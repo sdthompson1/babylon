@@ -128,5 +128,6 @@ datatype (plugins del: size "quickcheck" transfer lifting) TypeError =
   (* Other unexpected errors *)
   | TyErr_DependencyAnalysisUnexpectedFailure Location  (* dependency sorter failed *)
   | TyErr_IllKindedProofGoal Location  (* stored proof goal contained ill-kinded type — impossible, as goals come from elaborated (well-typed) Asserts *)
+  | TyErr_UnexpectedOld Location  (* `old` reached elab_term — impossible, as the parser allows `old` only in postconditions, and BabContractRename removes it from those *)
 
 end

@@ -529,10 +529,6 @@ function core_term_type :: "CoreTyEnv \<Rightarrow> GhostOrNot \<Rightarrow> Cor
       Some ty' \<Rightarrow> if ty' = ty \<and> is_complete_type ty then Some CoreTy_Bool else None
     | None \<Rightarrow> None)"
 
-  (* Old: Ghost only *)
-| "core_term_type env NotGhost (CoreTm_Old _) = None"
-| "core_term_type env Ghost (CoreTm_Old tm) = core_term_type env Ghost tm"
-
   (* Default value of a type. Type must be well-kinded; in NotGhost mode it
      must additionally be a runtime type. *)
 | "core_term_type env ghost (CoreTm_Default ty) =
@@ -752,13 +748,6 @@ next
   fix ghost :: GhostOrNot
   fix tm :: CoreTerm
   show "((env, ghost, tm), env, ghost, CoreTm_Sizeof tm)
-        \<in> measure (\<lambda>(env, ghost, tm). size tm)"
-    by simp
-next
-  \<comment> \<open>CoreTm_Old - tm is smaller\<close>
-  fix env :: CoreTyEnv
-  fix tm :: CoreTerm
-  show "((env, Ghost, tm), env, Ghost, CoreTm_Old tm)
         \<in> measure (\<lambda>(env, ghost, tm). size tm)"
     by simp
 qed
@@ -1034,10 +1023,6 @@ proof -
       using CoreTm_Allocated.IH CoreTm_Allocated.prems by blast
     show ?case
       using tm_eq by (cases ghost) simp_all
-  next
-    case (CoreTm_Old tm)
-    then show ?case
-      by (metis (full_types) GhostOrNot.exhaust core_term_type.simps(21,22))
   next
     case (CoreTm_Unop op operand)
     have "core_term_type env1 ghost operand = core_term_type env2 ghost operand"
@@ -1489,10 +1474,6 @@ next
   then show ?case
     by (cases ghost) (auto split: option.splits if_splits)
 next
-  case (CoreTm_Old tm)
-  then show ?case
-    by (cases ghost) auto
-next
   case (CoreTm_Default tyD)
   let ?env_x = "env \<lparr> TE_LocalVars := fmupd x ty' (TE_LocalVars env),
                        TE_GhostLocals := gv' \<rparr>"
@@ -1788,10 +1769,6 @@ next
   case (CoreTm_Allocated ty tm)
   then show ?case
     by (cases ghost) (auto split: option.splits if_splits)
-next
-  case (CoreTm_Old tm)
-  then show ?case
-    by (cases ghost) auto
 next
   case (CoreTm_LitBool b) then show ?case by simp
 next
@@ -2322,22 +2299,6 @@ next
     with Ghost cp ty_eq show ?thesis by simp
   qed
 next
-  case (CoreTm_Old tm)
-  let ?env' = "env \<lparr> TE_TypeVars := TE_TypeVars env |\<union>| extraTV,
-                     TE_RuntimeTypeVars := TE_RuntimeTypeVars env |\<union>| extraRT \<rparr>"
-  have tm_disj: "core_term_free_tyvars tm \<inter> fset extraTV = {}"
-    using CoreTm_Old.prems(3) by simp
-  show ?case
-  proof (cases ghost)
-    case NotGhost with CoreTm_Old.prems(1) show ?thesis by simp
-  next
-    case Ghost
-    with CoreTm_Old.prems(1) have tm_ty': "core_term_type ?env' Ghost tm = Some ty" by simp
-    have "core_term_type env Ghost tm = Some ty"
-      by (rule CoreTm_Old.IH[OF tm_ty' CoreTm_Old.prems(2) tm_disj])
-    with Ghost show ?thesis by simp
-  qed
-next
   case (CoreTm_LitBool b) then show ?case by simp
 next
   case (CoreTm_LitInt i) then show ?case by (simp split: option.splits)
@@ -2823,10 +2784,6 @@ next
   case (CoreTm_Allocated ty tm)
   show ?case using CoreTm_Allocated.prems(1)
     by (cases ghost) (auto split: option.splits if_splits)
-next
-  case (CoreTm_Old tm)
-  show ?case using CoreTm_Old.prems(1) CoreTm_Old.IH CoreTm_Old.prems(2)
-    by (cases ghost) auto
 next
   case (CoreTm_Default tyD)
   show ?case using CoreTm_Default.prems(1)

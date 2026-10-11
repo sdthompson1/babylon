@@ -831,9 +831,6 @@ next
   case (CoreTm_Allocated ty tm)
   then show ?case by simp
 next
-  case (CoreTm_Old tm)
-  then show ?case by simp
-next
   case (CoreTm_Default dty)
   note rel = CoreTm_Default.prems(3)
   from CoreTm_Default.prems(1) have

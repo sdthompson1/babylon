@@ -297,16 +297,12 @@ next
   then show ?case
     by (cases ghost) (auto split: option.splits if_splits)
 next
-  case (CoreTm_Old tm)
-  then show ?case
-    by (cases ghost) auto
-next
   case (CoreTm_Default tyD)
   let ?envG = "env \<lparr> TE_GhostLocals := G \<rparr>"
   have wk_eq: "is_well_kinded ?envG tyD = is_well_kinded env tyD"
     using is_well_kinded_cong_env[of ?envG env] by simp
   from CoreTm_Default.prems(1) show ?case
-    by (metis GhostOrNot.distinct(1) core_term_type.simps(23) option.distinct(1) wk_eq)
+    by (metis GhostOrNot.distinct(1) core_term_type.simps(21) option.distinct(1) wk_eq)
 qed
 
 (* A term that types in NotGhost mode also types in Ghost mode. *)

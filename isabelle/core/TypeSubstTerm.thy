@@ -44,8 +44,6 @@ fun apply_subst_to_term :: "TypeSubst \<Rightarrow> CoreTerm \<Rightarrow> CoreT
     CoreTm_Sizeof (apply_subst_to_term subst tm)"
 | "apply_subst_to_term subst (CoreTm_Allocated ty tm) =
     CoreTm_Allocated (apply_subst subst ty) (apply_subst_to_term subst tm)"
-| "apply_subst_to_term subst (CoreTm_Old tm) =
-    CoreTm_Old (apply_subst_to_term subst tm)"
 | "apply_subst_to_term subst (CoreTm_Default ty) =
     CoreTm_Default (apply_subst subst ty)"
 
@@ -320,11 +318,6 @@ next
   moreover have "apply_subst_to_term s1 tm = apply_subst_to_term s2 tm"
     by (rule CoreTm_Allocated.IH) (simp add: CoreTm_Allocated.prems)
   ultimately show ?case by simp
-next
-  case (CoreTm_Old tm)
-  have "apply_subst_to_term s1 tm = apply_subst_to_term s2 tm"
-    by (rule CoreTm_Old.IH) (simp add: CoreTm_Old.prems)
-  then show ?case by simp
 next
   case (CoreTm_Default ty)
   have "apply_subst s1 ty = apply_subst s2 ty"

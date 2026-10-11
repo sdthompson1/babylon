@@ -80,7 +80,6 @@ fun core_term_free_vars :: "CoreTerm \<Rightarrow> string fset" where
     core_term_free_vars scrut |\<union>| ffUnion (fset_of_list (map (core_term_free_vars \<circ> snd) arms))"
 | "core_term_free_vars (CoreTm_Sizeof tm) = core_term_free_vars tm"
 | "core_term_free_vars (CoreTm_Allocated _ tm) = core_term_free_vars tm"
-| "core_term_free_vars (CoreTm_Old tm) = core_term_free_vars tm"
 | "core_term_free_vars (CoreTm_Default _) = {||}"
 
 (* Membership in ffUnion (f |`| fset_of_list xs) reduces to a list quantifier
@@ -132,7 +131,6 @@ fun core_term_free_tyvars :: "CoreTerm \<Rightarrow> string set" where
 | "core_term_free_tyvars (CoreTm_Sizeof tm) = core_term_free_tyvars tm"
 | "core_term_free_tyvars (CoreTm_Allocated ty tm) =
     type_tyvars ty \<union> core_term_free_tyvars tm"
-| "core_term_free_tyvars (CoreTm_Old tm) = core_term_free_tyvars tm"
 | "core_term_free_tyvars (CoreTm_Default ty) = type_tyvars ty"
 
 (* Executable version of core_term_free_tyvars, returning a list (possibly with duplicates). *)
@@ -166,7 +164,6 @@ fun core_term_free_tyvars_list :: "CoreTerm \<Rightarrow> string list" where
 | "core_term_free_tyvars_list (CoreTm_Sizeof tm) = core_term_free_tyvars_list tm"
 | "core_term_free_tyvars_list (CoreTm_Allocated ty tm) =
     type_tyvars_list ty @ core_term_free_tyvars_list tm"
-| "core_term_free_tyvars_list (CoreTm_Old tm) = core_term_free_tyvars_list tm"
 | "core_term_free_tyvars_list (CoreTm_Default ty) = type_tyvars_list ty"
 
 (* core_term_free_tyvars_list collects the same set as core_term_free_tyvars. *)

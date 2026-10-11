@@ -2002,11 +2002,10 @@ lemma notghost_typedI:
   shows "notghost_typed env tm"
   using assms by (simp add: notghost_typed_def)
 
-(* Quantifiers, `allocated` and `old` are ghost only. *)
+(* Quantifiers and `allocated` are ghost only. *)
 lemma notghost_typed_ghost_only [simp]:
   "\<not> notghost_typed env (CoreTm_Quantifier q var varTy body)"
   "\<not> notghost_typed env (CoreTm_Allocated ty tm)"
-  "\<not> notghost_typed env (CoreTm_Old tm)"
   by (simp_all add: notghost_typed_def)
 
 lemma notghost_typed_Var:

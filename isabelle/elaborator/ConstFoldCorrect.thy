@@ -523,9 +523,6 @@ next
   case (CoreTm_Allocated ty tm)
   then show ?case by simp
 next
-  case (CoreTm_Old tm)
-  then show ?case by simp
-next
   case (CoreTm_Default defTy)
   then show ?case by simp
 qed
@@ -1139,9 +1136,6 @@ next
   qed
 next
   case (CoreTm_Allocated ty tm)
-  then show ?case by simp
-next
-  case (CoreTm_Old tm)
   then show ?case by simp
 next
   case (CoreTm_Default defTy)

@@ -26,11 +26,11 @@ begin
 (* ========================================================================== *)
 
 (* A "compile-time constant term" is one that doesn't include function calls, quantifiers,
-   CoreTm_Allocated, CoreTm_Old or CoreTm_Default.
+   CoreTm_Allocated or CoreTm_Default.
 
    The rule against function calls is there to simplify the elaborator, which doesn't want
    to have to worry about calling functions at compile time. The others - quantifiers,
-   allocated, old and default - can't occur in legal non-ghost consts anyway, so these are
+   allocated and default - can't occur in legal non-ghost consts anyway, so these are
    not "real" restrictions.
 
    On a term that satisfies is_constant_term, eval_const and interp_term agree. *)
@@ -59,7 +59,6 @@ fun is_constant_term :: "CoreTerm \<Rightarrow> bool" where
     (is_constant_term scrut \<and> list_all (is_constant_term \<circ> snd) arms)"
 | "is_constant_term (CoreTm_Sizeof tm) = is_constant_term tm"
 | "is_constant_term (CoreTm_Allocated _ _) = False"
-| "is_constant_term (CoreTm_Old _) = False"
 | "is_constant_term (CoreTm_Default _) = False"
 
 
@@ -113,7 +112,6 @@ fun term_types_ground :: "CoreTerm \<Rightarrow> bool" where
 | "term_types_ground (CoreTm_Sizeof tm) = term_types_ground tm"
 | "term_types_ground (CoreTm_Allocated ty tm) =
     (type_tyvars ty = {} \<and> term_types_ground tm)"
-| "term_types_ground (CoreTm_Old tm) = term_types_ground tm"
 | "term_types_ground (CoreTm_Default ty) = (type_tyvars ty = {})"
 
 
@@ -274,12 +272,11 @@ where
     | Inr _ \<Rightarrow> Inl TypeError
     | Inl err \<Rightarrow> Inl err)"
 
-  (* Quantifier, Allocated, Old, Default - not evaluated at compile time. None of
+  (* Quantifier, Allocated, Default - not evaluated at compile time. None of
      these occurs in a legal non-ghost const. (interp_term, which also runs ghost
-     code, does evaluate Quantifier and Old.) *)
+     code, does evaluate Quantifier and Allocated.) *)
 | "eval_const vals (CoreTm_Quantifier _ _ _ _) = Inl TypeError"
 | "eval_const vals (CoreTm_Allocated _ _) = Inl TypeError"
-| "eval_const vals (CoreTm_Old _) = Inl TypeError"
 | "eval_const vals (CoreTm_Default _) = Inl TypeError"
 
   (* Evaluate a list of terms *)

@@ -1313,9 +1313,6 @@ where
           Inl err \<Rightarrow> Inl err
         | Inr b \<Rightarrow> Inr (CV_Bool b)))"
 
-  (* Old: the identity (Core has no postconditions yet) *)
-| "interp_term d (Suc fuel) state (CoreTm_Old tm) = interp_term d fuel state tm"
-
   (* Default value: resolve any current-frame tyvars via IS_TyArgs, then
      delegate to the recursive default_value helper. *)
 | "interp_term _ (Suc fuel) state (CoreTm_Default ty) =

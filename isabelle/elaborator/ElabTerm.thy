@@ -1238,13 +1238,10 @@ where
          if \<not> is_complete_type tmTy then Inl [TyErr_IncompleteArrayType loc]
          else Inr (CoreTm_Allocated tmTy newTm, CoreTy_Bool, next_mv'))"
 
-  (* Old: ghost-only, result has same type as operand *)
+  (* Old: never reached. The parser allows `old` only in postconditions, and
+     BabContractRename removes it from those before they are elaborated. *)
 | "elab_term env elabEnv ghost (BabTm_Old loc tm) next_mv =
-    (if ghost \<noteq> Ghost then Inl [TyErr_RequiresGhostContext loc]
-     else case elab_term env elabEnv ghost tm next_mv of
-       Inl errs \<Rightarrow> Inl errs
-     | Inr (newTm, tmTy, next_mv') \<Rightarrow>
-         Inr (CoreTm_Old newTm, tmTy, next_mv'))"
+    Inl [TyErr_UnexpectedOld loc]"
 
   (* elab_term_list - Empty list case *)
 | "elab_term_list _ _ _ [] next_mv = Inr ([], [], next_mv)"

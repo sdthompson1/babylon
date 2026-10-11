@@ -599,9 +599,8 @@ next
     using "18.IH" by (auto split: sum.splits if_splits)
 next
   case (19 env elabEnv ghost loc tm next_mv)
-  \<comment> \<open>BabTm_Old: forwards sub-term's next_mv\<close>
-  from "19.prems" show ?case
-    using "19.IH" by (auto split: sum.splits if_splits)
+  \<comment> \<open>BabTm_Old: always an error\<close>
+  from "19.prems" show ?case by simp
 next
   case "20" \<comment> \<open>elab_term_list: Nil\<close>
   from "20.prems" show ?case by simp

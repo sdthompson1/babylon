@@ -1103,27 +1103,8 @@ next
       by simp
   qed
 next
-  (* Old *)
-  case (21 d fuel state tm)
-  then show ?case
-  proof (intro allI impI)
-    fix f' assume "f' \<ge> Suc fuel"
-    then obtain f'' where f'_eq: "f' = Suc f''" and f''_ge: "f'' \<ge> fuel"
-      using Suc_le_D by auto
-    assume noFuel: "interp_term d (Suc fuel) state (CoreTm_Old tm) \<noteq> Inl InsufficientFuel"
-    hence sub_noFuel: "interp_term d fuel state tm \<noteq> Inl InsufficientFuel"
-      by simp
-    hence IH: "\<forall>f'\<ge>fuel. interp_term d f' state tm = interp_term d fuel state tm"
-      using "21.IH" by blast
-    from IH f''_ge have "interp_term d f'' state tm = interp_term d fuel state tm"
-      by metis
-    with f'_eq show "interp_term d f' state (CoreTm_Old tm)
-                       = interp_term d (Suc fuel) state (CoreTm_Old tm)"
-      by simp
-  qed
-next
   (* Default - dispatches to default_value *)
-  case (22 d fuel state ty)
+  case (21 d fuel state ty)
   then show ?case
   proof (intro allI impI)
     fix f' assume "f' \<ge> Suc fuel"
@@ -1141,11 +1122,11 @@ next
   qed
 next
   (* interp_writable_lvalue, fuel = 0 *)
-  case (23 d state tm)
+  case (22 d state tm)
   then show ?case by simp
 next
   (* interp_writable_lvalue, fuel > 0 *)
-  case (24 d fuel state tm)
+  case (23 d fuel state tm)
   then show ?case
   proof (intro allI impI)
     fix f' assume "f' \<ge> Suc fuel"
@@ -1161,7 +1142,7 @@ next
       hence sub_noFuel: "interp_writable_lvalue d fuel state tm' \<noteq> Inl InsufficientFuel"
         using noFuel by (auto split: sum.splits)
       hence IH: "\<forall>f'\<ge>fuel. interp_writable_lvalue d f' state tm' = interp_writable_lvalue d fuel state tm'"
-        using "24.IH"(2) CoreTm_RecordProj by blast
+        using "23.IH"(2) CoreTm_RecordProj by blast
       from IH f''_ge have "interp_writable_lvalue d f'' state tm' = interp_writable_lvalue d fuel state tm'"
         by metis
       thus ?thesis using f'_eq CoreTm_RecordProj by simp
@@ -1170,7 +1151,7 @@ next
       hence sub_noFuel: "interp_writable_lvalue d fuel state tm' \<noteq> Inl InsufficientFuel"
         using noFuel by (auto split: sum.splits)
       hence IH: "\<forall>f'\<ge>fuel. interp_writable_lvalue d f' state tm' = interp_writable_lvalue d fuel state tm'"
-        using "24.IH"(3) CoreTm_VariantProj by blast
+        using "23.IH"(3) CoreTm_VariantProj by blast
       from IH f''_ge have "interp_writable_lvalue d f'' state tm' = interp_writable_lvalue d fuel state tm'"
         by metis
       thus ?thesis using f'_eq CoreTm_VariantProj by simp
@@ -1179,7 +1160,7 @@ next
       hence lv_noFuel: "interp_writable_lvalue d fuel state tm' \<noteq> Inl InsufficientFuel"
         using noFuel by (auto split: sum.splits)
       hence IH_lv: "\<forall>f'\<ge>fuel. interp_writable_lvalue d f' state tm' = interp_writable_lvalue d fuel state tm'"
-        using "24.IH"(4) CoreTm_ArrayProj by blast
+        using "23.IH"(4) CoreTm_ArrayProj by blast
       show ?thesis
       proof (cases "interp_writable_lvalue d fuel state tm'")
         case (Inl err)
@@ -1190,7 +1171,7 @@ next
         hence idx_noFuel: "interp_term_list d fuel state indexTms \<noteq> Inl InsufficientFuel"
           using noFuel CoreTm_ArrayProj by (auto split: sum.splits)
         hence IH_idx: "\<forall>f'\<ge>fuel. interp_term_list d f' state indexTms = interp_term_list d fuel state indexTms"
-          using "24.IH"(5) CoreTm_ArrayProj Inr
+          using "23.IH"(5) CoreTm_ArrayProj Inr
           by (metis prod.exhaust)
         have "interp_writable_lvalue d f'' state tm' = Inr addrPath" using IH_lv Inr f''_ge by metis
         moreover have "interp_term_list d f'' state indexTms = interp_term_list d fuel state indexTms"
@@ -1214,7 +1195,7 @@ next
         hence lv_noFuel: "interp_writable_lvalue d fuel state tm' \<noteq> Inl InsufficientFuel"
           using noFuel CoreTm_Cast by (auto split: sum.splits)
         hence IH: "\<forall>f'\<ge>fuel. interp_writable_lvalue d f' state tm' = interp_writable_lvalue d fuel state tm'"
-          using "24.IH"(1) CoreTm_Cast CoreTy_Array by blast
+          using "23.IH"(1) CoreTm_Cast CoreTy_Array by blast
         from IH f''_ge have "interp_writable_lvalue d f'' state tm' = interp_writable_lvalue d fuel state tm'"
           by metis
         thus ?thesis using f'_eq CoreTm_Cast CoreTy_Array by simp
@@ -1250,20 +1231,17 @@ next
       case (CoreTm_Allocated xty x)
       thus ?thesis using f'_eq by simp
     next
-      case (CoreTm_Old x)
-      thus ?thesis using f'_eq by simp
-    next
       case (CoreTm_Default x)
       thus ?thesis using f'_eq by simp
     qed
   qed
 next
   (* interp_term_list, fuel = 0 *)
-  case (25 d state tms)
+  case (24 d state tms)
   then show ?case by simp
 next
   (* interp_term_list, empty list *)
-  case (26 d fuel state)
+  case (25 d fuel state)
   show ?case
   proof (intro allI impI)
     fix f' assume "f' \<ge> Suc fuel"
@@ -1273,7 +1251,7 @@ next
   qed
 next
   (* interp_term_list, cons *)
-  case (27 d fuel state tm tms)
+  case (26 d fuel state tm tms)
   then show ?case
   proof (intro allI impI)
     fix f' assume f'_ge: "f' \<ge> Suc fuel"
@@ -1283,7 +1261,7 @@ next
     hence tm_noFuel: "interp_term d fuel state tm \<noteq> Inl InsufficientFuel"
       by (auto split: sum.splits)
     hence IH_tm: "\<forall>f'\<ge>fuel. interp_term d f' state tm = interp_term d fuel state tm"
-      using "27.IH"(1) by blast
+      using "26.IH"(1) by blast
     show "interp_term_list d f' state (tm # tms) = interp_term_list d (Suc fuel) state (tm # tms)"
     proof (cases "interp_term d fuel state tm")
       case (Inl err)
@@ -1294,7 +1272,7 @@ next
       hence tms_noFuel: "interp_term_list d fuel state tms \<noteq> Inl InsufficientFuel"
         using noFuel by (auto split: sum.splits)
       hence IH_tms: "\<forall>f'\<ge>fuel. interp_term_list d f' state tms = interp_term_list d fuel state tms"
-        using "27.IH"(2) Inr by blast
+        using "26.IH"(2) Inr by blast
       have "interp_term d f'' state tm = Inr val" using IH_tm Inr f''_ge by metis
       moreover have "interp_term_list d f'' state tms = interp_term_list d fuel state tms"
         using IH_tms f''_ge by metis
@@ -1303,12 +1281,12 @@ next
   qed
 next
   (* interp_statement, fuel = 0 *)
-  case (28 d state stmt)
+  case (27 d state stmt)
   then show ?case by simp
 next
   (* VarDecl Var.
      The initializer is an ordinary (pure) term; just one interp_term sub-call. *)
-  case (29 d fuel state declGhost varName varTy initialTm)
+  case (28 d fuel state declGhost varName varTy initialTm)
   then show ?case
   proof (intro allI impI)
     fix f' assume "f' \<ge> Suc fuel"
@@ -1319,7 +1297,7 @@ next
     hence sub_noFuel: "interp_term d fuel state initialTm \<noteq> Inl InsufficientFuel"
       by (auto split: sum.splits prod.splits)
     hence IH: "\<forall>f'\<ge>fuel. interp_term d f' state initialTm = interp_term d fuel state initialTm"
-      using "29.IH"(1) by blast
+      using "28.IH"(1) by blast
     from IH f''_ge have tm_eq: "interp_term d f'' state initialTm = interp_term d fuel state initialTm"
       by metis
     with f'_eq show "interp_statement d f' state (CoreStmt_VarDecl declGhost varName Var varTy initialTm) =
@@ -1329,7 +1307,7 @@ next
 next
   (* VarDeclCall.
      Runs the call then applies the optional cast; only the call uses fuel. *)
-  case (30 d fuel state declGhost varName varTy castOpt fnName argTys argTms)
+  case (29 d fuel state declGhost varName varTy castOpt fnName argTys argTms)
   then show ?case
   proof (intro allI impI)
     fix f' assume "f' \<ge> Suc fuel"
@@ -1342,7 +1320,7 @@ next
       by (auto split: sum.splits prod.splits)
     hence IH_fc: "\<forall>f'\<ge>fuel. interp_function_call d f' state fnName argTys argTms
                               = interp_function_call d fuel state fnName argTys argTms"
-      using "30.IH" by blast
+      using "29.IH" by blast
     from IH_fc f''_ge have
       "interp_function_call d f'' state fnName argTys argTms
          = interp_function_call d fuel state fnName argTys argTms"
@@ -1355,7 +1333,7 @@ next
   qed
 next
   (* VarDecl Ref *)
-  case (31 d fuel state declGhost varName varTy lvalueTm)
+  case (30 d fuel state declGhost varName varTy lvalueTm)
   then show ?case
   proof (intro allI impI)
     fix f' assume f'_ge: "f' \<ge> Suc fuel"
@@ -1380,7 +1358,7 @@ next
         have tm_noFuel: "interp_term d fuel state lvalueTm \<noteq> Inl InsufficientFuel"
           using noFuel Some True by (auto split: sum.splits prod.splits)
         have IH_tm: "\<forall>f'\<ge>fuel. interp_term d f' state lvalueTm = interp_term d fuel state lvalueTm"
-          using "31.IH" Some True tm_noFuel by blast
+          using "30.IH" Some True tm_noFuel by blast
         from IH_tm f''_ge
         have "interp_term d f'' state lvalueTm = interp_term d fuel state lvalueTm" by metis
         then show ?thesis using f'_eq Some True by simp
@@ -1391,7 +1369,7 @@ next
           using noFuel Some False by (auto split: sum.splits)
         have IH_lv: "\<forall>f'\<ge>fuel. interp_writable_lvalue d f' state lvalueTm
                                   = interp_writable_lvalue d fuel state lvalueTm"
-          using "31.IH" Some False lv_noFuel by blast
+          using "30.IH" Some False lv_noFuel by blast
         from IH_lv f''_ge
         have "interp_writable_lvalue d f'' state lvalueTm = interp_writable_lvalue d fuel state lvalueTm"
           by metis
@@ -1402,7 +1380,7 @@ next
 next
   (* Assign.
      The rhs is an ordinary (pure) term: resolve the lhs, then interp_term. *)
-  case (32 d fuel state assignGhost lhsLvalue rhsTm)
+  case (31 d fuel state assignGhost lhsLvalue rhsTm)
   then show ?case
   proof (intro allI impI)
     fix f' assume "f' \<ge> Suc fuel"
@@ -1414,7 +1392,7 @@ next
       by (auto split: sum.splits)
     hence IH_lhs: "\<forall>f'\<ge>fuel. interp_writable_lvalue d f' state lhsLvalue
                                = interp_writable_lvalue d fuel state lhsLvalue"
-      using "32.IH"(1) by blast
+      using "31.IH"(1) by blast
     show "interp_statement d f' state (CoreStmt_Assign assignGhost lhsLvalue rhsTm) =
           interp_statement d (Suc fuel) state (CoreStmt_Assign assignGhost lhsLvalue rhsTm)"
     proof (cases "interp_writable_lvalue d fuel state lhsLvalue")
@@ -1427,7 +1405,7 @@ next
       hence rhs_noFuel: "interp_term d fuel state rhsTm \<noteq> Inl InsufficientFuel"
         using noFuel Inr by (auto split: sum.splits)
       hence IH_rhs: "\<forall>f'\<ge>fuel. interp_term d f' state rhsTm = interp_term d fuel state rhsTm"
-        using "32.IH"(2) Inr addrPath_eq by blast
+        using "31.IH"(2) Inr addrPath_eq by blast
       have "interp_writable_lvalue d f'' state lhsLvalue = Inr addrPath" using IH_lhs Inr f''_ge by metis
       moreover have "interp_term d f'' state rhsTm = interp_term d fuel state rhsTm"
         using IH_rhs f''_ge by metis
@@ -1437,7 +1415,7 @@ next
 next
   (* AssignCall.
      Resolve the lhs, run the call, apply the cast, store. *)
-  case (33 d fuel state assignGhost lhsLvalue castOpt fnName argTys argTms)
+  case (32 d fuel state assignGhost lhsLvalue castOpt fnName argTys argTms)
   then show ?case
   proof (intro allI impI)
     fix f' assume "f' \<ge> Suc fuel"
@@ -1450,7 +1428,7 @@ next
       by (auto split: sum.splits)
     hence IH_lhs: "\<forall>f'\<ge>fuel. interp_writable_lvalue d f' state lhsLvalue
                                = interp_writable_lvalue d fuel state lhsLvalue"
-      using "33.IH"(1) by blast
+      using "32.IH"(1) by blast
     show "interp_statement d f' state
             (CoreStmt_AssignCall assignGhost lhsLvalue castOpt fnName argTys argTms) =
           interp_statement d (Suc fuel) state
@@ -1466,7 +1444,7 @@ next
         using noFuel Inr by (auto split: sum.splits prod.splits)
       hence IH_fc: "\<forall>f'\<ge>fuel. interp_function_call d f' state fnName argTys argTms
                                 = interp_function_call d fuel state fnName argTys argTms"
-        using "33.IH"(2) addrPath_eq Inr by blast
+        using "32.IH"(2) addrPath_eq Inr by blast
       have "interp_writable_lvalue d f'' state lhsLvalue = Inr addrPath" using IH_lhs Inr f''_ge by metis
       moreover have "interp_function_call d f'' state fnName argTys argTms
                        = interp_function_call d fuel state fnName argTys argTms"
@@ -1476,7 +1454,7 @@ next
   qed
 next
   (* Swap *)
-  case (34 d fuel state swapGhost lhsTm rhsTm)
+  case (33 d fuel state swapGhost lhsTm rhsTm)
   then show ?case
   proof (intro allI impI)
     fix f' assume f'_ge: "f' \<ge> Suc fuel"
@@ -1488,7 +1466,7 @@ next
       by (auto split: sum.splits)
     hence IH_lhs: "\<forall>f'\<ge>fuel. interp_writable_lvalue d f' state lhsTm
                                = interp_writable_lvalue d fuel state lhsTm"
-      using "34.IH"(1) by blast
+      using "33.IH"(1) by blast
     show "interp_statement d f' state (CoreStmt_Swap swapGhost lhsTm rhsTm) =
           interp_statement d (Suc fuel) state (CoreStmt_Swap swapGhost lhsTm rhsTm)"
     proof (cases "interp_writable_lvalue d fuel state lhsTm")
@@ -1501,7 +1479,7 @@ next
         using noFuel by (auto split: sum.splits)
       hence IH_rhs: "\<forall>f'\<ge>fuel. interp_writable_lvalue d f' state rhsTm
                                  = interp_writable_lvalue d fuel state rhsTm"
-        using "34.IH"(2) Inr by blast
+        using "33.IH"(2) Inr by blast
       have "interp_writable_lvalue d f'' state lhsTm = Inr lhsLvalue" using IH_lhs Inr f''_ge by metis
       moreover have "interp_writable_lvalue d f'' state rhsTm = interp_writable_lvalue d fuel state rhsTm"
         using IH_rhs f''_ge by metis
@@ -1510,7 +1488,7 @@ next
   qed
 next
   (* Return *)
-  case (35 d fuel state tm)
+  case (34 d fuel state tm)
   then show ?case
   proof (intro allI impI)
     fix f' assume "f' \<ge> Suc fuel"
@@ -1520,7 +1498,7 @@ next
     hence sub_noFuel: "interp_term d fuel state tm \<noteq> Inl InsufficientFuel"
       by (auto split: sum.splits)
     hence IH: "\<forall>f'\<ge>fuel. interp_term d f' state tm = interp_term d fuel state tm"
-      using "35.IH" by blast
+      using "34.IH" by blast
     from IH f''_ge have "interp_term d f'' state tm = interp_term d fuel state tm"
       by metis
     with f'_eq show "interp_statement d f' state (CoreStmt_Return tm)
@@ -1529,7 +1507,7 @@ next
   qed
 next
   (* While *)
-  case (36 d fuel state whileGhost condTm invars decr bodyStmts)
+  case (35 d fuel state whileGhost condTm invars decr bodyStmts)
   then show ?case
   proof (intro allI impI)
     fix f' assume "f' \<ge> Suc fuel"
@@ -1540,7 +1518,7 @@ next
     hence "interp_term_list d fuel state invars \<noteq> Inl InsufficientFuel"
       by (auto split: sum.splits)
     hence invs_eq: "interp_term_list d f'' state invars = interp_term_list d fuel state invars"
-      using "36.IH"(1) f''_ge by blast
+      using "35.IH"(1) f''_ge by blast
     show "interp_statement d f' state (CoreStmt_While whileGhost condTm invars decr bodyStmts) =
           interp_statement d (Suc fuel) state (CoreStmt_While whileGhost condTm invars decr bodyStmts)"
     proof (cases "interp_term_list d fuel state invars")
@@ -1562,7 +1540,7 @@ next
         have cond_noFuel: "interp_term d fuel state condTm \<noteq> Inl InsufficientFuel"
           using noFuel by (auto split: sum.splits)
         hence IH_cond: "\<forall>f'\<ge>fuel. interp_term d f' state condTm = interp_term d fuel state condTm"
-          using "36.IH"(2)[OF Invs InvsOk] by blast
+          using "35.IH"(2)[OF Invs InvsOk] by blast
         show ?thesis
         proof (cases "interp_term d fuel state condTm")
           case (Inl err)
@@ -1591,7 +1569,7 @@ next
                 from decr0_noFuel dd have "interp_term d fuel state tm \<noteq> Inl InsufficientFuel"
                   by (auto split: sum.splits)
                 thus "\<forall>f'\<ge>fuel. interp_term d f' state tm = interp_term d fuel state tm"
-                  using "36.IH"(3)[OF Invs InvsOk] Inr CV_Bool True cond_fuel dd by metis
+                  using "35.IH"(3)[OF Invs InvsOk] Inr CV_Bool True cond_fuel dd by metis
               qed
               have decr0_eq: "eval_decreases (interp_term d f'' state) decr
                               = eval_decreases (interp_term d fuel state) decr"
@@ -1608,7 +1586,7 @@ next
                   using noFuel cond_fuel Decr0 by (auto split: sum.splits ExecResult.splits)
                 hence IH_body: "\<forall>f'\<ge>fuel. interp_statement_list d f' state bodyStmts
                                             = interp_statement_list d fuel state bodyStmts"
-                  using "36.IH"(4)[OF Invs InvsOk] Inr CV_Bool True cond_fuel Decr0 by metis
+                  using "35.IH"(4)[OF Invs InvsOk] Inr CV_Bool True cond_fuel Decr0 by metis
                 show ?thesis
                 proof (cases "interp_statement_list d fuel state bodyStmts")
                   case (Inl err)
@@ -1640,7 +1618,7 @@ next
                       have "interp_term d fuel ?rs tm \<noteq> Inl InsufficientFuel"
                         by (auto split: sum.splits)
                       thus "\<forall>f'\<ge>fuel. interp_term d f' ?rs tm = interp_term d fuel ?rs tm"
-                        using "36.IH"(5)[OF Invs InvsOk] Inr CV_Bool True cond_fuel Decr0
+                        using "35.IH"(5)[OF Invs InvsOk] Inr CV_Bool True cond_fuel Decr0
                               Body Continue body_fuel dd
                         by metis
                     qed
@@ -1674,7 +1652,7 @@ next
                                                     (CoreStmt_While whileGhost condTm invars decr bodyStmts) =
                                                   interp_statement d fuel ?rs
                                                     (CoreStmt_While whileGhost condTm invars decr bodyStmts)"
-                          using "36.IH"(6)[OF Invs InvsOk] Inr CV_Bool True cond_fuel Decr0
+                          using "35.IH"(6)[OF Invs InvsOk] Inr CV_Bool True cond_fuel Decr0
                                 Body Continue body_fuel Decr1 None
                           by metis
                         have "interp_statement d f'' ?rs
@@ -1738,7 +1716,7 @@ next
   qed
 next
   (* Match *)
-  case (37 d fuel state matchGhost scrutTm arms)
+  case (36 d fuel state matchGhost scrutTm arms)
   then show ?case
   proof (intro allI impI)
     fix f' assume "f' \<ge> Suc fuel"
@@ -1749,7 +1727,7 @@ next
     hence scrut_noFuel: "interp_term d fuel state scrutTm \<noteq> Inl InsufficientFuel"
       by (auto split: sum.splits)
     hence IH_scrut: "\<forall>f'\<ge>fuel. interp_term d f' state scrutTm = interp_term d fuel state scrutTm"
-      using "37.IH"(1) by blast
+      using "36.IH"(1) by blast
     show "interp_statement d f' state (CoreStmt_Match matchGhost scrutTm arms) =
           interp_statement d (Suc fuel) state (CoreStmt_Match matchGhost scrutTm arms)"
     proof (cases "interp_term d fuel state scrutTm")
@@ -1770,7 +1748,7 @@ next
           by (auto split: sum.splits)
         hence IH_arm: "\<forall>f'\<ge>fuel. interp_statement_list d f' state armStmts
                                    = interp_statement_list d fuel state armStmts"
-          using "37.IH"(2) \<open>interp_term d fuel state scrutTm = Inr scrutVal\<close> Inr by blast
+          using "36.IH"(2) \<open>interp_term d fuel state scrutTm = Inr scrutVal\<close> Inr by blast
         have "interp_term d f'' state scrutTm = Inr scrutVal"
           using IH_scrut \<open>interp_term d fuel state scrutTm = Inr scrutVal\<close> f''_ge by metis
         moreover have "interp_statement_list d f'' state armStmts
@@ -1783,7 +1761,7 @@ next
   qed
 next
   (* Assert with a condition: evaluates the condition *)
-  case (38 d fuel state condTm proofBody)
+  case (37 d fuel state condTm proofBody)
   then show ?case
   proof (intro allI impI)
     fix f' assume "f' \<ge> Suc fuel"
@@ -1794,7 +1772,7 @@ next
     hence sub_noFuel: "interp_term d fuel state condTm \<noteq> Inl InsufficientFuel"
       by (auto split: sum.splits)
     hence IH: "\<forall>f'\<ge>fuel. interp_term d f' state condTm = interp_term d fuel state condTm"
-      using "38.IH" by blast
+      using "37.IH" by blast
     from IH f''_ge have "interp_term d f'' state condTm = interp_term d fuel state condTm"
       by metis
     with f'_eq show "interp_statement d f' state (CoreStmt_Assert (Some condTm) proofBody)
@@ -1803,7 +1781,7 @@ next
   qed
 next
   (* Assert without a condition: always TypeError *)
-  case (39 d fuel state proofBody)
+  case (38 d fuel state proofBody)
   show ?case
   proof (intro allI impI)
     fix f' assume "f' \<ge> Suc fuel"
@@ -1814,7 +1792,7 @@ next
   qed
 next
   (* Assume: a no-op *)
-  case (40 d fuel state tm)
+  case (39 d fuel state tm)
   show ?case
   proof (intro allI impI)
     fix f' assume "f' \<ge> Suc fuel"
@@ -1825,7 +1803,7 @@ next
   qed
 next
   (* ShowHide: a no-op *)
-  case (41 d fuel state showOrHide name)
+  case (40 d fuel state showOrHide name)
   show ?case
   proof (intro allI impI)
     fix f' assume "f' \<ge> Suc fuel"
@@ -1836,11 +1814,11 @@ next
   qed
 next
   (* Obtain, depth = 0: always InsufficientFuel *)
-  case (42 fuel state varName varTy condTm)
+  case (41 fuel state varName varTy condTm)
   then show ?case by simp
 next
   (* Obtain, depth > 0: the result does not mention the fuel *)
-  case (43 d fuel state varName varTy condTm)
+  case (42 d fuel state varName varTy condTm)
   show ?case
   proof (intro allI impI)
     fix f' assume "f' \<ge> Suc fuel"
@@ -1851,7 +1829,7 @@ next
   qed
 next
   (* Fix: always TypeError *)
-  case (44 d fuel state varName varTy)
+  case (43 d fuel state varName varTy)
   show ?case
   proof (intro allI impI)
     fix f' assume "f' \<ge> Suc fuel"
@@ -1862,7 +1840,7 @@ next
   qed
 next
   (* Use: always TypeError *)
-  case (45 d fuel state tm)
+  case (44 d fuel state tm)
   show ?case
   proof (intro allI impI)
     fix f' assume "f' \<ge> Suc fuel"
@@ -1873,7 +1851,7 @@ next
   qed
 next
   (* Block - runs the body list in a fresh scope. *)
-  case (46 d fuel state body)
+  case (45 d fuel state body)
   then show ?case
   proof (intro allI impI)
     fix f' assume "f' \<ge> Suc fuel"
@@ -1884,7 +1862,7 @@ next
       by (auto split: sum.splits ExecResult.splits)
     hence IH_body: "\<forall>f'\<ge>fuel. interp_statement_list d f' state body
                                 = interp_statement_list d fuel state body"
-      using "46.IH" by blast
+      using "45.IH" by blast
     have body_f'': "interp_statement_list d f'' state body = interp_statement_list d fuel state body"
       using IH_body f''_ge by metis
     show "interp_statement d f' state (CoreStmt_Block body) =
@@ -1893,11 +1871,11 @@ next
   qed
 next
   (* interp_statement_list, fuel = 0 *)
-  case (47 d state stmts)
+  case (46 d state stmts)
   then show ?case by simp
 next
   (* interp_statement_list, empty list *)
-  case (48 d fuel state)
+  case (47 d fuel state)
   show ?case
   proof (intro allI impI)
     fix f' assume "f' \<ge> Suc fuel"
@@ -1907,7 +1885,7 @@ next
   qed
 next
   (* interp_statement_list, cons *)
-  case (49 d fuel state stmt stmts)
+  case (48 d fuel state stmt stmts)
   then show ?case
   proof (intro allI impI)
     fix f' assume "f' \<ge> Suc fuel"
@@ -1917,7 +1895,7 @@ next
     hence stmt_noFuel: "interp_statement d fuel state stmt \<noteq> Inl InsufficientFuel"
       by (auto split: sum.splits ExecResult.splits)
     hence IH_stmt: "\<forall>f'\<ge>fuel. interp_statement d f' state stmt = interp_statement d fuel state stmt"
-      using "49.IH"(1) by blast
+      using "48.IH"(1) by blast
     show "interp_statement_list d f' state (stmt # stmts) =
           interp_statement_list d (Suc fuel) state (stmt # stmts)"
     proof (cases "interp_statement d fuel state stmt")
@@ -1936,7 +1914,7 @@ next
           using noFuel by (auto split: sum.splits)
         hence IH_stmts: "\<forall>f'\<ge>fuel. interp_statement_list d f' state' stmts
                                      = interp_statement_list d fuel state' stmts"
-          using "49.IH"(2) Inr Continue by blast
+          using "48.IH"(2) Inr Continue by blast
         have "interp_statement d f'' state stmt = Inr (Continue state')"
           using IH_stmt stmt_fuel f''_ge by metis
         moreover have "interp_statement_list d f'' state' stmts = interp_statement_list d fuel state' stmts"
@@ -1954,11 +1932,11 @@ next
   qed
 next
   (* interp_function_call, fuel = 0 *)
-  case (50 d state fnName argTys argTms)
+  case (49 d state fnName argTys argTms)
   then show ?case by simp
 next
   (* interp_function_call, fuel > 0 *)
-  case (51 d fuel state fnName argTys argTms)
+  case (50 d fuel state fnName argTys argTms)
   then show ?case
   proof (intro allI impI)
     fix f' assume f'_ge: "f' \<ge> Suc fuel"
@@ -2004,12 +1982,12 @@ next
           have tm_IH: "\<forall>argTm \<in> set argTms.
                         interp_term d fuel state argTm \<noteq> Inl InsufficientFuel
                           \<longrightarrow> (\<forall>f' \<ge> fuel. interp_term d f' state argTm = interp_term d fuel state argTm)"
-            using "51.IH"(2) False Some tyLen by blast
+            using "50.IH"(2) False Some tyLen by blast
           have lv_IH: "\<forall>argTm \<in> set argTms.
                         interp_writable_lvalue d fuel state argTm \<noteq> Inl InsufficientFuel
                           \<longrightarrow> (\<forall>f' \<ge> fuel. interp_writable_lvalue d f' state argTm
                                                = interp_writable_lvalue d fuel state argTm)"
-            using "51.IH"(1) False Some tyLen by blast
+            using "50.IH"(1) False Some tyLen by blast
           have tm_agree: "\<forall>argTm \<in> set argTms.
                         interp_term d fuel state argTm \<noteq> Inl InsufficientFuel
                           \<longrightarrow> interp_term d f'' state argTm = interp_term d fuel state argTm"
@@ -2074,7 +2052,7 @@ next
             have IH_pre0: "\<And>s :: 'w InterpState. interp_term_list d fuel s (IF_Requires fn) \<noteq> Inl InsufficientFuel
                              \<Longrightarrow> \<forall>f'\<ge>fuel. interp_term_list d f' s (IF_Requires fn)
                                              = interp_term_list d fuel s (IF_Requires fn)"
-              by (rule "51.IH"(4)[OF Some False tyLen refl refl refl refl refl PreCall])
+              by (rule "50.IH"(4)[OF Some False tyLen refl refl refl refl refl PreCall])
             have IH_pre: "\<And>s :: 'w InterpState. interp_term_list d fuel s (IF_Requires fn) \<noteq> Inl InsufficientFuel
                             \<Longrightarrow> interp_term_list d f'' s (IF_Requires fn)
                                   = interp_term_list d fuel s (IF_Requires fn)"
@@ -2082,7 +2060,7 @@ next
             have IH_post0: "\<And>s :: 'w InterpState. interp_term_list d fuel s (IF_Ensures fn) \<noteq> Inl InsufficientFuel
                               \<Longrightarrow> \<forall>f'\<ge>fuel. interp_term_list d f' s (IF_Ensures fn)
                                               = interp_term_list d fuel s (IF_Ensures fn)"
-              by (rule "51.IH"(5)[OF Some False tyLen refl refl refl refl refl PreCall])
+              by (rule "50.IH"(5)[OF Some False tyLen refl refl refl refl refl PreCall])
             have IH_post: "\<And>s :: 'w InterpState. interp_term_list d fuel s (IF_Ensures fn) \<noteq> Inl InsufficientFuel
                              \<Longrightarrow> interp_term_list d f'' s (IF_Ensures fn)
                                    = interp_term_list d fuel s (IF_Ensures fn)"
@@ -2106,7 +2084,7 @@ next
                   using body_ne Inl by (auto split: sum.splits ExecResult.splits simp: call_body_def)
                 hence IH_body: "\<forall>f'\<ge>fuel. interp_statement_list d f' preCallState bodyStmts =
                                           interp_statement_list d fuel preCallState bodyStmts"
-                  using "51.IH"(3) Some False tyLen PreCall Inl by blast
+                  using "50.IH"(3) Some False tyLen PreCall Inl by blast
                 have "interp_statement_list d f'' preCallState bodyStmts =
                       interp_statement_list d fuel preCallState bodyStmts"
                   using IH_body f''_ge by metis
@@ -2569,28 +2547,14 @@ next
       by simp
   qed
 next
-  (* Old *)
-  case (21 d fuel state tm)
-  show ?case
-  proof (intro allI impI)
-    fix d' assume d'_ge: "d' \<ge> d"
-    have "interp_term d fuel state tm \<noteq> Inl InsufficientFuel"
-      using "21.prems" by simp
-    hence "interp_term d' fuel state tm = interp_term d fuel state tm"
-      using "21.IH" d'_ge by blast
-    thus "interp_term d' (Suc fuel) state (CoreTm_Old tm)
-            = interp_term d (Suc fuel) state (CoreTm_Old tm)"
-      by simp
-  qed
-next
   (* Default: default_value does not take a depth *)
-  case 22 then show ?case by simp
+  case 21 then show ?case by simp
 next
   (* interp_writable_lvalue, fuel = 0 *)
-  case 23 then show ?case by simp
+  case 22 then show ?case by simp
 next
   (* interp_writable_lvalue, fuel > 0 *)
-  case (24 d fuel state tm)
+  case (23 d fuel state tm)
   show ?case
   proof (intro allI impI)
     fix d' assume d'_ge: "d' \<ge> d"
@@ -2598,23 +2562,23 @@ next
     proof (cases tm)
       case (CoreTm_RecordProj tm' fldName)
       hence "interp_writable_lvalue d fuel state tm' \<noteq> Inl InsufficientFuel"
-        using "24.prems" by (auto split: sum.splits)
+        using "23.prems" by (auto split: sum.splits)
       hence "interp_writable_lvalue d' fuel state tm' = interp_writable_lvalue d fuel state tm'"
-        using "24.IH"(2) CoreTm_RecordProj d'_ge by blast
+        using "23.IH"(2) CoreTm_RecordProj d'_ge by blast
       thus ?thesis using CoreTm_RecordProj by simp
     next
       case (CoreTm_VariantProj tm' ctorName)
       hence "interp_writable_lvalue d fuel state tm' \<noteq> Inl InsufficientFuel"
-        using "24.prems" by (auto split: sum.splits)
+        using "23.prems" by (auto split: sum.splits)
       hence "interp_writable_lvalue d' fuel state tm' = interp_writable_lvalue d fuel state tm'"
-        using "24.IH"(3) CoreTm_VariantProj d'_ge by blast
+        using "23.IH"(3) CoreTm_VariantProj d'_ge by blast
       thus ?thesis using CoreTm_VariantProj by simp
     next
       case (CoreTm_ArrayProj tm' indexTms)
       hence "interp_writable_lvalue d fuel state tm' \<noteq> Inl InsufficientFuel"
-        using "24.prems" by (auto split: sum.splits)
+        using "23.prems" by (auto split: sum.splits)
       hence lv_eq: "interp_writable_lvalue d' fuel state tm' = interp_writable_lvalue d fuel state tm'"
-        using "24.IH"(4) CoreTm_ArrayProj d'_ge by blast
+        using "23.IH"(4) CoreTm_ArrayProj d'_ge by blast
       show ?thesis
       proof (cases "interp_writable_lvalue d fuel state tm'")
         case (Inl err)
@@ -2622,9 +2586,9 @@ next
       next
         case (Inr addrPath)
         hence "interp_term_list d fuel state indexTms \<noteq> Inl InsufficientFuel"
-          using "24.prems" CoreTm_ArrayProj by (auto split: sum.splits)
+          using "23.prems" CoreTm_ArrayProj by (auto split: sum.splits)
         hence IH_idx: "\<forall>d'\<ge>d. interp_term_list d' fuel state indexTms = interp_term_list d fuel state indexTms"
-          using "24.IH"(5) CoreTm_ArrayProj Inr
+          using "23.IH"(5) CoreTm_ArrayProj Inr
           by (metis prod.exhaust)
         hence "interp_term_list d' fuel state indexTms = interp_term_list d fuel state indexTms"
           using d'_ge by blast
@@ -2636,29 +2600,29 @@ next
       proof (cases targetTy)
         case (CoreTy_Array elemTy dims)
         hence "interp_writable_lvalue d fuel state tm' \<noteq> Inl InsufficientFuel"
-          using "24.prems" CoreTm_Cast by (auto split: sum.splits)
+          using "23.prems" CoreTm_Cast by (auto split: sum.splits)
         hence "interp_writable_lvalue d' fuel state tm' = interp_writable_lvalue d fuel state tm'"
-          using "24.IH"(1) CoreTm_Cast CoreTy_Array d'_ge by blast
+          using "23.IH"(1) CoreTm_Cast CoreTy_Array d'_ge by blast
         thus ?thesis using CoreTm_Cast CoreTy_Array by simp
       qed (simp_all add: CoreTm_Cast)
     qed simp_all
   qed
 next
   (* interp_term_list, fuel = 0 *)
-  case 25 then show ?case by simp
+  case 24 then show ?case by simp
 next
   (* interp_term_list, empty list *)
-  case 26 then show ?case by simp
+  case 25 then show ?case by simp
 next
   (* interp_term_list, cons *)
-  case (27 d fuel state tm tms)
+  case (26 d fuel state tm tms)
   show ?case
   proof (intro allI impI)
     fix d' assume d'_ge: "d' \<ge> d"
     have "interp_term d fuel state tm \<noteq> Inl InsufficientFuel"
-      using "27.prems" by (auto split: sum.splits)
+      using "26.prems" by (auto split: sum.splits)
     hence tm_eq: "interp_term d' fuel state tm = interp_term d fuel state tm"
-      using "27.IH"(1) d'_ge by blast
+      using "26.IH"(1) d'_ge by blast
     show "interp_term_list d' (Suc fuel) state (tm # tms) = interp_term_list d (Suc fuel) state (tm # tms)"
     proof (cases "interp_term d fuel state tm")
       case (Inl err)
@@ -2666,40 +2630,40 @@ next
     next
       case (Inr val)
       hence "interp_term_list d fuel state tms \<noteq> Inl InsufficientFuel"
-        using "27.prems" by (auto split: sum.splits)
+        using "26.prems" by (auto split: sum.splits)
       hence "interp_term_list d' fuel state tms = interp_term_list d fuel state tms"
-        using "27.IH"(2) Inr d'_ge by blast
+        using "26.IH"(2) Inr d'_ge by blast
       thus ?thesis using Inr tm_eq by simp
     qed
   qed
 next
   (* interp_statement, fuel = 0 *)
-  case 28 then show ?case by simp
+  case 27 then show ?case by simp
 next
   (* VarDecl Var *)
-  case (29 d fuel state declGhost varName varTy initialTm)
+  case (28 d fuel state declGhost varName varTy initialTm)
   show ?case
   proof (intro allI impI)
     fix d' assume d'_ge: "d' \<ge> d"
     have "interp_term d fuel state initialTm \<noteq> Inl InsufficientFuel"
-      using "29.prems" by (auto split: sum.splits prod.splits)
+      using "28.prems" by (auto split: sum.splits prod.splits)
     hence "interp_term d' fuel state initialTm = interp_term d fuel state initialTm"
-      using "29.IH"(1) d'_ge by blast
+      using "28.IH"(1) d'_ge by blast
     thus "interp_statement d' (Suc fuel) state (CoreStmt_VarDecl declGhost varName Var varTy initialTm) =
           interp_statement d (Suc fuel) state (CoreStmt_VarDecl declGhost varName Var varTy initialTm)"
       by simp
   qed
 next
   (* VarDeclCall *)
-  case (30 d fuel state declGhost varName varTy castOpt fnName argTys argTms)
+  case (29 d fuel state declGhost varName varTy castOpt fnName argTys argTms)
   show ?case
   proof (intro allI impI)
     fix d' assume d'_ge: "d' \<ge> d"
     have "interp_function_call d fuel state fnName argTys argTms \<noteq> Inl InsufficientFuel"
-      using "30.prems" by (auto split: sum.splits prod.splits)
+      using "29.prems" by (auto split: sum.splits prod.splits)
     hence "interp_function_call d' fuel state fnName argTys argTms
              = interp_function_call d fuel state fnName argTys argTms"
-      using "30.IH" d'_ge by blast
+      using "29.IH" d'_ge by blast
     thus "interp_statement d' (Suc fuel) state
             (CoreStmt_VarDeclCall declGhost varName varTy castOpt fnName argTys argTms) =
           interp_statement d (Suc fuel) state
@@ -2708,7 +2672,7 @@ next
   qed
 next
   (* VarDecl Ref *)
-  case (31 d fuel state declGhost varName varTy lvalueTm)
+  case (30 d fuel state declGhost varName varTy lvalueTm)
   show ?case
   proof (intro allI impI)
     fix d' assume d'_ge: "d' \<ge> d"
@@ -2726,9 +2690,9 @@ next
         case True
         (* Const or global: both sides use interp_term *)
         have tm_noFuel: "interp_term d fuel state lvalueTm \<noteq> Inl InsufficientFuel"
-          using "31.prems" Some True by (auto split: sum.splits prod.splits)
+          using "30.prems" Some True by (auto split: sum.splits prod.splits)
         have IH_tm: "\<forall>d'\<ge>d. interp_term d' fuel state lvalueTm = interp_term d fuel state lvalueTm"
-          using "31.IH" Some True tm_noFuel by blast
+          using "30.IH" Some True tm_noFuel by blast
         from IH_tm d'_ge
         have "interp_term d' fuel state lvalueTm = interp_term d fuel state lvalueTm" by metis
         then show ?thesis using Some True by simp
@@ -2736,10 +2700,10 @@ next
         case False
         (* Not const: both sides use interp_writable_lvalue *)
         have lv_noFuel: "interp_writable_lvalue d fuel state lvalueTm \<noteq> Inl InsufficientFuel"
-          using "31.prems" Some False by (auto split: sum.splits)
+          using "30.prems" Some False by (auto split: sum.splits)
         have IH_lv: "\<forall>d'\<ge>d. interp_writable_lvalue d' fuel state lvalueTm
                                 = interp_writable_lvalue d fuel state lvalueTm"
-          using "31.IH" Some False lv_noFuel by blast
+          using "30.IH" Some False lv_noFuel by blast
         from IH_lv d'_ge
         have "interp_writable_lvalue d' fuel state lvalueTm = interp_writable_lvalue d fuel state lvalueTm"
           by metis
@@ -2749,15 +2713,15 @@ next
   qed
 next
   (* Assign *)
-  case (32 d fuel state assignGhost lhsLvalue rhsTm)
+  case (31 d fuel state assignGhost lhsLvalue rhsTm)
   show ?case
   proof (intro allI impI)
     fix d' assume d'_ge: "d' \<ge> d"
     have "interp_writable_lvalue d fuel state lhsLvalue \<noteq> Inl InsufficientFuel"
-      using "32.prems" by (auto split: sum.splits)
+      using "31.prems" by (auto split: sum.splits)
     hence lhs_eq: "interp_writable_lvalue d' fuel state lhsLvalue
                      = interp_writable_lvalue d fuel state lhsLvalue"
-      using "32.IH"(1) d'_ge by blast
+      using "31.IH"(1) d'_ge by blast
     show "interp_statement d' (Suc fuel) state (CoreStmt_Assign assignGhost lhsLvalue rhsTm) =
           interp_statement d (Suc fuel) state (CoreStmt_Assign assignGhost lhsLvalue rhsTm)"
     proof (cases "interp_writable_lvalue d fuel state lhsLvalue")
@@ -2767,23 +2731,23 @@ next
       case (Inr addrPath)
       obtain addr path where addrPath_eq: "addrPath = (addr, path)" by (cases addrPath)
       hence "interp_term d fuel state rhsTm \<noteq> Inl InsufficientFuel"
-        using "32.prems" Inr by (auto split: sum.splits)
+        using "31.prems" Inr by (auto split: sum.splits)
       hence "interp_term d' fuel state rhsTm = interp_term d fuel state rhsTm"
-        using "32.IH"(2) Inr addrPath_eq d'_ge by blast
+        using "31.IH"(2) Inr addrPath_eq d'_ge by blast
       thus ?thesis using Inr addrPath_eq lhs_eq by simp
     qed
   qed
 next
   (* AssignCall *)
-  case (33 d fuel state assignGhost lhsLvalue castOpt fnName argTys argTms)
+  case (32 d fuel state assignGhost lhsLvalue castOpt fnName argTys argTms)
   show ?case
   proof (intro allI impI)
     fix d' assume d'_ge: "d' \<ge> d"
     have "interp_writable_lvalue d fuel state lhsLvalue \<noteq> Inl InsufficientFuel"
-      using "33.prems" by (auto split: sum.splits)
+      using "32.prems" by (auto split: sum.splits)
     hence lhs_eq: "interp_writable_lvalue d' fuel state lhsLvalue
                      = interp_writable_lvalue d fuel state lhsLvalue"
-      using "33.IH"(1) d'_ge by blast
+      using "32.IH"(1) d'_ge by blast
     show "interp_statement d' (Suc fuel) state
             (CoreStmt_AssignCall assignGhost lhsLvalue castOpt fnName argTys argTms) =
           interp_statement d (Suc fuel) state
@@ -2795,24 +2759,24 @@ next
       case (Inr addrPath)
       obtain addr path where addrPath_eq: "addrPath = (addr, path)" by (cases addrPath)
       hence "interp_function_call d fuel state fnName argTys argTms \<noteq> Inl InsufficientFuel"
-        using "33.prems" Inr by (auto split: sum.splits prod.splits)
+        using "32.prems" Inr by (auto split: sum.splits prod.splits)
       hence "interp_function_call d' fuel state fnName argTys argTms
                = interp_function_call d fuel state fnName argTys argTms"
-        using "33.IH"(2) addrPath_eq Inr d'_ge by blast
+        using "32.IH"(2) addrPath_eq Inr d'_ge by blast
       thus ?thesis using Inr addrPath_eq lhs_eq by (simp split: sum.splits prod.splits)
     qed
   qed
 next
   (* Swap *)
-  case (34 d fuel state swapGhost lhsTm rhsTm)
+  case (33 d fuel state swapGhost lhsTm rhsTm)
   show ?case
   proof (intro allI impI)
     fix d' assume d'_ge: "d' \<ge> d"
     have "interp_writable_lvalue d fuel state lhsTm \<noteq> Inl InsufficientFuel"
-      using "34.prems" by (auto split: sum.splits)
+      using "33.prems" by (auto split: sum.splits)
     hence lhs_eq: "interp_writable_lvalue d' fuel state lhsTm
                      = interp_writable_lvalue d fuel state lhsTm"
-      using "34.IH"(1) d'_ge by blast
+      using "33.IH"(1) d'_ge by blast
     show "interp_statement d' (Suc fuel) state (CoreStmt_Swap swapGhost lhsTm rhsTm) =
           interp_statement d (Suc fuel) state (CoreStmt_Swap swapGhost lhsTm rhsTm)"
     proof (cases "interp_writable_lvalue d fuel state lhsTm")
@@ -2821,36 +2785,36 @@ next
     next
       case (Inr lhsLvalue)
       hence "interp_writable_lvalue d fuel state rhsTm \<noteq> Inl InsufficientFuel"
-        using "34.prems" by (auto split: sum.splits)
+        using "33.prems" by (auto split: sum.splits)
       hence "interp_writable_lvalue d' fuel state rhsTm = interp_writable_lvalue d fuel state rhsTm"
-        using "34.IH"(2) Inr d'_ge by blast
+        using "33.IH"(2) Inr d'_ge by blast
       thus ?thesis using Inr lhs_eq by simp
     qed
   qed
 next
   (* Return *)
-  case (35 d fuel state tm)
+  case (34 d fuel state tm)
   show ?case
   proof (intro allI impI)
     fix d' assume d'_ge: "d' \<ge> d"
     have "interp_term d fuel state tm \<noteq> Inl InsufficientFuel"
-      using "35.prems" by (auto split: sum.splits)
+      using "34.prems" by (auto split: sum.splits)
     hence "interp_term d' fuel state tm = interp_term d fuel state tm"
-      using "35.IH" d'_ge by blast
+      using "34.IH" d'_ge by blast
     thus "interp_statement d' (Suc fuel) state (CoreStmt_Return tm)
             = interp_statement d (Suc fuel) state (CoreStmt_Return tm)"
       by simp
   qed
 next
   (* While *)
-  case (36 d fuel state whileGhost condTm invars decr bodyStmts)
+  case (35 d fuel state whileGhost condTm invars decr bodyStmts)
   show ?case
   proof (intro allI impI)
     fix d' assume d'_ge: "d' \<ge> d"
     have "interp_term_list d fuel state invars \<noteq> Inl InsufficientFuel"
-      using "36.prems" by (auto split: sum.splits)
+      using "35.prems" by (auto split: sum.splits)
     hence invs_eq: "interp_term_list d' fuel state invars = interp_term_list d fuel state invars"
-      using "36.IH"(1) d'_ge by blast
+      using "35.IH"(1) d'_ge by blast
     show "interp_statement d' (Suc fuel) state (CoreStmt_While whileGhost condTm invars decr bodyStmts) =
           interp_statement d (Suc fuel) state (CoreStmt_While whileGhost condTm invars decr bodyStmts)"
     proof (cases "interp_term_list d fuel state invars")
@@ -2870,9 +2834,9 @@ next
           using invs_eq Invs by simp
         note [simp] = Invs InvsOk invs_d'
         have "interp_term d fuel state condTm \<noteq> Inl InsufficientFuel"
-          using "36.prems" by (auto split: sum.splits)
+          using "35.prems" by (auto split: sum.splits)
         hence cond_eq: "interp_term d' fuel state condTm = interp_term d fuel state condTm"
-          using "36.IH"(2)[OF Invs InvsOk] d'_ge by blast
+          using "35.IH"(2)[OF Invs InvsOk] d'_ge by blast
         show ?thesis
         proof (cases "interp_term d fuel state condTm")
           case (Inl err)
@@ -2892,7 +2856,7 @@ next
               \<comment> \<open>The decreases-term before the body, at both depths. \<close>
               have decr0_noFuel: "eval_decreases (interp_term d fuel state) decr
                                     \<noteq> Inl InsufficientFuel"
-                using "36.prems" cond_d by (auto split: sum.splits)
+                using "35.prems" cond_d by (auto split: sum.splits)
               have IH_decr0: "\<And>tm. decr = Some tm \<Longrightarrow>
                   \<forall>d'\<ge>d. interp_term d' fuel state tm = interp_term d fuel state tm"
               proof -
@@ -2900,7 +2864,7 @@ next
                 from decr0_noFuel dd have "interp_term d fuel state tm \<noteq> Inl InsufficientFuel"
                   by (auto split: sum.splits)
                 thus "\<forall>d'\<ge>d. interp_term d' fuel state tm = interp_term d fuel state tm"
-                  using "36.IH"(3)[OF Invs InvsOk] Inr CV_Bool True cond_d dd by metis
+                  using "35.IH"(3)[OF Invs InvsOk] Inr CV_Bool True cond_d dd by metis
               qed
               have decr0_eq: "eval_decreases (interp_term d' fuel state) decr
                               = eval_decreases (interp_term d fuel state) decr"
@@ -2914,10 +2878,10 @@ next
                 have decr0_d': "eval_decreases (interp_term d' fuel state) decr = Inr decrVal"
                   using decr0_eq Decr0 by simp
                 have body_noFuel: "interp_statement_list d fuel state bodyStmts \<noteq> Inl InsufficientFuel"
-                  using "36.prems" cond_d Decr0 by (auto split: sum.splits ExecResult.splits)
+                  using "35.prems" cond_d Decr0 by (auto split: sum.splits ExecResult.splits)
                 hence IH_body: "\<forall>d'\<ge>d. interp_statement_list d' fuel state bodyStmts
                                           = interp_statement_list d fuel state bodyStmts"
-                  using "36.IH"(4)[OF Invs InvsOk] Inr CV_Bool True cond_d Decr0 by metis
+                  using "35.IH"(4)[OF Invs InvsOk] Inr CV_Bool True cond_d Decr0 by metis
                 hence body_eq: "interp_statement_list d' fuel state bodyStmts
                                   = interp_statement_list d fuel state bodyStmts"
                   using d'_ge by blast
@@ -2938,7 +2902,7 @@ next
                     \<comment> \<open>The decreases-term after the body, at both depths. \<close>
                     have decr1_noFuel: "eval_decreases (interp_term d fuel ?rs) decr
                                           \<noteq> Inl InsufficientFuel"
-                      using "36.prems" cond_d Decr0 body_d
+                      using "35.prems" cond_d Decr0 body_d
                       by (auto split: sum.splits option.splits)
                     have IH_decr1: "\<And>tm. decr = Some tm \<Longrightarrow>
                         \<forall>d'\<ge>d. interp_term d' fuel ?rs tm = interp_term d fuel ?rs tm"
@@ -2948,7 +2912,7 @@ next
                       have "interp_term d fuel ?rs tm \<noteq> Inl InsufficientFuel"
                         by (auto split: sum.splits)
                       thus "\<forall>d'\<ge>d. interp_term d' fuel ?rs tm = interp_term d fuel ?rs tm"
-                        using "36.IH"(5)[OF Invs InvsOk] Inr CV_Bool True cond_d Decr0
+                        using "35.IH"(5)[OF Invs InvsOk] Inr CV_Bool True cond_d Decr0
                               Body Continue body_d dd
                         by metis
                     qed
@@ -2975,12 +2939,12 @@ next
                         have loop_noFuel: "interp_statement d fuel ?rs
                                               (CoreStmt_While whileGhost condTm invars decr bodyStmts)
                                             \<noteq> Inl InsufficientFuel"
-                          using "36.prems" cond_d Decr0 body_d Decr1 None by auto
+                          using "35.prems" cond_d Decr0 body_d Decr1 None by auto
                         hence IH_loop: "\<forall>d'\<ge>d. interp_statement d' fuel ?rs
                                                     (CoreStmt_While whileGhost condTm invars decr bodyStmts) =
                                                   interp_statement d fuel ?rs
                                                     (CoreStmt_While whileGhost condTm invars decr bodyStmts)"
-                          using "36.IH"(6)[OF Invs InvsOk] Inr CV_Bool True cond_d Decr0
+                          using "35.IH"(6)[OF Invs InvsOk] Inr CV_Bool True cond_d Decr0
                                 Body Continue body_d Decr1 None
                           by metis
                         have "interp_statement d' fuel ?rs
@@ -3018,14 +2982,14 @@ next
   qed
 next
   (* Match *)
-  case (37 d fuel state matchGhost scrutTm arms)
+  case (36 d fuel state matchGhost scrutTm arms)
   show ?case
   proof (intro allI impI)
     fix d' assume d'_ge: "d' \<ge> d"
     have "interp_term d fuel state scrutTm \<noteq> Inl InsufficientFuel"
-      using "37.prems" by (auto split: sum.splits)
+      using "36.prems" by (auto split: sum.splits)
     hence scrut_eq: "interp_term d' fuel state scrutTm = interp_term d fuel state scrutTm"
-      using "37.IH"(1) d'_ge by blast
+      using "36.IH"(1) d'_ge by blast
     show "interp_statement d' (Suc fuel) state (CoreStmt_Match matchGhost scrutTm arms) =
           interp_statement d (Suc fuel) state (CoreStmt_Match matchGhost scrutTm arms)"
     proof (cases "interp_term d fuel state scrutTm")
@@ -3040,43 +3004,43 @@ next
       next
         case (Inr armStmts)
         hence "interp_statement_list d fuel state armStmts \<noteq> Inl InsufficientFuel"
-          using "37.prems" Scrut by (auto split: sum.splits)
+          using "36.prems" Scrut by (auto split: sum.splits)
         hence "interp_statement_list d' fuel state armStmts
                  = interp_statement_list d fuel state armStmts"
-          using "37.IH"(2) Scrut Inr d'_ge by blast
+          using "36.IH"(2) Scrut Inr d'_ge by blast
         thus ?thesis using Scrut Inr scrut_eq by simp
       qed
     qed
   qed
 next
   (* Assert with a condition: evaluates the condition *)
-  case (38 d fuel state condTm proofBody)
+  case (37 d fuel state condTm proofBody)
   show ?case
   proof (intro allI impI)
     fix d' assume d'_ge: "d' \<ge> d"
     have "interp_term d fuel state condTm \<noteq> Inl InsufficientFuel"
-      using "38.prems" by (auto split: sum.splits)
+      using "37.prems" by (auto split: sum.splits)
     hence "interp_term d' fuel state condTm = interp_term d fuel state condTm"
-      using "38.IH" d'_ge by blast
+      using "37.IH" d'_ge by blast
     thus "interp_statement d' (Suc fuel) state (CoreStmt_Assert (Some condTm) proofBody)
             = interp_statement d (Suc fuel) state (CoreStmt_Assert (Some condTm) proofBody)"
       by simp
   qed
 next
   (* Assert without a condition: always TypeError *)
-  case 39 then show ?case by simp
+  case 38 then show ?case by simp
 next
   (* Assume: a no-op *)
-  case 40 then show ?case by simp
+  case 39 then show ?case by simp
 next
   (* ShowHide: a no-op *)
-  case 41 then show ?case by simp
+  case 40 then show ?case by simp
 next
   (* Obtain, depth = 0: always InsufficientFuel *)
-  case 42 then show ?case by simp
+  case 41 then show ?case by simp
 next
   (* Obtain, depth > 0: as for Quantifier *)
-  case (43 d fuel state varName varTy condTm)
+  case (42 d fuel state varName varTy condTm)
   show ?case
   proof (intro allI impI)
     fix d' assume "d' \<ge> Suc d"
@@ -3085,14 +3049,14 @@ next
     let ?vals = "values_of_type state (apply_subst (IS_TyArgs state) varTy)"
     let ?r = "\<lambda>dd v. converged (\<lambda>m. interp_term dd m (bind_mutable_local varName v state) condTm)"
     have ne: "choose_witness ?vals (?r d) \<noteq> Inl InsufficientFuel"
-      using "43.prems" by (auto split: sum.splits)
+      using "42.prems" by (auto split: sum.splits)
     have agree: "?r d'' v = ?r d v" if "?r d v \<noteq> Inl InsufficientFuel" for v
     proof (rule converged_agree[OF _ _ that])
       fix m
       assume "interp_term d m (bind_mutable_local varName v state) condTm \<noteq> Inl InsufficientFuel"
       thus "interp_term d'' m (bind_mutable_local varName v state) condTm
               = interp_term d m (bind_mutable_local varName v state) condTm"
-        using "43.IH" d''_ge by blast
+        using "42.IH" d''_ge by blast
     next
       fix m m'
       assume "interp_term d'' m (bind_mutable_local varName v state) condTm \<noteq> Inl InsufficientFuel"
@@ -3112,40 +3076,40 @@ next
   qed
 next
   (* Fix: always TypeError *)
-  case 44 then show ?case by simp
+  case 43 then show ?case by simp
 next
   (* Use: always TypeError *)
-  case 45 then show ?case by simp
+  case 44 then show ?case by simp
 next
   (* Block *)
-  case (46 d fuel state body)
+  case (45 d fuel state body)
   show ?case
   proof (intro allI impI)
     fix d' assume d'_ge: "d' \<ge> d"
     have "interp_statement_list d fuel state body \<noteq> Inl InsufficientFuel"
-      using "46.prems" by (auto split: sum.splits ExecResult.splits)
+      using "45.prems" by (auto split: sum.splits ExecResult.splits)
     hence "interp_statement_list d' fuel state body = interp_statement_list d fuel state body"
-      using "46.IH" d'_ge by blast
+      using "45.IH" d'_ge by blast
     thus "interp_statement d' (Suc fuel) state (CoreStmt_Block body) =
           interp_statement d (Suc fuel) state (CoreStmt_Block body)"
       by simp
   qed
 next
   (* interp_statement_list, fuel = 0 *)
-  case 47 then show ?case by simp
+  case 46 then show ?case by simp
 next
   (* interp_statement_list, empty list *)
-  case 48 then show ?case by simp
+  case 47 then show ?case by simp
 next
   (* interp_statement_list, cons *)
-  case (49 d fuel state stmt stmts)
+  case (48 d fuel state stmt stmts)
   show ?case
   proof (intro allI impI)
     fix d' assume d'_ge: "d' \<ge> d"
     have "interp_statement d fuel state stmt \<noteq> Inl InsufficientFuel"
-      using "49.prems" by (auto split: sum.splits ExecResult.splits)
+      using "48.prems" by (auto split: sum.splits ExecResult.splits)
     hence stmt_eq: "interp_statement d' fuel state stmt = interp_statement d fuel state stmt"
-      using "49.IH"(1) d'_ge by blast
+      using "48.IH"(1) d'_ge by blast
     show "interp_statement_list d' (Suc fuel) state (stmt # stmts) =
           interp_statement_list d (Suc fuel) state (stmt # stmts)"
     proof (cases "interp_statement d fuel state stmt")
@@ -3159,9 +3123,9 @@ next
         have stmt_d: "interp_statement d fuel state stmt = Inr (Continue state')"
           using Inr Continue by simp
         hence "interp_statement_list d fuel state' stmts \<noteq> Inl InsufficientFuel"
-          using "49.prems" by (auto split: sum.splits)
+          using "48.prems" by (auto split: sum.splits)
         hence "interp_statement_list d' fuel state' stmts = interp_statement_list d fuel state' stmts"
-          using "49.IH"(2) Inr Continue d'_ge by blast
+          using "48.IH"(2) Inr Continue d'_ge by blast
         thus ?thesis using stmt_d stmt_eq by simp
       next
         case (Return state' retVal)
@@ -3173,14 +3137,14 @@ next
   qed
 next
   (* interp_function_call, fuel = 0 *)
-  case 50 then show ?case by simp
+  case 49 then show ?case by simp
 next
   (* interp_function_call, fuel > 0 *)
-  case (51 d fuel state fnName argTys argTms)
+  case (50 d fuel state fnName argTys argTms)
   show ?case
   proof (intro allI impI)
     fix d' assume d'_ge: "d' \<ge> d"
-    note noFuel = "51.prems"
+    note noFuel = "50.prems"
 
     show "interp_function_call d' (Suc fuel) state fnName argTys argTms =
           interp_function_call d (Suc fuel) state fnName argTys argTms"
@@ -3219,12 +3183,12 @@ next
           have tm_IH: "\<forall>argTm \<in> set argTms.
                         interp_term d fuel state argTm \<noteq> Inl InsufficientFuel
                           \<longrightarrow> (\<forall>d' \<ge> d. interp_term d' fuel state argTm = interp_term d fuel state argTm)"
-            using "51.IH"(2) False Some tyLen by blast
+            using "50.IH"(2) False Some tyLen by blast
           have lv_IH: "\<forall>argTm \<in> set argTms.
                         interp_writable_lvalue d fuel state argTm \<noteq> Inl InsufficientFuel
                           \<longrightarrow> (\<forall>d' \<ge> d. interp_writable_lvalue d' fuel state argTm
                                             = interp_writable_lvalue d fuel state argTm)"
-            using "51.IH"(1) False Some tyLen by blast
+            using "50.IH"(1) False Some tyLen by blast
           have tm_agree: "\<forall>argTm \<in> set argTms.
                         interp_term d fuel state argTm \<noteq> Inl InsufficientFuel
                           \<longrightarrow> interp_term d' fuel state argTm = interp_term d fuel state argTm"
@@ -3289,7 +3253,7 @@ next
             have IH_pre0: "\<And>s :: 'w InterpState. interp_term_list d fuel s (IF_Requires fn) \<noteq> Inl InsufficientFuel
                              \<Longrightarrow> \<forall>d'\<ge>d. interp_term_list d' fuel s (IF_Requires fn)
                                           = interp_term_list d fuel s (IF_Requires fn)"
-              by (rule "51.IH"(4)[OF Some False tyLen refl refl refl refl refl PreCall])
+              by (rule "50.IH"(4)[OF Some False tyLen refl refl refl refl refl PreCall])
             have IH_pre: "\<And>s :: 'w InterpState. interp_term_list d fuel s (IF_Requires fn) \<noteq> Inl InsufficientFuel
                             \<Longrightarrow> interp_term_list d' fuel s (IF_Requires fn)
                                   = interp_term_list d fuel s (IF_Requires fn)"
@@ -3297,7 +3261,7 @@ next
             have IH_post0: "\<And>s :: 'w InterpState. interp_term_list d fuel s (IF_Ensures fn) \<noteq> Inl InsufficientFuel
                               \<Longrightarrow> \<forall>d'\<ge>d. interp_term_list d' fuel s (IF_Ensures fn)
                                            = interp_term_list d fuel s (IF_Ensures fn)"
-              by (rule "51.IH"(5)[OF Some False tyLen refl refl refl refl refl PreCall])
+              by (rule "50.IH"(5)[OF Some False tyLen refl refl refl refl refl PreCall])
             have IH_post: "\<And>s :: 'w InterpState. interp_term_list d fuel s (IF_Ensures fn) \<noteq> Inl InsufficientFuel
                              \<Longrightarrow> interp_term_list d' fuel s (IF_Ensures fn)
                                    = interp_term_list d fuel s (IF_Ensures fn)"
@@ -3321,7 +3285,7 @@ next
                   using body_ne Inl by (auto split: sum.splits ExecResult.splits simp: call_body_def)
                 hence IH_body: "\<forall>d'\<ge>d. interp_statement_list d' fuel preCallState bodyStmts =
                                         interp_statement_list d fuel preCallState bodyStmts"
-                  using "51.IH"(3) Some False tyLen PreCall Inl by blast
+                  using "50.IH"(3) Some False tyLen PreCall Inl by blast
                 have "interp_statement_list d' fuel preCallState bodyStmts =
                       interp_statement_list d fuel preCallState bodyStmts"
                   using IH_body d'_ge by metis

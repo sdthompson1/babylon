@@ -1600,24 +1600,6 @@ next
     ultimately show ?thesis using Ghost ty_eq by simp
   qed
 next
-  case (CoreTm_Old tm)
-  \<comment> \<open>Old is a ghost-only pass-through. The NotGhost equation reduces to None,
-      so the precondition forces ghost = Ghost. The IH on tm closes the case. \<close>
-  show ?case
-  proof (cases ghost)
-    case NotGhost
-    with CoreTm_Old.prems(1) show ?thesis by simp
-  next
-    case Ghost
-    with CoreTm_Old.prems(1) have inner: "core_term_type calleeEnv Ghost tm = Some ty" by simp
-    from CoreTm_Old.IH[OF inner CoreTm_Old.prems(2,3,4)]
-         CoreTm_Old.prems(5) CoreTm_Old.prems(6) CoreTm_Old.prems(7)
-    have "core_term_type (apply_subst_to_callee_env subst callerEnv calleeEnv) Ghost
-                          (apply_subst_to_term subst tm)
-            = Some (apply_subst subst ty)" by simp
-    with Ghost show ?thesis by simp
-  qed
-next
   case (CoreTm_Default tyD)
   \<comment> \<open>Default ty: result type is ty itself. After substitution, the well-kindedness
       and (if NotGhost) runtime-ness transfer through to the substituted env. \<close>

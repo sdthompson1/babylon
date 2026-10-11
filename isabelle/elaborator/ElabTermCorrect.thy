@@ -3373,19 +3373,7 @@ next
 next
   \<comment> \<open>Case: BabTm_Old\<close>
   case (19 env elabEnv ghost loc tm next_mv)
-  let ?env' = "extend_env_with_tyvars env ghost next_mv next_mv'"
-  from "19.prems"(1) have ghost_eq: "ghost = Ghost"
-    by (auto split: if_splits)
-  from "19.prems"(1) ghost_eq obtain newSubTm subTy next_mv_sub where
-    elab_sub: "elab_term env elabEnv ghost tm next_mv = Inr (newSubTm, subTy, next_mv_sub)" and
-    newTm_eq: "newTm = CoreTm_Old newSubTm" and
-    ty_eq: "ty = subTy" and
-    next_mv_eq: "next_mv' = next_mv_sub"
-    by (auto split: sum.splits)
-  have ih: "core_term_type ?env' ghost newSubTm = Some subTy"
-    using "19.IH" ghost_eq elab_sub next_mv_eq "19.prems"(2,3,4) by simp
-  show ?case
-    using newTm_eq ty_eq ghost_eq ih by simp
+  from "19.prems"(1) show ?case by simp
 next
   \<comment> \<open>Case: elab_term_list empty\<close>
   case (20 env elabEnv ghost next_mv)

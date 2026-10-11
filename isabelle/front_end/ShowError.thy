@@ -436,7 +436,9 @@ definition type_error_to_string :: "TypeError \<Rightarrow> string" where
     | TyErr_DependencyAnalysisUnexpectedFailure loc \<Rightarrow>
         loc_prefix loc @ ''internal compiler error: dependency analysis failed''
     | TyErr_IllKindedProofGoal loc \<Rightarrow>
-        loc_prefix loc @ ''internal compiler error: ill-kinded proof goal'')"
+        loc_prefix loc @ ''internal compiler error: ill-kinded proof goal''
+    | TyErr_UnexpectedOld loc \<Rightarrow>
+        loc_prefix loc @ ''internal compiler error: unexpected old expression'')"
 
 
 (*-----------------------------------------------------------------------------*)

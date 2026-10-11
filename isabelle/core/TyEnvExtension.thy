@@ -677,20 +677,6 @@ next
     show ?thesis using Ghost tm_ty' cp ty_eq by simp
   qed
 next
-  case (CoreTm_Old tm)
-  show ?case
-  proof (cases ghost)
-    case NotGhost
-    with CoreTm_Old.prems(3) show ?thesis by simp
-  next
-    case Ghost
-    then have "core_term_type env Ghost tm = Some ty"
-      using CoreTm_Old.prems(3) by simp
-    then have "core_term_type env' Ghost tm = Some ty"
-      using CoreTm_Old.IH[OF CoreTm_Old.prems(1,2)] by blast
-    then show ?thesis using Ghost by simp
-  qed
-next
   case (CoreTm_Default tyD)
   from CoreTm_Default.prems(3) have
     wk: "is_well_kinded env tyD" and

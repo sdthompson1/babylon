@@ -37,8 +37,8 @@ definition erase_ghost_args :: "(string, FunInfo) fmap \<Rightarrow> string \<Ri
    NotGhost mode): each function call in it loses the actuals of the callee's
    ghost parameters. Nothing else changes.
 
-   A quantifier, "allocated" and "old" do not occur in an executable position,
-   and they are left as they are. *)
+   A quantifier and "allocated" do not occur in an executable position, and
+   they are left as they are. *)
 fun erase_ghost_term :: "(string, FunInfo) fmap \<Rightarrow> CoreTerm \<Rightarrow> CoreTerm" where
   "erase_ghost_term funs (CoreTm_LitBool b) = CoreTm_LitBool b"
 | "erase_ghost_term funs (CoreTm_LitInt i) = CoreTm_LitInt i"
@@ -70,7 +70,6 @@ fun erase_ghost_term :: "(string, FunInfo) fmap \<Rightarrow> CoreTerm \<Rightar
                  (map (\<lambda>(pat, tm). (pat, erase_ghost_term funs tm)) cases)"
 | "erase_ghost_term funs (CoreTm_Sizeof tm) = CoreTm_Sizeof (erase_ghost_term funs tm)"
 | "erase_ghost_term funs (CoreTm_Allocated ty tm) = CoreTm_Allocated ty tm"
-| "erase_ghost_term funs (CoreTm_Old tm) = CoreTm_Old tm"
 | "erase_ghost_term funs (CoreTm_Default ty) = CoreTm_Default ty"
 
 (* Erasure keeps the shape of an lvalue. *)

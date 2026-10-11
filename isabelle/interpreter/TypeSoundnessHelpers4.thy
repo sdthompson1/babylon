@@ -546,11 +546,6 @@ next
         then show ?thesis
           using "1.prems"(1,2) Suc.IH(1) type_soundness_allocated typing by blast
       next
-        case (CoreTm_Old innerTm)
-        \<comment> \<open>Old is the identity. \<close>
-        from typing CoreTm_Old have "core_term_type env Ghost innerTm = Some ty" by simp
-        from IH[OF "1.prems"(1,2) this] CoreTm_Old show ?thesis by simp
-      next
         case (CoreTm_Default x20)
         then show ?thesis
           using "1.prems"(1,2) type_soundness_default typing by blast
