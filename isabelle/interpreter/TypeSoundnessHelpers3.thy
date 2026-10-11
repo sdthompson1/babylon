@@ -2971,12 +2971,9 @@ proof -
       unfolding fun_info_matches_interp_fun_def by simp_all
     have len_n: "length (IF_Args f) = ?n" using len_fi by simp
     have len_vals: "length ?valResults = ?n" using len_argTms_fi by simp
-    have len_refs: "length ?refResults = ?n" using len_argTms_fi by simp
     have params_tyvars:
       "\<forall>ty \<in> fst ` set (FI_TmArgs funInfo). type_tyvars ty \<subseteq> set (FI_TyArgs funInfo)"
       by (rule fun_info_types_tyvars_subset(1)[OF wf_env abs_empty fn_lookup])
-    have len_ra: "length (ref_arg_results (IF_Args f) ?refResults) = ?n"
-      using len_n len_refs by (simp add: ref_arg_results_def)
 
     \<comment> \<open>The argument results, at the parameter types under tySubst. \<close>
     note args_subst = arg_results_sound_subst
@@ -2984,23 +2981,10 @@ proof -
                          folded tySubst_def]
     note vals_subst = args_subst(1) and lvals_subst = args_subst(2)
 
-    \<comment> \<open>The lvalue results kept by ref_arg_results are those of the Ref
-        parameters. \<close>
-    have ref_arg_nth: "ref_arg_results (IF_Args f) ?refResults ! i = ?refResults ! i"
-      if i_n: "i < ?n" and r: "fst (snd (FI_TmArgs funInfo ! i)) = Ref" for i
-    proof -
-      have vm_i: "fst (snd (FI_TmArgs funInfo ! i)) = snd (IF_Args f ! i)"
-        using list_all2_nthD[OF vor_match, of i] i_n by (simp add: case_prod_beta)
-      have ref_vr: "snd (IF_Args f ! i) = Ref" using vm_i r by simp
-      show ?thesis
-        using i_n ref_vr len_n len_refs by (simp add: ref_arg_results_def case_prod_beta)
-    qed
-
     \<comment> \<open>The preconditions. \<close>
     let ?preIf = "zip (contract_arg_names ?n) (map snd (IF_Args f))"
-    let ?preRefs = "ref_arg_results (IF_Args f) ?refResults"
     have pre_args_eq: "contract_pre_args (IF_Args f) ?refResults ?valResults
-                         = zip ?preIf (zip ?preRefs ?valResults)"
+                         = zip ?preIf (zip ?refResults ?valResults)"
       by (simp add: contract_pre_args_def len_n)
     have pre_vor: "list_all2 (\<lambda>(_, vor1, _) (_, vor2). vor1 = vor2) (FI_TmArgs funInfo) ?preIf"
       by (rule vor_match_rename[OF vor_match]) (simp add: len_n)
@@ -3008,24 +2992,21 @@ proof -
     have pre_dist: "distinct (map fst ?preIf)"
       unfolding map_fst_pre by (rule distinct_contract_arg_names)
     have pre_len_vals: "length ?preIf = length ?valResults" using len_fi len_vals by auto
-    have pre_len_refs: "length ?preIf = length ?preRefs" by (simp add: len_n len_ra)
+    have pre_len_refs: "length ?preIf = length ?refResults" by (simp add: len_n len_argTms_fi)
     have pre_lvals:
       "\<forall>i < ?n. fst (snd (FI_TmArgs funInfo ! i)) = Ref \<longrightarrow>
          sound_lvalue_result state env storeTyping
-           (apply_subst tySubst (fst (FI_TmArgs funInfo ! i))) (?preRefs ! i)"
+           (apply_subst tySubst (fst (FI_TmArgs funInfo ! i))) (?refResults ! i)"
     proof (intro allI impI)
       fix i assume i_n: "i < ?n" and r: "fst (snd (FI_TmArgs funInfo ! i)) = Ref"
       from lvals_subst i_n r
-      have "sound_lvalue_result state env storeTyping
+      show "sound_lvalue_result state env storeTyping
               (apply_subst tySubst (fst (FI_TmArgs funInfo ! i))) (?refResults ! i)"
         by blast
-      then show "sound_lvalue_result state env storeTyping
-                   (apply_subst tySubst (fst (FI_TmArgs funInfo ! i))) (?preRefs ! i)"
-        unfolding ref_arg_nth[OF i_n r] .
     qed
     have pre_fold_sound:
       "sound_arg_processing_result env (map fst ?preIf) funInfo tySubst storeTyping
-         (fold process_one_arg (zip ?preIf (zip ?preRefs ?valResults)) (Inr ?clearedState))"
+         (fold process_one_arg (zip ?preIf (zip ?refResults ?valResults)) (Inr ?clearedState))"
       by (rule fold_process_one_arg_sound_subst
                  [OF state_env params_tyvars ty_len ty_wk tySubst_def pre_vor pre_dist
                      pre_len_vals pre_len_refs vals_subst pre_lvals])
@@ -3042,7 +3023,7 @@ proof -
     proof (rule check_conditions_sound[where names = "contract_arg_names ?n" and info = funInfo
                                          and tySubst = tySubst and storeTyping = storeTyping])
       show "sound_arg_processing_result env (contract_arg_names ?n) funInfo tySubst storeTyping
-              (fold process_one_arg (zip ?preIf (zip ?preRefs ?valResults)) (Inr ?clearedState))"
+              (fold process_one_arg (zip ?preIf (zip ?refResults ?valResults)) (Inr ?clearedState))"
         using pre_fold_sound unfolding map_fst_pre .
     next
       fix s :: "'w InterpState" and st'
@@ -3105,7 +3086,7 @@ proof -
                          (apply_subst tySubst (fst (FI_TmArgs funInfo ! i))) (?valResults ! i)"
         using vals_subst sound_term_result_tyargs_cong[OF tyargs_new] by simp
       let ?postIf = "zip (contract_post_names ?n) (map snd (IF_Args f) @ replicate (Suc ?n) Var)"
-      let ?postRefs = "ref_arg_results (IF_Args f) ?refResults @ replicate (Suc ?n) (Inl TypeError)"
+      let ?postRefs = "?refResults @ replicate (Suc ?n) (Inl TypeError)"
       let ?postVals = "?valResults @ ?valResults @ [Inr retVal]"
       have post_vals:
         "\<forall>i < length (FI_TmArgs (post_funinfo funInfo)).
@@ -3148,7 +3129,7 @@ proof -
           using i_n by (simp add: nth_append)
         have r': "fst (snd (FI_TmArgs funInfo ! i)) = Ref" using r unfolding tm .
         have refs_i: "?postRefs ! i = ?refResults ! i"
-          using i_n len_ra ref_arg_nth[OF i_n r'] by (simp add: nth_append)
+          using i_n len_argTms_fi by (simp add: nth_append)
         from lvals_subst i_n r'
         have "sound_lvalue_result state env storeTyping
                 (apply_subst tySubst (fst (FI_TmArgs funInfo ! i))) (?refResults ! i)"
@@ -3179,7 +3160,7 @@ proof -
         unfolding map_fst_post by (rule distinct_contract_post_names)
       have post_len_vals: "length ?postIf = length ?postVals"
         using len_n len_argTms_fi by simp
-      have post_len_refs: "length ?postIf = length ?postRefs" by (simp add: len_n len_ra)
+      have post_len_refs: "length ?postIf = length ?postRefs" by (simp add: len_n len_argTms_fi)
       have post_fold_sound:
         "sound_arg_processing_result env (map fst ?postIf) (post_funinfo funInfo) tySubst storeTyping'
            (fold process_one_arg (zip ?postIf (zip ?postRefs ?postVals))

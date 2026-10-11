@@ -400,26 +400,157 @@ proof -
   qed
 qed
 
+(* Two families of lvalue results whose Ref-filtered lists are equal agree at
+   every Ref argument. (This turns the second conclusion of the previous lemma
+   into the form that checked_call_agree below takes.) *)
+lemma ref_filter_agree_nth:
+  assumes eq: "map (\<lambda>((_, vr), refResult). if vr = Ref then refResult else Inl TypeError)
+                   (zip fnArgs rr')
+             = map (\<lambda>((_, vr), refResult). if vr = Ref then refResult else Inl TypeError)
+                   (zip fnArgs rr)"
+    and len: "length rr' = length rr"
+  shows "\<forall>i < length rr. i < length fnArgs \<longrightarrow> snd (fnArgs ! i) = Ref \<longrightarrow> rr' ! i = rr ! i"
+proof (intro allI impI)
+  fix i assume i_rr: "i < length rr" and i_fn: "i < length fnArgs" and r: "snd (fnArgs ! i) = Ref"
+  have "map (\<lambda>((_, vr), refResult). if vr = Ref then refResult else Inl TypeError)
+            (zip fnArgs rr') ! i
+        = map (\<lambda>((_, vr), refResult). if vr = Ref then refResult else Inl TypeError)
+              (zip fnArgs rr) ! i"
+    using eq by simp
+  then show "rr' ! i = rr ! i" using i_rr i_fn r len by (simp add: case_prod_beta)
+qed
+
 
 (* ========================================================================== *)
 (* Helper lemmas about contract checks *)
 (* ========================================================================== *)
 
-(* The contract argument tuples depend on the lvalue results only through
-   ref_arg_results. *)
-lemma contract_args_agree:
-  assumes "ref_arg_results args rr' = ref_arg_results args rr"
-    and "vr' = vr"
-  shows "contract_pre_args args rr' vr' = contract_pre_args args rr vr"
-    and "contract_post_args args rr' vr' v = contract_post_args args rr vr v"
-  using assms by (simp_all add: contract_pre_args_def contract_post_args_def)
+(* process_one_arg never looks at the lvalue result of a Var argument. So the
+   fold gives the same answer on two families of lvalue results (of the same
+   length) that agree at the Ref arguments. *)
+lemma fold_process_one_arg_var_lvalues:
+  assumes "length rr' = length rr"
+    and "\<forall>i < length rr. i < length nvs \<longrightarrow> snd (nvs ! i) = Ref \<longrightarrow> rr' ! i = rr ! i"
+  shows "fold process_one_arg (zip nvs (zip rr' vs)) acc
+         = fold process_one_arg (zip nvs (zip rr vs)) acc"
+  using assms
+proof (induct nvs arbitrary: rr rr' vs acc)
+  case Nil
+  then show ?case by simp
+next
+  case (Cons nv nvs)
+  show ?case
+  proof (cases rr)
+    case Nil
+    with Cons.prems(1) show ?thesis by simp
+  next
+    case rr_eq: (Cons r rs)
+    with Cons.prems(1) obtain r' rs' where rr'_eq: "rr' = r' # rs'"
+      and len_tl: "length rs' = length rs"
+      by (cases rr') auto
+    show ?thesis
+    proof (cases vs)
+      case Nil
+      with rr_eq rr'_eq show ?thesis by simp
+    next
+      case vs_eq: (Cons v vs')
+      obtain name vr where nv_eq: "nv = (name, vr)" by (cases nv)
+      (* The first step: a Var argument ignores its lvalue result; a Ref
+         argument has the same lvalue result on both sides. *)
+      have step_eq: "process_one_arg (nv, r', v) acc = process_one_arg (nv, r, v) acc"
+      proof (cases vr)
+        case Var
+        then show ?thesis using nv_eq by (cases acc; cases v) simp_all
+      next
+        case Ref
+        then have "r' = r"
+          using Cons.prems(2)[rule_format, of 0] rr_eq rr'_eq nv_eq by simp
+        then show ?thesis by simp
+      qed
+      (* The remaining steps: by the induction hypothesis. *)
+      have tl_agree: "\<forall>i < length rs. i < length nvs \<longrightarrow> snd (nvs ! i) = Ref
+                        \<longrightarrow> rs' ! i = rs ! i"
+      proof (intro allI impI)
+        fix i assume "i < length rs" and "i < length nvs" and "snd (nvs ! i) = Ref"
+        then show "rs' ! i = rs ! i"
+          using Cons.prems(2)[rule_format, of "Suc i"] rr_eq rr'_eq by simp
+      qed
+      have tl_eq: "fold process_one_arg (zip nvs (zip rs' vs')) (process_one_arg (nv, r, v) acc)
+                   = fold process_one_arg (zip nvs (zip rs vs')) (process_one_arg (nv, r, v) acc)"
+        by (rule Cons.hyps[OF len_tl tl_agree])
+      show ?thesis using rr_eq rr'_eq vs_eq step_eq tl_eq by simp
+    qed
+  qed
+qed
 
-(* check_conditions gives the same answer with a second evaluator, if that
-   agrees with the first wherever the first is not out of fuel. *)
+(* Hence binding the contract arguments depends on the lvalue results only
+   at the Ref parameters. *)
+lemma fold_contract_pre_args_agree:
+  assumes len: "length rr' = length rr"
+    and agree: "\<forall>i < length rr. i < length args \<longrightarrow> snd (args ! i) = Ref \<longrightarrow> rr' ! i = rr ! i"
+  shows "fold process_one_arg (contract_pre_args args rr' vr) acc
+         = fold process_one_arg (contract_pre_args args rr vr) acc"
+  unfolding contract_pre_args_def
+proof (rule fold_process_one_arg_var_lvalues[OF len], intro allI impI)
+  fix i
+  assume i_rr: "i < length rr"
+    and i_z: "i < length (zip (contract_arg_names (length args)) (map snd args))"
+    and r: "snd (zip (contract_arg_names (length args)) (map snd args) ! i) = Ref"
+  have i_args: "i < length args" using i_z by simp
+  have "snd (args ! i) = Ref" using r i_args by simp
+  with i_rr i_args agree show "rr' ! i = rr ! i" by blast
+qed
+
+lemma fold_contract_post_args_agree:
+  assumes len: "length rr' = length rr"
+    and agree: "\<forall>i < length rr. i < length args \<longrightarrow> snd (args ! i) = Ref \<longrightarrow> rr' ! i = rr ! i"
+  shows "fold process_one_arg (contract_post_args args rr' vr v) acc
+         = fold process_one_arg (contract_post_args args rr vr v) acc"
+proof -
+  let ?n = "length args"
+  let ?nvs = "zip (contract_post_names ?n) (map snd args @ replicate (Suc ?n) Var)"
+  let ?ext = "replicate (Suc ?n) (Inl TypeError)
+                :: (InterpError + (nat \<times> LValuePath list)) list"
+  have len': "length (rr' @ ?ext) = length (rr @ ?ext)" using len by simp
+  have agree': "\<forall>i < length (rr @ ?ext). i < length ?nvs \<longrightarrow> snd (?nvs ! i) = Ref
+                  \<longrightarrow> (rr' @ ?ext) ! i = (rr @ ?ext) ! i"
+  proof (intro allI impI)
+    fix i
+    assume i_len: "i < length (rr @ ?ext)" and i_nvs: "i < length ?nvs"
+      and r: "snd (?nvs ! i) = Ref"
+    show "(rr' @ ?ext) ! i = (rr @ ?ext) ! i"
+    proof (cases "i < length rr")
+      case True
+      (* Only an arg@@i can be Ref; old@@i and return are Var. *)
+      have i_n: "i < ?n"
+      proof (rule ccontr)
+        assume not_n: "\<not> i < ?n"
+        have "i - ?n < Suc ?n" using i_nvs by simp
+        then have "replicate (Suc ?n) Var ! (i - ?n) = Var" by (rule nth_replicate)
+        then have "snd (?nvs ! i) = Var" using not_n i_nvs by (simp add: nth_append)
+        with r show False by simp
+      qed
+      have "snd (args ! i) = Ref" using r i_nvs i_n by (simp add: nth_append)
+      with True i_n agree have "rr' ! i = rr ! i" by simp
+      with True len show ?thesis by (simp add: nth_append)
+    next
+      case False
+      with len show ?thesis by (simp add: nth_append)
+    qed
+  qed
+  show ?thesis
+    unfolding contract_post_args_def
+    by (rule fold_process_one_arg_var_lvalues[OF len' agree'])
+qed
+
+(* check_conditions gives the same answer with a second evaluator and a second
+   argument list, if the evaluator agrees with the first wherever the first is
+   not out of fuel, and the argument list binds to the same state. *)
 lemma check_conditions_agree:
   assumes ne: "check_conditions ev tms args st \<noteq> Some InsufficientFuel"
+    and args: "fold process_one_arg args' (Inr st) = fold process_one_arg args (Inr st)"
     and agree: "\<And>s. ev s tms \<noteq> Inl InsufficientFuel \<Longrightarrow> ev' s tms = ev s tms"
-  shows "check_conditions ev' tms args st = check_conditions ev tms args st"
+  shows "check_conditions ev' tms args' st = check_conditions ev tms args st"
 proof (cases "tms = []")
   case True
   then show ?thesis by simp
@@ -428,23 +559,25 @@ next
   show ?thesis
   proof (cases "fold process_one_arg args (Inr st)")
     case (Inl err)
-    with nonempty show ?thesis by (simp add: check_conditions_def)
+    with nonempty args show ?thesis by (simp add: check_conditions_def)
   next
     case (Inr st')
     have "ev st' tms \<noteq> Inl InsufficientFuel"
       using ne nonempty Inr by (auto simp: check_conditions_def)
     with agree have "ev' st' tms = ev st' tms" .
-    with nonempty Inr show ?thesis by (simp add: check_conditions_def)
+    with nonempty Inr args show ?thesis by (simp add: check_conditions_def)
   qed
 qed
 
 (* checked_call gives the same answer on a second set of arguments, if these
-   agree with the first wherever the first are not out of fuel. *)
+   agree with the first wherever the first are not out of fuel. The lvalue
+   results need only agree at the Ref parameters. *)
 lemma checked_call_agree:
   assumes ne: "checked_call ev f rr vr ta st b \<noteq> Inl InsufficientFuel"
-    and pre_args: "contract_pre_args (IF_Args f) rr' vr' = contract_pre_args (IF_Args f) rr vr"
-    and post_args: "\<And>v. contract_post_args (IF_Args f) rr' vr' v
-                         = contract_post_args (IF_Args f) rr vr v"
+    and refs_len: "length rr' = length rr"
+    and refs_agree: "\<forall>i < length rr. i < length (IF_Args f) \<longrightarrow> snd (IF_Args f ! i) = Ref
+                       \<longrightarrow> rr' ! i = rr ! i"
+    and vals: "vr' = vr"
     and agree_pre: "\<And>s. ev s (IF_Requires f) \<noteq> Inl InsufficientFuel
                           \<Longrightarrow> ev' s (IF_Requires f) = ev s (IF_Requires f)"
     and agree_post: "\<And>s. ev s (IF_Ensures f) \<noteq> Inl InsufficientFuel
@@ -455,13 +588,16 @@ proof -
   let ?pre = "check_conditions ev (IF_Requires f) (contract_pre_args (IF_Args f) rr vr) st"
   have pre_ne: "?pre \<noteq> Some InsufficientFuel"
     using ne by (auto simp: checked_call_def)
-  have pre_eq: "check_conditions ev' (IF_Requires f) (contract_pre_args (IF_Args f) rr vr) st
+  have pre_fold: "fold process_one_arg (contract_pre_args (IF_Args f) rr' vr') (Inr st)
+                    = fold process_one_arg (contract_pre_args (IF_Args f) rr vr) (Inr st)"
+    unfolding vals by (rule fold_contract_pre_args_agree[OF refs_len refs_agree])
+  have pre_eq: "check_conditions ev' (IF_Requires f) (contract_pre_args (IF_Args f) rr' vr') st
                   = ?pre"
-    by (rule check_conditions_agree[where ev' = ev', OF pre_ne agree_pre])
+    by (rule check_conditions_agree[where ev' = ev', OF pre_ne pre_fold agree_pre])
   show ?thesis
   proof (cases ?pre)
     case (Some err)
-    then show ?thesis using pre_args pre_eq by (simp add: checked_call_def)
+    then show ?thesis using pre_eq by (simp add: checked_call_def)
   next
     case pre_ok: None
     have b_ne: "b \<noteq> Inl InsufficientFuel"
@@ -470,7 +606,7 @@ proof -
     show ?thesis
     proof (cases b)
       case (Inl err)
-      then show ?thesis using pre_ok pre_args pre_eq b_eq by (simp add: checked_call_def)
+      then show ?thesis using pre_ok pre_eq b_eq by (simp add: checked_call_def)
     next
       case (Inr p)
       obtain s v where p: "p = (s, v)" by (cases p)
@@ -480,11 +616,14 @@ proof -
                      (contract_post_args (IF_Args f) rr vr v) ?st'"
       have post_ne: "?post \<noteq> Some InsufficientFuel"
         using ne pre_ok Inr p by (auto simp: checked_call_def)
+      have post_fold: "fold process_one_arg (contract_post_args (IF_Args f) rr' vr' v) (Inr ?st')
+                         = fold process_one_arg (contract_post_args (IF_Args f) rr vr v) (Inr ?st')"
+        unfolding vals by (rule fold_contract_post_args_agree[OF refs_len refs_agree])
       have post_eq: "check_conditions ev' (IF_Ensures f)
-                       (contract_post_args (IF_Args f) rr vr v) ?st' = ?post"
-        by (rule check_conditions_agree[where ev' = ev', OF post_ne agree_post])
+                       (contract_post_args (IF_Args f) rr' vr' v) ?st' = ?post"
+        by (rule check_conditions_agree[where ev' = ev', OF post_ne post_fold agree_post])
       show ?thesis
-        using pre_ok pre_args pre_eq b_eq Inr p post_args post_eq
+        using pre_ok pre_eq b_eq Inr p post_eq
         by (simp add: checked_call_def)
     qed
   qed
@@ -2023,9 +2162,10 @@ next
               by (rule fold_process_one_arg_ok_results_agree(1)[OF tm_agree lv_agree len_eq PreCall])
             have filtered_refs_eq: "?filter_refs ?refs'' = ?filter_refs ?refResults"
               by (rule fold_process_one_arg_ok_results_agree(2)[OF tm_agree lv_agree len_eq PreCall])
-            have refs_eq: "ref_arg_results ?fnArgs ?refs'' = ref_arg_results ?fnArgs ?refResults"
-              unfolding ref_arg_results_def by (rule filtered_refs_eq)
-            note args_eq = contract_args_agree[OF refs_eq valResults_eq]
+            have refs_len: "length ?refs'' = length ?refResults" by simp
+            have refs_agree: "\<forall>i < length ?refResults. i < length ?fnArgs \<longrightarrow> snd (?fnArgs ! i) = Ref
+                                \<longrightarrow> ?refs'' ! i = ?refResults ! i"
+              by (rule ref_filter_agree_nth[OF filtered_refs_eq refs_len])
 
             have fold'': "fold process_one_arg (zip ?fnArgs (zip ?refs'' ?vals'')) (Inr ?clearedState)
                             = Inr preCallState"
@@ -2104,7 +2244,8 @@ next
                       ?calleeTyArgs ?clearedState
                       (call_body (interp_statement_list d fuel) state fn?refResults ?valResults preCallState)"
               by (rule checked_call_agree[where ev' = "interp_term_list d f''",
-                                          OF noFuel' args_eq(1) args_eq(2) IH_pre IH_post agree_body])
+                                          OF noFuel' refs_len refs_agree valResults_eq
+                                             IH_pre IH_post agree_body])
             then show ?thesis unfolding lhs rhs .
           qed
         qed
@@ -3224,9 +3365,10 @@ next
               by (rule fold_process_one_arg_ok_results_agree(1)[OF tm_agree lv_agree len_eq PreCall])
             have filtered_refs_eq: "?filter_refs ?refs' = ?filter_refs ?refResults"
               by (rule fold_process_one_arg_ok_results_agree(2)[OF tm_agree lv_agree len_eq PreCall])
-            have refs_eq: "ref_arg_results ?fnArgs ?refs' = ref_arg_results ?fnArgs ?refResults"
-              unfolding ref_arg_results_def by (rule filtered_refs_eq)
-            note args_eq = contract_args_agree[OF refs_eq valResults_eq]
+            have refs_len: "length ?refs' = length ?refResults" by simp
+            have refs_agree: "\<forall>i < length ?refResults. i < length ?fnArgs \<longrightarrow> snd (?fnArgs ! i) = Ref
+                                \<longrightarrow> ?refs' ! i = ?refResults ! i"
+              by (rule ref_filter_agree_nth[OF filtered_refs_eq refs_len])
 
             have fold': "fold process_one_arg (zip ?fnArgs (zip ?refs' ?vals')) (Inr ?clearedState)
                            = Inr preCallState"
@@ -3305,7 +3447,8 @@ next
                       ?calleeTyArgs ?clearedState
                       (call_body (interp_statement_list d fuel) state fn?refResults ?valResults preCallState)"
               by (rule checked_call_agree[where ev' = "interp_term_list d' fuel",
-                                          OF noFuel' args_eq(1) args_eq(2) IH_pre IH_post agree_body])
+                                          OF noFuel' refs_len refs_agree valResults_eq
+                                             IH_pre IH_post agree_body])
             then show ?thesis unfolding lhs rhs .
           qed
         qed

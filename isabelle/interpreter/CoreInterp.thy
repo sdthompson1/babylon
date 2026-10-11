@@ -898,18 +898,6 @@ lemma eval_decreases_Inl:
 (* Function contracts *)
 (* ========================================================================== *)
 
-(* This inputs a list of lvalue results for the arguments of a call,
-   and returns a new list where the entries for the Ref-parameters are left
-   unchanged, but the entries for the Var-parameters are replaced with a
-   dummy Inl TypeError. (This is valid because process_one_arg never looks
-   at the lvalue result for a Var argument.) *)
-definition ref_arg_results ::
-    "(string \<times> VarOrRef) list \<Rightarrow> (InterpError + (nat \<times> LValuePath list)) list
-     \<Rightarrow> (InterpError + (nat \<times> LValuePath list)) list" where
-  "ref_arg_results args refResults =
-     map (\<lambda>((_, vr), refResult). if vr = Ref then refResult else Inl TypeError)
-         (zip args refResults)"
-
 (* Pre- and post-condition terms have free variables: arg@@i for preconditions, and
    arg@@i, old@@i and return for postconditions.
    To evaluate a pre- or post-condition, we therefore need to construct a state containing these
@@ -929,7 +917,7 @@ definition contract_pre_args ::
           \<times> (InterpError + CoreValue)) list" where
   "contract_pre_args args refResults valResults =
      zip (zip (contract_arg_names (length args)) (map snd args))
-         (zip (ref_arg_results args refResults) valResults)"
+         (zip refResults valResults)"
 
 (* For a postcondition: it is a little more complicated. We need to create list entries not only
    for arg@@i (which now represents the value 'after' the call), but old@@i (the values before the
@@ -947,11 +935,12 @@ definition contract_post_args ::
                  from the original declaration; old@@i and return are always Var.\<close>
               (map snd args @ replicate (Suc (length args)) Var))
          \<comment> \<open>Now we pass the 'address and lvalue path' for each argument. This is only relevant for
-            Ref arguments, and it can be taken directly from refResults (this was computed before
-            the call, but that's OK, because the addresses and paths haven't changed since then).
-            For the old@@i and return arguments, which are Var, no address or path is needed, so we
-            can just pass a dummy error value.\<close>
-         (zip (ref_arg_results args refResults @ replicate (Suc (length args)) (Inl TypeError))
+            Ref arguments (process_one_arg ignores it for Var arguments), and it can be taken
+            directly from refResults (this was computed before the call, but that's OK, because
+            the addresses and paths haven't changed since then). For the old@@i and return
+            arguments, which are Var, no address or path is needed, so we can just pass a dummy
+            error value.\<close>
+         (zip (refResults @ replicate (Suc (length args)) (Inl TypeError))
               \<comment> \<open>Finally, we need the 'value' for each argument. This is only really relevant for
                  Var arguments, and the values of those don't change across the call, hence the
                  duplicated `valResults` below (i.e. arg@@i = old@@i for each i, for Var arguments).
