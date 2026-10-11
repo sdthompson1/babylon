@@ -899,6 +899,15 @@ corollary core_statement_list_type_preserves_return_type:
   shows "TE_ReturnType env' = TE_ReturnType env"
   using assms core_statement_list_type_fixed_eq tyenv_fixed_eq_def by auto
 
+(* Typing a concatenation: type the first list, then the second in the
+   resulting env. *)
+lemma core_statement_list_type_append:
+  "core_statement_list_type env ghost (stmts1 @ stmts2)
+     = (case core_statement_list_type env ghost stmts1 of
+          None \<Rightarrow> None
+        | Some env1 \<Rightarrow> core_statement_list_type env1 ghost stmts2)"
+  by (induction stmts1 arbitrary: env) (simp_all split: option.splits)
+
 
 (* ========================================================================== *)
 (* Ambient-ghost weakening *)

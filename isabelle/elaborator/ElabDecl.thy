@@ -617,7 +617,13 @@ definition elab_fun_contracts_for ::
             Inr (funInfo \<lparr> FI_Requires := reqs, FI_Ensures := enss \<rparr>))"
 
 (* Typecheck a function's body (if present), returning the elaborated body as
-   a CoreStatement list. *)
+   a CoreStatement list.
+
+   A Babylon void function may "fall off the end" of its body, but in Core
+   every path through a function must end in an explicit return (the
+   interpreter treats reaching the end of the body as an error). So for a void
+   function, `return {}` is appended to the elaborated body. (If the body
+   already always returns, the appended statement is simply unreachable.) *)
 definition elab_fun_body ::
   "CoreTyEnv \<Rightarrow> ElabEnv \<Rightarrow> DeclFun \<Rightarrow> FunInfo
    \<Rightarrow> TypeError list + CoreStatement list option" where
@@ -630,7 +636,10 @@ definition elab_fun_body ::
             (case elab_statement_list bodyEnv (fun_body_elab_env elabEnv df) (DF_Ghost df)
                     body 0 of
                Inl errs \<Rightarrow> Inl errs
-             | Inr (coreBody, _, _) \<Rightarrow> Inr (Some coreBody)))"
+             | Inr (coreBody, _, _) \<Rightarrow>
+                 Inr (Some (if DF_ReturnType df = None
+                            then coreBody @ [CoreStmt_Return (CoreTm_Record [])]
+                            else coreBody))))"
 
 (* Elaborate a function declaration. 
 

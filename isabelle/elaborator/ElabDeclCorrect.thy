@@ -3291,14 +3291,36 @@ proof -
     from elab obtain coreBody envOut mv' where
       elabS: "elab_statement_list ?be ?bodyEE (DF_Ghost df) body 0
                 = Inr (coreBody, envOut, mv')" and
-      bodyOpt_eq: "bodyOpt = Some coreBody"
+      bodyOpt_eq: "bodyOpt = Some (if DF_ReturnType df = None
+                                   then coreBody @ [CoreStmt_Return (CoreTm_Record [])]
+                                   else coreBody)"
       unfolding elab_fun_body_def Let_def
       by (cases "elab_statement_list ?be ?bodyEE (DF_Ghost df) body 0")
          (auto simp: Some split: prod.splits)
     have typed: "core_statement_list_type ?be (DF_Ghost df) coreBody = Some envOut"
       by (rule elab_statement_list_correct[OF elabS wf_be ee(1) ee(2) gh_be pg_be])
+    \<comment> \<open>For a void function, the appended `return {}` typechecks in the env left
+       by the body: TE_ReturnType and TE_FunctionGhost are fixed fields of the
+       env, so they are still those of the body env (unit, and DF_Ghost df).\<close>
+    have ret_typed: "DF_ReturnType df = None \<Longrightarrow>
+      core_statement_type envOut (DF_Ghost df) (CoreStmt_Return (CoreTm_Record []))
+        = Some envOut"
+    proof -
+      assume v: "DF_ReturnType df = None"
+      have fx: "tyenv_fixed_eq ?be envOut"
+        using core_statement_list_type_fixed_eq[OF typed] .
+      have "TE_ReturnType envOut = CoreTy_Record []"
+        using fx void_ret[OF v] unfolding tyenv_fixed_eq_def
+        by (simp add: module_body_env_for_def)
+      moreover have "TE_FunctionGhost envOut = DF_Ghost df"
+        using fx unfolding tyenv_fixed_eq_def
+        by (simp add: module_body_env_for_def ghost_eq)
+      ultimately show ?thesis by simp
+    qed
     show ?thesis
-      unfolding bodyOpt_eq using typed by (simp add: ghost_eq)
+      unfolding bodyOpt_eq using typed ret_typed
+      by (cases "DF_ReturnType df")
+         (simp_all add: ghost_eq core_statement_list_type_append)
   qed
 qed
 

@@ -293,13 +293,6 @@ qed
 (* Statement lists *)
 (* ========================================================================== *)
 
-lemma core_statement_list_type_append:
-  "core_statement_list_type env ghost (stmts1 @ stmts2)
-     = (case core_statement_list_type env ghost stmts1 of
-          None \<Rightarrow> None
-        | Some env1 \<Rightarrow> core_statement_list_type env1 ghost stmts2)"
-  by (induction stmts1 arbitrary: env) (simp_all split: option.splits)
-
 (* The two ways a single statement is erased: to nothing, or to one statement. *)
 
 lemma erased_typed_none:
