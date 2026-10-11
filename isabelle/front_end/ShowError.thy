@@ -392,6 +392,9 @@ definition type_error_to_string :: "TypeError \<Rightarrow> string" where
     | TyErr_FunctionSignatureMismatch loc name \<Rightarrow>
         loc_prefix loc @ ''definition of function '' @ quote name
           @ '' does not match its earlier declaration''
+    | TyErr_ContractRecheckFailed loc name \<Rightarrow>
+        loc_prefix loc @ ''internal compiler error: the declared contract of function ''
+          @ quote name @ '' no longer typechecks''
     | TyErr_ConstGhostnessMismatch loc name \<Rightarrow>
         loc_prefix loc @ ''definition of constant '' @ quote name
           @ '' does not match the ghostness of its earlier declaration''

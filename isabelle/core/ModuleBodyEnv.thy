@@ -625,9 +625,36 @@ qed
    well-formed too: the extra parameters are ghost, and have the types of the
    original parameters and of the return value. *)
 
-lemma module_body_env_for_well_formed_post:
+(* Generalized version, from the signature conditions alone (the signature
+   need not be in TE_Functions; cf. module_body_env_for_well_formed_sig). The
+   elaborator uses this when it typechecks a function's contracts before the
+   function has been added to the env. *)
+lemma module_body_env_for_well_formed_post_sig:
   assumes wf: "tyenv_well_formed env"
-      and lk: "fmlookup (TE_Functions env) fname = Some info"
+      and wk0: "(\<forall>ty \<in> fst ` set (FI_TmArgs info).
+                   is_well_kinded (env \<lparr> TE_TypeVars :=
+                                         TE_AbstractTypes env
+                                         |\<union>| fset_of_list (FI_TyArgs info) \<rparr>) ty)
+                \<and> is_well_kinded (env \<lparr> TE_TypeVars :=
+                                        TE_AbstractTypes env
+                                        |\<union>| fset_of_list (FI_TyArgs info) \<rparr>)
+                                 (FI_ReturnType info)"
+      and rt0: "FI_Ghost info = NotGhost \<Longrightarrow>
+               (\<forall>ty vor. (ty, vor, NotGhost) \<in> set (FI_TmArgs info) \<longrightarrow>
+                  is_runtime_type
+                    (env \<lparr> TE_TypeVars := TE_AbstractTypes env
+                                          |\<union>| fset_of_list (FI_TyArgs info),
+                           TE_RuntimeTypeVars :=
+                             (TE_AbstractTypes env |\<inter>| TE_RuntimeTypeVars env)
+                             |\<union>| fset_of_list (FI_TyArgs info) \<rparr>) ty)
+               \<and> is_runtime_type
+                   (env \<lparr> TE_TypeVars := TE_AbstractTypes env
+                                         |\<union>| fset_of_list (FI_TyArgs info),
+                          TE_RuntimeTypeVars :=
+                            (TE_AbstractTypes env |\<inter>| TE_RuntimeTypeVars env)
+                            |\<union>| fset_of_list (FI_TyArgs info) \<rparr>)
+                   (FI_ReturnType info)"
+      and cp0: "FI_Ghost info = NotGhost \<Longrightarrow> is_complete_type (FI_ReturnType info)"
       and len: "length names = length (FI_TmArgs (post_funinfo info))"
   shows "tyenv_well_formed (module_body_env_for env names (post_funinfo info))"
 proof -
@@ -635,18 +662,6 @@ proof -
   let ?rtEnv = "env \<lparr> TE_TypeVars := TE_AbstractTypes env |\<union>| fset_of_list (FI_TyArgs info),
                       TE_RuntimeTypeVars := (TE_AbstractTypes env |\<inter>| TE_RuntimeTypeVars env)
                                             |\<union>| fset_of_list (FI_TyArgs info) \<rparr>"
-  have wk0: "(\<forall>ty \<in> fst ` set (FI_TmArgs info). is_well_kinded ?wkEnv ty)
-             \<and> is_well_kinded ?wkEnv (FI_ReturnType info)"
-    using wf lk unfolding tyenv_well_formed_def tyenv_fun_types_well_kinded_def by blast
-  have rt0: "(\<forall>ty vor. (ty, vor, NotGhost) \<in> set (FI_TmArgs info) \<longrightarrow>
-                is_runtime_type ?rtEnv ty)
-             \<and> is_runtime_type ?rtEnv (FI_ReturnType info)"
-    if ng: "FI_Ghost info = NotGhost"
-    using wf lk ng
-    unfolding tyenv_well_formed_def tyenv_fun_ghost_constraint_def Let_def by blast
-  have cp0: "is_complete_type (FI_ReturnType info)" if ng: "FI_Ghost info = NotGhost"
-    using wf lk ng
-    unfolding tyenv_well_formed_def tyenv_fun_return_types_complete_def by blast
   \<comment> \<open>The extra parameters' types are original parameter types or the return
       type, and they are all ghost.\<close>
   have post_fst: "fst ` set (FI_TmArgs (post_funinfo info))
@@ -685,6 +700,33 @@ proof -
     using cp0 ng by simp
   show ?thesis
     by (rule module_body_env_for_well_formed_sig[OF wf sig_wk sig_rt sig_cp len])
+qed
+
+(* The usual case: the signature of a function declared in the env. *)
+lemma module_body_env_for_well_formed_post:
+  assumes wf: "tyenv_well_formed env"
+      and lk: "fmlookup (TE_Functions env) fname = Some info"
+      and len: "length names = length (FI_TmArgs (post_funinfo info))"
+  shows "tyenv_well_formed (module_body_env_for env names (post_funinfo info))"
+proof -
+  let ?wkEnv = "env \<lparr> TE_TypeVars := TE_AbstractTypes env |\<union>| fset_of_list (FI_TyArgs info) \<rparr>"
+  let ?rtEnv = "env \<lparr> TE_TypeVars := TE_AbstractTypes env |\<union>| fset_of_list (FI_TyArgs info),
+                      TE_RuntimeTypeVars := (TE_AbstractTypes env |\<inter>| TE_RuntimeTypeVars env)
+                                            |\<union>| fset_of_list (FI_TyArgs info) \<rparr>"
+  have wk0: "(\<forall>ty \<in> fst ` set (FI_TmArgs info). is_well_kinded ?wkEnv ty)
+             \<and> is_well_kinded ?wkEnv (FI_ReturnType info)"
+    using wf lk unfolding tyenv_well_formed_def tyenv_fun_types_well_kinded_def by blast
+  have rt0: "(\<forall>ty vor. (ty, vor, NotGhost) \<in> set (FI_TmArgs info) \<longrightarrow>
+                is_runtime_type ?rtEnv ty)
+             \<and> is_runtime_type ?rtEnv (FI_ReturnType info)"
+    if ng: "FI_Ghost info = NotGhost"
+    using wf lk ng
+    unfolding tyenv_well_formed_def tyenv_fun_ghost_constraint_def Let_def by blast
+  have cp0: "is_complete_type (FI_ReturnType info)" if ng: "FI_Ghost info = NotGhost"
+    using wf lk ng
+    unfolding tyenv_well_formed_def tyenv_fun_return_types_complete_def by blast
+  show ?thesis
+    by (rule module_body_env_for_well_formed_post_sig[OF wf wk0 rt0 cp0 len])
 qed
 
 end

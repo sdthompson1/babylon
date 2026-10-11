@@ -1,5 +1,6 @@
 theory ElabDecl
-  imports ElabStmt ConstFold "../core/CoreModuleTypecheck" "../bab_passes/BabMapDims"
+  imports ElabStmt ConstFold "../core/CoreModuleTypecheck"
+    "../bab_passes/BabContractRename" "../bab_passes/BabMapDims"
 begin
 
 (* Declaration elaborator.
@@ -519,23 +520,37 @@ definition elab_fun_signature ::
                        FI_Requires = [],
                        FI_Ensures = [] \<rparr>))"
 
-(* Typecheck a function's contract attributes and drop the results. (FunInfo
-   and CoreFunction have no contract fields yet, so this exists purely to flag
-   type errors - verification is out of scope for now.)
+(* Elaborate a function's contract attributes, returning the Core `requires`
+   and `ensures` terms (and the next metavariable counter).
 
-   `requires` terms are elaborated in preEnv (the body env), and must have boolean type.
-   `ensures` terms are elaborated in postEnv (the body env plus the `return` binding,
-   for non-void functions), and must have boolean type.
+   The contract terms are stored in the FunInfo, which carries no parameter
+   names, so they refer to the parameters positionally (ContractNames.thy):
+   each attribute term is first renamed (BabContractRename.thy) with argMap
+   (parameter name \<mapsto> arg@@i) outside `old`, and oldMap (parameter name
+   \<mapsto> old@@i) inside `old`; `old` itself is dropped by the renaming.
+
+   `requires` terms are then elaborated in preEnv (the body env with the
+   parameters named arg@@i), and must have boolean type.
+   `ensures` terms are elaborated in postEnv (the body env with the
+   parameters named arg@@i, plus old@@i for each parameter and `return`),
+   and must have boolean type. The `return` variable is bound in postEnv
+   even for a void function (it then has the unit type), so that postEnv is
+   the environment in which the contract is later re-typechecked
+   (CoreContractTypecheck.thy); a void function's postcondition must not
+   mention it, which is checked separately (isVoid).
    `decreases` and `invariant` attributes are not valid on a function.
 
    All attribute terms are elaborated in Ghost mode, and after unification, the term must
    not contain any unresolved metavariables. *)
 fun elab_fun_contracts ::
-  "CoreTyEnv \<Rightarrow> CoreTyEnv \<Rightarrow> ElabEnv \<Rightarrow> BabAttribute list \<Rightarrow> nat
-   \<Rightarrow> TypeError list + nat" where
-  "elab_fun_contracts preEnv postEnv elabEnv [] next_mv = Inr next_mv"
-| "elab_fun_contracts preEnv postEnv elabEnv (BabAttr_Requires loc tm # rest) next_mv =
-    (case elab_term preEnv elabEnv Ghost tm next_mv of
+  "CoreTyEnv \<Rightarrow> CoreTyEnv \<Rightarrow> ElabEnv \<Rightarrow> (string \<Rightarrow> string) \<Rightarrow> (string \<Rightarrow> string)
+   \<Rightarrow> bool \<Rightarrow> BabAttribute list \<Rightarrow> nat
+   \<Rightarrow> TypeError list + (CoreTerm list \<times> CoreTerm list \<times> nat)" where
+  "elab_fun_contracts preEnv postEnv elabEnv argMap oldMap isVoid [] next_mv =
+    Inr ([], [], next_mv)"
+| "elab_fun_contracts preEnv postEnv elabEnv argMap oldMap isVoid
+     (BabAttr_Requires loc tm # rest) next_mv =
+    (case elab_term preEnv elabEnv Ghost (rename_contract_term argMap argMap tm) next_mv of
        Inl errs \<Rightarrow> Inl errs
      | Inr (coreTm, ty, next_mv') \<Rightarrow>
          (case unify (\<lambda>n. n |\<notin>| TE_TypeVars preEnv) ty CoreTy_Bool of
@@ -543,9 +558,14 @@ fun elab_fun_contracts ::
           | Some subst \<Rightarrow>
               if \<not> term_inferred preEnv (apply_subst_to_term subst coreTm)
               then Inl [TyErr_CannotInferType loc]
-              else elab_fun_contracts preEnv postEnv elabEnv rest next_mv'))"
-| "elab_fun_contracts preEnv postEnv elabEnv (BabAttr_Ensures loc tm # rest) next_mv =
-    (case elab_term postEnv elabEnv Ghost tm next_mv of
+              else (case elab_fun_contracts preEnv postEnv elabEnv argMap oldMap isVoid
+                           rest next_mv' of
+                      Inl errs \<Rightarrow> Inl errs
+                    | Inr (reqs, enss, next_mv'') \<Rightarrow>
+                        Inr (apply_subst_to_term subst coreTm # reqs, enss, next_mv''))))"
+| "elab_fun_contracts preEnv postEnv elabEnv argMap oldMap isVoid
+     (BabAttr_Ensures loc tm # rest) next_mv =
+    (case elab_term postEnv elabEnv Ghost (rename_contract_term argMap oldMap tm) next_mv of
        Inl errs \<Rightarrow> Inl errs
      | Inr (coreTm, ty, next_mv') \<Rightarrow>
          (case unify (\<lambda>n. n |\<notin>| TE_TypeVars postEnv) ty CoreTy_Bool of
@@ -553,38 +573,64 @@ fun elab_fun_contracts ::
           | Some subst \<Rightarrow>
               if \<not> term_inferred postEnv (apply_subst_to_term subst coreTm)
               then Inl [TyErr_CannotInferType loc]
-              else elab_fun_contracts preEnv postEnv elabEnv rest next_mv'))"
-| "elab_fun_contracts preEnv postEnv elabEnv (BabAttr_Invariant loc _ # rest) next_mv =
+              \<comment> \<open>A void function has no return value to refer to.\<close>
+              else if isVoid \<and> ''return'' |\<in>| core_term_free_vars coreTm
+              then Inl [TyErr_NameNotFound loc ''return'']
+              else (case elab_fun_contracts preEnv postEnv elabEnv argMap oldMap isVoid
+                           rest next_mv' of
+                      Inl errs \<Rightarrow> Inl errs
+                    | Inr (reqs, enss, next_mv'') \<Rightarrow>
+                        Inr (reqs, apply_subst_to_term subst coreTm # enss, next_mv''))))"
+| "elab_fun_contracts preEnv postEnv elabEnv argMap oldMap isVoid
+     (BabAttr_Invariant loc _ # rest) next_mv =
     Inl [TyErr_InvalidFunctionAttribute loc]"
-| "elab_fun_contracts preEnv postEnv elabEnv (BabAttr_Decreases loc tm # rest) next_mv =
+| "elab_fun_contracts preEnv postEnv elabEnv argMap oldMap isVoid
+     (BabAttr_Decreases loc tm # rest) next_mv =
     Inl [TyErr_InvalidFunctionAttribute loc]"
 
-(* Typecheck a function's contracts and (if present) its body, returning the
-   elaborated body as a CoreStatement list. *)
-definition elab_fun_body_and_contracts ::
+(* The ElabEnv in which a function's contracts and body are elaborated. *)
+definition fun_body_elab_env :: "ElabEnv \<Rightarrow> DeclFun \<Rightarrow> ElabEnv" where
+  "fun_body_elab_env elabEnv df =
+    elabEnv \<lparr> EE_Typedefs := tyvar_typedef_entries (DF_TyArgs df) (EE_Typedefs elabEnv),
+              EE_CurrentFunctionVoid := (DF_ReturnType df = None) \<rparr>"
+
+(* Typecheck a function's contracts, returning the FunInfo with the contract
+   fields filled in. (The input FunInfo's own contract fields are ignored.)
+
+   The contracts are typechecked in the contract environments of
+   CoreContractTypecheck.thy: the body env with the parameters renamed to
+   arg@@i for `requires`, and the body env of post_funinfo (parameters
+   arg@@i, entry values old@@i, and `return`) for `ensures`. *)
+definition elab_fun_contracts_for ::
+  "CoreTyEnv \<Rightarrow> ElabEnv \<Rightarrow> DeclFun \<Rightarrow> FunInfo \<Rightarrow> TypeError list + FunInfo" where
+  "elab_fun_contracts_for env elabEnv df funInfo =
+    (let paramNames = map (\<lambda>(n, _, _). n) (DF_TmArgs df);
+         n = length (FI_TmArgs funInfo);
+         preEnv = module_body_env_for env (contract_arg_names n) funInfo;
+         postEnv = module_body_env_for env (contract_post_names n) (post_funinfo funInfo);
+         argMap = rename_map paramNames (contract_arg_names n);
+         oldMap = rename_map paramNames (contract_old_names n)
+     in case elab_fun_contracts preEnv postEnv (fun_body_elab_env elabEnv df) argMap oldMap
+               (DF_ReturnType df = None) (DF_Attributes df) 0 of
+          Inl errs \<Rightarrow> Inl errs
+        | Inr (reqs, enss, _) \<Rightarrow>
+            Inr (funInfo \<lparr> FI_Requires := reqs, FI_Ensures := enss \<rparr>))"
+
+(* Typecheck a function's body (if present), returning the elaborated body as
+   a CoreStatement list. *)
+definition elab_fun_body ::
   "CoreTyEnv \<Rightarrow> ElabEnv \<Rightarrow> DeclFun \<Rightarrow> FunInfo
    \<Rightarrow> TypeError list + CoreStatement list option" where
-  "elab_fun_body_and_contracts env elabEnv df funInfo =
-    \<comment> \<open>Construct envs for typechecking the body (and a separate env for `ensures`,
-       with the `return` variable)\<close>
+  "elab_fun_body env elabEnv df funInfo =
     (let paramNames = map (\<lambda>(n, _, _). n) (DF_TmArgs df);
-         bodyEnv = module_body_env_for env paramNames funInfo;
-         bodyElabEnv = elabEnv
-           \<lparr> EE_Typedefs := tyvar_typedef_entries (DF_TyArgs df) (EE_Typedefs elabEnv),
-             EE_CurrentFunctionVoid := (DF_ReturnType df = None) \<rparr>;
-         postEnv = (if DF_ReturnType df = None then bodyEnv
-                    else vardecl_add_local bodyEnv Ghost ''return'' (FI_ReturnType funInfo))
-     \<comment> \<open>Elaborate the contracts\<close>
-     in case elab_fun_contracts bodyEnv postEnv bodyElabEnv (DF_Attributes df) 0 of
-          Inl errs \<Rightarrow> Inl errs
-        | Inr _ \<Rightarrow>
-            (case DF_Body df of
-               None \<Rightarrow> Inr None
-             | Some body \<Rightarrow>
-                 \<comment> \<open>Elaborate the body\<close>
-                 (case elab_statement_list bodyEnv bodyElabEnv (DF_Ghost df) body 0 of
-                    Inl errs \<Rightarrow> Inl errs
-                  | Inr (coreBody, _, _) \<Rightarrow> Inr (Some coreBody))))"
+         bodyEnv = module_body_env_for env paramNames funInfo
+     in case DF_Body df of
+          None \<Rightarrow> Inr None
+        | Some body \<Rightarrow>
+            (case elab_statement_list bodyEnv (fun_body_elab_env elabEnv df) (DF_Ghost df)
+                    body 0 of
+               Inl errs \<Rightarrow> Inl errs
+             | Inr (coreBody, _, _) \<Rightarrow> Inr (Some coreBody)))"
 
 (* Elaborate a function declaration. 
 
@@ -593,9 +639,18 @@ definition elab_fun_body_and_contracts ::
    state is built); a bodiless non-extern function is a declaration only.
 
    Defining a previously-declared function requires the FunInfo to match the
-   declaration *literally* - including the type-parameter names (alpha-renaming
-   is not accepted) and the ghost/impure flags - plus agreement on Babylon-level
-   voidness, which is not recoverable from the Core return type. *)
+   declaration *literally*, other than the contract fields. This means that the
+   type-parameter names must be equal (alpha-renaming is not accepted), the
+   ghost/impure flags must be the same, and Babylon-level voidness (which is not
+   recoverable from the Core return type) must match.
+
+   For the contracts (Requires and Ensures): the definition's contracts are
+   typechecked but then discarded, and the FunInfo keeps the contracts of the
+   first declaration seen. (This may be changed in future.)
+
+   Contracts are elaborated before the function is added to the env, so a
+   contract cannot refer to the function itself (nor can a body - recursive
+   functions are not yet supported). *)
 definition elab_function_decl ::
   "CoreTyEnv \<Rightarrow> ElabEnv \<Rightarrow> CoreModule \<Rightarrow> DeclFun
    \<Rightarrow> TypeError list + (CoreTyEnv \<times> ElabEnv \<times> CoreModule)" where
@@ -639,38 +694,54 @@ definition elab_function_decl ::
                            match): a ghost const must be defined by a ghost const.\<close>
                         else if name |\<in>| EE_GhostConstants elabEnv
                         then Inl [TyErr_DuplicateName loc name]
-                        else if funInfo \<noteq> declInfo
+                        else if funInfo \<noteq> declInfo \<lparr> FI_Requires := [], FI_Ensures := [] \<rparr>
                         then Inl [TyErr_FunctionSignatureMismatch loc name]
                         else if (name |\<in>| EE_VoidFunctions elabEnv) \<noteq> isVoid
                         then Inl [TyErr_FunctionSignatureMismatch loc name]
                         else
-                          \<comment> \<open>Elaborate body and contracts; add to CM_Functions.\<close>
-                          (case elab_fun_body_and_contracts env elabEnv df funInfo of
+                          \<comment> \<open>Typecheck the definition's contracts (and discard them).\<close>
+                          (case elab_fun_contracts_for env elabEnv df declInfo of
+                             Inl errs \<Rightarrow> Inl errs
+                           | Inr _ \<Rightarrow>
+                          \<comment> \<open>The declaration's contracts were typechecked when it was
+                             elaborated, and every later declaration preserves their
+                             typing; but nothing in the elaboration state records this,
+                             so re-check it here (cheaply), rather than carry an
+                             invariant for it.\<close>
+                          if \<not> fun_contracts_well_typed env declInfo
+                          then Inl [TyErr_ContractRecheckFailed loc name]
+                          else
+                          \<comment> \<open>Elaborate the body; add to CM_Functions.\<close>
+                          (case elab_fun_body env elabEnv df declInfo of
                              Inl errs \<Rightarrow> Inl errs
                            | Inr bodyOpt \<Rightarrow>
                                Inr (env, elabEnv,
                                     m \<lparr> CM_Functions :=
                                           fmupd name \<lparr> CF_Args = paramNames, CF_Body = bodyOpt \<rparr>
-                                                (CM_Functions m) \<rparr>)))
+                                                (CM_Functions m) \<rparr>))))
                    | None \<Rightarrow>
                        \<comment> \<open>Not previously declared. This is either a declaration only, or
                           a simultaneous declaration+definition. First, check that it isn't
                           a duplicate name.\<close>
                        (if term_name_in_scope env name then Inl [TyErr_DuplicateName loc name]
                         else
+                          \<comment> \<open>Elaborate the contracts, giving the final FunInfo.\<close>
+                          (case elab_fun_contracts_for env elabEnv df funInfo of
+                             Inl errs \<Rightarrow> Inl errs
+                           | Inr funInfo' \<Rightarrow>
                           \<comment> \<open>Add the function to the env before elaborating the body.
                              (Note: since recursion is not supported yet, this is not strictly
                              necessary - we could equally well wait until after elaborating
                              the body, before creating env' - but here we choose to do it
                              before.)\<close>
-                          (let env' = tyenv_add_function name funInfo env;
+                          (let env' = tyenv_add_function name funInfo' env;
                                elabEnv' = (if isVoid
                                            then elabEnv \<lparr> EE_VoidFunctions :=
                                                   finsert name (EE_VoidFunctions elabEnv) \<rparr>
                                            else elabEnv);
-                               m' = m \<lparr> CM_TyEnv := tyenv_add_function name funInfo (CM_TyEnv m) \<rparr>
-                           \<comment> \<open>Now elaborate the body and contracts, in this new env.\<close>
-                           in case elab_fun_body_and_contracts env' elabEnv' df funInfo of
+                               m' = m \<lparr> CM_TyEnv := tyenv_add_function name funInfo' (CM_TyEnv m) \<rparr>
+                           \<comment> \<open>Now elaborate the body, in this new env.\<close>
+                           in case elab_fun_body env' elabEnv' df funInfo' of
                                 Inl errs \<Rightarrow> Inl errs
                               | Inr bodyOpt \<Rightarrow>
                                   \<comment> \<open>If isDefinition, this is a simultaneous declaration +
@@ -682,7 +753,7 @@ definition elab_function_decl ::
                                                     fmupd name \<lparr> CF_Args = paramNames,
                                                                  CF_Body = bodyOpt \<rparr>
                                                           (CM_Functions m') \<rparr>
-                                        else m'))))))))"
+                                        else m')))))))))"
 
 
 (* ========================================================================== *)

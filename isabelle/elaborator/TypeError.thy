@@ -102,6 +102,7 @@ datatype (plugins del: size "quickcheck" transfer lifting) TypeError =
   | TyErr_ConstAbstractType Location  (* a constant initializer mentions an abstract (unrealized) type, so it cannot be evaluated at compile time (e.g. an empty array literal at an opaque imported element type) *)
   | TyErr_InvalidFunctionAttribute Location  (* an attribute other than requires/ensures/decreases on a function *)
   | TyErr_FunctionSignatureMismatch Location string  (* a function definition's signature differs from its earlier declaration *)
+  | TyErr_ContractRecheckFailed Location string  (* the contract of an earlier declaration of this function no longer typechecks at its definition (should be impossible: every later declaration preserves contract typing) *)
   | TyErr_ConstGhostnessMismatch Location string  (* a const definition's ghostness differs from an earlier declaration of the same name *)
   | TyErr_ExternFunctionWithBody Location string  (* an extern function may not also have a body *)
   | TyErr_ExternNameOnGhostFunction Location string  (* a ghost extern function may not have an extern name (`= "name"`) *)

@@ -28,6 +28,7 @@ session Babylon = "HOL-Library" +
     "bab_loader/BasicParser"
 
     (* bab_passes *)
+    "bab_passes/BabContractRename"
     "bab_passes/BabDependency"
     "bab_passes/BabMapDims"
     "bab_passes/BabRenamer"

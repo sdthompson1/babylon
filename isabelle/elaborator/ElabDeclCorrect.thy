@@ -3166,54 +3166,35 @@ qed
 
 
 (* -------------------------------------------------------------------------- *)
-(* Correctness of body elaboration                                            *)
+(* Correctness of body and contract elaboration                               *)
 (* -------------------------------------------------------------------------- *)
 
-(* Elaborating a function's body (when present) produces a statement list
-   that typechecks in the body env - the same env in which the module-level
-   check will re-check the recorded body. The contracts are elaborated only
-   to flag errors and are dropped, so only their success matters here. The
-   entry conditions of the statement-elaborator theorem hold at the body env:
-   well-formedness by module_body_env_for_well_formed, metavariable freshness
-   at counter 0 from the invariant's two freshness conjuncts (the body
-   counter restarts at 0), and the ghost/proof-goal fields are set directly
-   by module_body_env_for. *)
-lemma elab_fun_body_and_contracts_correct:
+(* The ElabEnv-side entry conditions of the term and statement elaborator
+   theorems, at a body env built over the state env from any signature with
+   the declaration's type parameters: the elaboration ElabEnv is well-formed
+   for the body env, and the body env's type variables are all fresh-ok at
+   counter 0 (the body and contract counters restart at 0). The signature
+   need not be in TE_Functions; the body env of post_funinfo qualifies too
+   (its type parameters and return type are the function's own). *)
+lemma elab_decls_invariant_fun_body_elab_env:
   assumes inv: "elab_decls_invariant env0 ownAbstract ctxGlobals env elabEnv m"
-      and lk: "fmlookup (TE_Functions env) fname = Some funInfo"
-      and tyargs: "FI_TyArgs funInfo = DF_TyArgs df"
-      and ghost_eq: "FI_Ghost funInfo = DF_Ghost df"
-      and len: "length (map (\<lambda>(n, _, _). n) (DF_TmArgs df))
-                  = length (FI_TmArgs funInfo)"
-      and void_ret: "DF_ReturnType df = None \<Longrightarrow>
-                       FI_ReturnType funInfo = CoreTy_Record []"
-      and elab: "elab_fun_body_and_contracts env elabEnv df funInfo = Inr bodyOpt"
-  shows "case bodyOpt of
-           None \<Rightarrow> True
-         | Some coreBody \<Rightarrow>
-             core_statement_list_type
-               (module_body_env_for env (map (\<lambda>(n, _, _). n) (DF_TmArgs df)) funInfo)
-               (FI_Ghost funInfo) coreBody \<noteq> None"
+      and tyargs: "FI_TyArgs info = DF_TyArgs df"
+      and void_ret: "DF_ReturnType df = None \<Longrightarrow> FI_ReturnType info = CoreTy_Record []"
+      and fresh: "list_all (\<lambda>n. tyvar_fresh_ok n 0) (FI_TyArgs info)"
+  shows "elabenv_well_formed (module_body_env_for env names info) (fun_body_elab_env elabEnv df)"
+    and "\<forall>n. n |\<in>| TE_TypeVars (module_body_env_for env names info) \<longrightarrow> tyvar_fresh_ok n 0"
 proof -
-  let ?be = "module_body_env_for env (map (\<lambda>(n, _, _). n) (DF_TmArgs df)) funInfo"
+  let ?be = "module_body_env_for env names info"
   let ?bodyEE = "elabEnv \<lparr> EE_Typedefs := tyvar_typedef_entries (DF_TyArgs df)
                                             (EE_Typedefs elabEnv),
                            EE_CurrentFunctionVoid := (DF_ReturnType df = None) \<rparr>"
-  let ?postEnv = "(if DF_ReturnType df = None then ?be
-                   else vardecl_add_local ?be Ghost ''return'' (FI_ReturnType funInfo))"
-  have wf: "tyenv_well_formed env"
-   and eewf: "elabenv_well_formed env elabEnv"
+  have eewf: "elabenv_well_formed env elabEnv"
    and mv_tv: "\<forall>n. n |\<in>| TE_TypeVars env \<longrightarrow> tyvar_fresh_ok n 0"
-   and mv_fn: "\<forall>fname inf. fmlookup (TE_Functions env) fname = Some inf \<longrightarrow>
-                 list_all (\<lambda>n. tyvar_fresh_ok n 0) (FI_TyArgs inf)"
     using inv unfolding elab_decls_invariant_def by blast+
   have scope_env: "tyenv_module_scope env"
     using elab_decls_invariant_module_scope[OF inv] .
   have abs_tv: "TE_AbstractTypes env = TE_TypeVars env"
     using scope_env unfolding tyenv_module_scope_def by blast
-  \<comment> \<open>Entry conditions at the body env.\<close>
-  have wf_be: "tyenv_well_formed ?be"
-    using module_body_env_for_well_formed[OF wf lk len] .
   have td: "typedefs_well_formed env (EE_Typedefs elabEnv)"
     using eewf unfolding elabenv_well_formed_def by blast
   have td_grow: "typedefs_well_formed ?be (EE_Typedefs elabEnv)"
@@ -3224,7 +3205,7 @@ proof -
   have td_be: "typedefs_well_formed ?be
                  (tyvar_typedef_entries (DF_TyArgs df) (EE_Typedefs elabEnv))"
     using typedefs_well_formed_tyvar_entries[OF td_grow fi_sub] .
-  have eewf_be: "elabenv_well_formed ?be ?bodyEE"
+  have "elabenv_well_formed ?be ?bodyEE"
     unfolding elabenv_well_formed_def
   proof (intro conjI allI impI)
     show "typedefs_well_formed ?be (EE_Typedefs ?bodyEE)"
@@ -3247,45 +3228,338 @@ proof -
     then show "TE_ReturnType ?be = CoreTy_Record []"
       using void_ret by (simp add: module_body_env_for_def)
   qed
-  have mv_be: "\<forall>n. n |\<in>| TE_TypeVars ?be \<longrightarrow> tyvar_fresh_ok n 0"
+  then show "elabenv_well_formed ?be (fun_body_elab_env elabEnv df)"
+    unfolding fun_body_elab_env_def .
+  show "\<forall>n. n |\<in>| TE_TypeVars ?be \<longrightarrow> tyvar_fresh_ok n 0"
   proof (intro allI impI)
     fix n assume "n |\<in>| TE_TypeVars ?be"
-    then have "n |\<in>| TE_TypeVars env \<or> n |\<in>| fset_of_list (FI_TyArgs funInfo)"
+    then have "n |\<in>| TE_TypeVars env \<or> n |\<in>| fset_of_list (FI_TyArgs info)"
       by (auto simp: module_body_env_for_def abs_tv)
-    moreover have "list_all (\<lambda>n. tyvar_fresh_ok n 0) (FI_TyArgs funInfo)"
-      using mv_fn lk by blast
-    ultimately show "tyvar_fresh_ok n 0"
-      using mv_tv by (auto simp: list_all_iff fset_of_list_elem)
+    then show "tyvar_fresh_ok n 0"
+      using mv_tv fresh by (auto simp: list_all_iff fset_of_list_elem)
   qed
+qed
+
+(* Elaborating a function's body (when present) produces a statement list
+   that typechecks in the body env - the same env in which the module-level
+   check will re-check the recorded body. The entry conditions of the
+   statement-elaborator theorem hold at the body env: well-formedness by
+   module_body_env_for_well_formed, the ElabEnv conditions by the lemma
+   above, and the ghost/proof-goal fields are set directly by
+   module_body_env_for. *)
+lemma elab_fun_body_correct:
+  assumes inv: "elab_decls_invariant env0 ownAbstract ctxGlobals env elabEnv m"
+      and lk: "fmlookup (TE_Functions env) fname = Some funInfo"
+      and tyargs: "FI_TyArgs funInfo = DF_TyArgs df"
+      and ghost_eq: "FI_Ghost funInfo = DF_Ghost df"
+      and len: "length (map (\<lambda>(n, _, _). n) (DF_TmArgs df))
+                  = length (FI_TmArgs funInfo)"
+      and void_ret: "DF_ReturnType df = None \<Longrightarrow>
+                       FI_ReturnType funInfo = CoreTy_Record []"
+      and elab: "elab_fun_body env elabEnv df funInfo = Inr bodyOpt"
+  shows "case bodyOpt of
+           None \<Rightarrow> True
+         | Some coreBody \<Rightarrow>
+             core_statement_list_type
+               (module_body_env_for env (map (\<lambda>(n, _, _). n) (DF_TmArgs df)) funInfo)
+               (FI_Ghost funInfo) coreBody \<noteq> None"
+proof -
+  let ?be = "module_body_env_for env (map (\<lambda>(n, _, _). n) (DF_TmArgs df)) funInfo"
+  let ?bodyEE = "fun_body_elab_env elabEnv df"
+  have wf: "tyenv_well_formed env"
+   and mv_fn: "\<forall>fname inf. fmlookup (TE_Functions env) fname = Some inf \<longrightarrow>
+                 list_all (\<lambda>n. tyvar_fresh_ok n 0) (FI_TyArgs inf)"
+    using inv unfolding elab_decls_invariant_def by blast+
+  have fresh: "list_all (\<lambda>n. tyvar_fresh_ok n 0) (FI_TyArgs funInfo)"
+    using mv_fn lk by blast
+  \<comment> \<open>Entry conditions at the body env.\<close>
+  have wf_be: "tyenv_well_formed ?be"
+    using module_body_env_for_well_formed[OF wf lk len] .
+  note ee = elab_decls_invariant_fun_body_elab_env[OF inv tyargs void_ret fresh]
   have gh_be: "TE_FunctionGhost ?be = Ghost \<longrightarrow> DF_Ghost df = Ghost"
     by (simp add: module_body_env_for_def ghost_eq)
   have pg_be: "DF_Ghost df = NotGhost \<longrightarrow> TE_ProofGoal ?be = None"
     by (simp add: module_body_env_for_def)
-  \<comment> \<open>Peel the contracts (opaquely) and dispatch on the body.\<close>
-  from elab obtain k where
-    con: "elab_fun_contracts ?be ?postEnv ?bodyEE (DF_Attributes df) 0 = Inr k"
-    unfolding elab_fun_body_and_contracts_def Let_def
-    by (cases "elab_fun_contracts ?be ?postEnv ?bodyEE (DF_Attributes df) 0") auto
   show ?thesis
   proof (cases "DF_Body df")
     case None
     then have "bodyOpt = None"
-      using elab con unfolding elab_fun_body_and_contracts_def Let_def
-      by (simp add: None)
+      using elab unfolding elab_fun_body_def Let_def by (simp add: None)
     then show ?thesis by simp
   next
     case (Some body)
-    from elab con obtain coreBody envOut mv' where
+    from elab obtain coreBody envOut mv' where
       elabS: "elab_statement_list ?be ?bodyEE (DF_Ghost df) body 0
                 = Inr (coreBody, envOut, mv')" and
       bodyOpt_eq: "bodyOpt = Some coreBody"
-      unfolding elab_fun_body_and_contracts_def Let_def
+      unfolding elab_fun_body_def Let_def
       by (cases "elab_statement_list ?be ?bodyEE (DF_Ghost df) body 0")
          (auto simp: Some split: prod.splits)
     have typed: "core_statement_list_type ?be (DF_Ghost df) coreBody = Some envOut"
-      by (rule elab_statement_list_correct[OF elabS wf_be eewf_be mv_be gh_be pg_be])
+      by (rule elab_statement_list_correct[OF elabS wf_be ee(1) ee(2) gh_be pg_be])
     show ?thesis
       unfolding bodyOpt_eq using typed by (simp add: ghost_eq)
+  qed
+qed
+
+(* A contract term elaborated to Bool in Ghost mode (elab_term, then unify
+   against Bool, then the inferred check) typechecks to Bool in env itself.
+   This is the Assume reasoning (cf. elab_while_invariants_correct in
+   ElabStmtCorrect.thy). *)
+lemma elab_contract_term_bool:
+  assumes etm: "elab_term env elabEnv Ghost tm next_mv = Inr (coreTm, ty, next_mv1)"
+      and unif: "unify (\<lambda>n. n |\<notin>| TE_TypeVars env) ty CoreTy_Bool = Some subst"
+      and inf: "term_inferred env (apply_subst_to_term subst coreTm)"
+      and wf: "tyenv_well_formed env"
+      and ee_wf: "elabenv_well_formed env elabEnv"
+      and bound: "\<forall>n. n |\<in>| TE_TypeVars env \<longrightarrow> tyvar_fresh_ok n next_mv"
+  shows "core_term_type env Ghost (apply_subst_to_term subst coreTm) = Some CoreTy_Bool"
+proof -
+  let ?is_flex = "\<lambda>n. n |\<notin>| TE_TypeVars env"
+  let ?envD = "extend_env_with_tyvars env Ghost next_mv next_mv1"
+  have typed_ghost: "core_term_type ?envD Ghost coreTm = Some ty"
+    using elab_term_correct(1)[OF etm wf ee_wf] bound by simp
+  have wfD: "tyenv_well_formed ?envD"
+    using wf tyenv_well_formed_extend_env_with_tyvars by blast
+  have ty_wk: "is_well_kinded ?envD ty"
+    using core_term_type_well_kinded[OF typed_ghost wfD] .
+  have subst_wk: "\<forall>ty' \<in> fmran' subst. is_well_kinded ?envD ty'"
+    using unify_preserves_well_kinded[OF unif ty_wk] by simp
+  have dom_flex: "\<forall>n. n |\<in>| fmdom subst \<longrightarrow> ?is_flex n"
+    using unify_unify_list_dom_flex(1)[OF unif] .
+  note locals_unaffected = flex_subst_extend_env(1)[OF dom_flex wf]
+   and ret_unaffected = flex_subst_extend_env(2)[OF dom_flex wf]
+   and abs_no_subst = flex_subst_extend_env(3)[OF dom_flex wf]
+  have subst_typed: "core_term_type ?envD Ghost (apply_subst_to_term subst coreTm)
+                       = Some (apply_subst subst ty)"
+    using apply_subst_to_term_preserves_typing
+            [OF typed_ghost wfD subst_wk _ locals_unaffected ret_unaffected abs_no_subst
+                unify_bool_range_complete[OF unif]] by simp
+  have "apply_subst subst ty = apply_subst subst CoreTy_Bool"
+    using unify_sound[OF unif] .
+  hence subst_typed_bool:
+    "core_term_type ?envD Ghost (apply_subst_to_term subst coreTm) = Some CoreTy_Bool"
+    using subst_typed by simp
+  show ?thesis
+    using inferred_term_typed_in_env[OF subst_typed_bool bound inf] .
+qed
+
+(* Every `requires` term produced by elab_fun_contracts typechecks to Bool in
+   preEnv, and every `ensures` term to Bool in postEnv (both in Ghost mode);
+   each also passes the inferred check in its env, so its free type
+   variables are that env's. *)
+lemma elab_fun_contracts_correct:
+  "elab_fun_contracts preEnv postEnv elabEnv argMap oldMap isVoid attrs next_mv
+     = Inr (reqs, enss, next_mv') \<Longrightarrow>
+   tyenv_well_formed preEnv \<Longrightarrow> elabenv_well_formed preEnv elabEnv \<Longrightarrow>
+   (\<forall>n. n |\<in>| TE_TypeVars preEnv \<longrightarrow> tyvar_fresh_ok n next_mv) \<Longrightarrow>
+   tyenv_well_formed postEnv \<Longrightarrow> elabenv_well_formed postEnv elabEnv \<Longrightarrow>
+   (\<forall>n. n |\<in>| TE_TypeVars postEnv \<longrightarrow> tyvar_fresh_ok n next_mv) \<Longrightarrow>
+   list_all (\<lambda>tm. core_term_type preEnv Ghost tm = Some CoreTy_Bool
+                  \<and> term_inferred preEnv tm) reqs
+   \<and> list_all (\<lambda>tm. core_term_type postEnv Ghost tm = Some CoreTy_Bool
+                    \<and> term_inferred postEnv tm) enss"
+proof (induction attrs arbitrary: next_mv reqs enss next_mv')
+  case Nil
+  then show ?case by simp
+next
+  case (Cons attr rest)
+  show ?case
+  proof (cases attr)
+    case (BabAttr_Requires loc tm)
+    let ?tm' = "rename_contract_term argMap argMap tm"
+    from Cons.prems(1) obtain coreTm ty next_mv1 subst reqs' where
+      etm: "elab_term preEnv elabEnv Ghost ?tm' next_mv = Inr (coreTm, ty, next_mv1)" and
+      unif: "unify (\<lambda>n. n |\<notin>| TE_TypeVars preEnv) ty CoreTy_Bool = Some subst" and
+      inf: "term_inferred preEnv (apply_subst_to_term subst coreTm)" and
+      rec: "elab_fun_contracts preEnv postEnv elabEnv argMap oldMap isVoid rest next_mv1
+              = Inr (reqs', enss, next_mv')" and
+      reqs_eq: "reqs = apply_subst_to_term subst coreTm # reqs'"
+      unfolding BabAttr_Requires
+      by (auto split: sum.splits prod.splits option.splits if_splits)
+    have head: "core_term_type preEnv Ghost (apply_subst_to_term subst coreTm)
+                  = Some CoreTy_Bool"
+      using elab_contract_term_bool[OF etm unif inf Cons.prems(2,3,4)] .
+    have nmv1: "next_mv \<le> next_mv1" using elab_term_next_mv_monotone[OF etm] .
+    have bound_pre1: "\<forall>n. n |\<in>| TE_TypeVars preEnv \<longrightarrow> tyvar_fresh_ok n next_mv1"
+      using Cons.prems(4) nmv1 tyvar_fresh_ok_mono by blast
+    have bound_post1: "\<forall>n. n |\<in>| TE_TypeVars postEnv \<longrightarrow> tyvar_fresh_ok n next_mv1"
+      using Cons.prems(7) nmv1 tyvar_fresh_ok_mono by blast
+    have tail: "list_all (\<lambda>tm. core_term_type preEnv Ghost tm = Some CoreTy_Bool
+                               \<and> term_inferred preEnv tm) reqs'
+                \<and> list_all (\<lambda>tm. core_term_type postEnv Ghost tm = Some CoreTy_Bool
+                                 \<and> term_inferred postEnv tm) enss"
+      by (rule Cons.IH[OF rec Cons.prems(2,3) bound_pre1 Cons.prems(5,6) bound_post1])
+    show ?thesis using head inf tail by (simp add: reqs_eq)
+  next
+    case (BabAttr_Ensures loc tm)
+    let ?tm' = "rename_contract_term argMap oldMap tm"
+    from Cons.prems(1) obtain coreTm ty next_mv1 subst enss' where
+      etm: "elab_term postEnv elabEnv Ghost ?tm' next_mv = Inr (coreTm, ty, next_mv1)" and
+      unif: "unify (\<lambda>n. n |\<notin>| TE_TypeVars postEnv) ty CoreTy_Bool = Some subst" and
+      inf: "term_inferred postEnv (apply_subst_to_term subst coreTm)" and
+      rec: "elab_fun_contracts preEnv postEnv elabEnv argMap oldMap isVoid rest next_mv1
+              = Inr (reqs, enss', next_mv')" and
+      enss_eq: "enss = apply_subst_to_term subst coreTm # enss'"
+      unfolding BabAttr_Ensures
+      by (auto split: sum.splits prod.splits option.splits if_splits)
+    have head: "core_term_type postEnv Ghost (apply_subst_to_term subst coreTm)
+                  = Some CoreTy_Bool"
+      using elab_contract_term_bool[OF etm unif inf Cons.prems(5,6,7)] .
+    have nmv1: "next_mv \<le> next_mv1" using elab_term_next_mv_monotone[OF etm] .
+    have bound_pre1: "\<forall>n. n |\<in>| TE_TypeVars preEnv \<longrightarrow> tyvar_fresh_ok n next_mv1"
+      using Cons.prems(4) nmv1 tyvar_fresh_ok_mono by blast
+    have bound_post1: "\<forall>n. n |\<in>| TE_TypeVars postEnv \<longrightarrow> tyvar_fresh_ok n next_mv1"
+      using Cons.prems(7) nmv1 tyvar_fresh_ok_mono by blast
+    have tail: "list_all (\<lambda>tm. core_term_type preEnv Ghost tm = Some CoreTy_Bool
+                               \<and> term_inferred preEnv tm) reqs
+                \<and> list_all (\<lambda>tm. core_term_type postEnv Ghost tm = Some CoreTy_Bool
+                                 \<and> term_inferred postEnv tm) enss'"
+      by (rule Cons.IH[OF rec Cons.prems(2,3) bound_pre1 Cons.prems(5,6) bound_post1])
+    show ?thesis using head inf tail by (simp add: enss_eq)
+  next
+    case (BabAttr_Invariant loc tm)
+    then show ?thesis using Cons.prems(1) by simp
+  next
+    case (BabAttr_Decreases loc tm)
+    then show ?thesis using Cons.prems(1) by simp
+  qed
+qed
+
+(* The contract fields of a FunInfo play no part in its body env, nor in its
+   postcondition signature's other fields. *)
+lemma module_body_env_for_contracts_irrelevant:
+  "module_body_env_for env names (info \<lparr> FI_Requires := reqs, FI_Ensures := enss \<rparr>)
+     = module_body_env_for env names info"
+  by (simp add: module_body_env_for_def)
+
+lemma post_funinfo_contracts:
+  "post_funinfo (info \<lparr> FI_Requires := reqs, FI_Ensures := enss \<rparr>)
+     = post_funinfo info \<lparr> FI_Requires := reqs, FI_Ensures := enss \<rparr>"
+  by (rule FunInfo.equality) (simp_all add: post_funinfo_def)
+
+(* Elaborating a function's contracts yields the signature with its contract
+   fields filled in, and those contracts are well-typed in the state env
+   (fun_contracts_well_typed, CoreContractTypecheck.thy): the `requires`
+   terms were elaborated in exactly the positional body env that definition
+   uses, and the `ensures` terms in the positional post_funinfo body env.
+   The contract terms' free type variables are the state env's abstract types
+   and the function's own type parameters (which is what
+   elab_decls_invariant_add_function needs to see the FunInfo is untouched
+   by the module's substitution).
+
+   The function need not be declared in env (it is not, for a fresh
+   declaration): the body envs are shown well-formed from the signature
+   facts alone (the same facts elab_decls_invariant_add_function takes). *)
+lemma elab_fun_contracts_for_correct:
+  assumes inv: "elab_decls_invariant env0 ownAbstract ctxGlobals env elabEnv m"
+      and tyargs: "FI_TyArgs funInfo = DF_TyArgs df"
+      and void_ret: "DF_ReturnType df = None \<Longrightarrow> FI_ReturnType funInfo = CoreTy_Record []"
+      and fresh: "list_all (\<lambda>n. tyvar_fresh_ok n 0) (FI_TyArgs funInfo)"
+      and wk_args: "\<forall>ty \<in> fst ` set (FI_TmArgs funInfo).
+                      is_well_kinded (env \<lparr> TE_TypeVars := TE_AbstractTypes env
+                                              |\<union>| fset_of_list (FI_TyArgs funInfo) \<rparr>) ty"
+      and wk_ret: "is_well_kinded (env \<lparr> TE_TypeVars := TE_AbstractTypes env
+                                           |\<union>| fset_of_list (FI_TyArgs funInfo) \<rparr>)
+                     (FI_ReturnType funInfo)"
+      and rt_p: "FI_Ghost funInfo = NotGhost \<Longrightarrow>
+                   (\<forall>ty vor. (ty, vor, NotGhost) \<in> set (FI_TmArgs funInfo) \<longrightarrow>
+                      is_runtime_type
+                        (env \<lparr> TE_TypeVars := TE_AbstractTypes env
+                                 |\<union>| fset_of_list (FI_TyArgs funInfo),
+                               TE_RuntimeTypeVars :=
+                                 (TE_AbstractTypes env |\<inter>| TE_RuntimeTypeVars env)
+                                 |\<union>| fset_of_list (FI_TyArgs funInfo) \<rparr>) ty)
+                   \<and> is_runtime_type
+                       (env \<lparr> TE_TypeVars := TE_AbstractTypes env
+                                |\<union>| fset_of_list (FI_TyArgs funInfo),
+                              TE_RuntimeTypeVars :=
+                                (TE_AbstractTypes env |\<inter>| TE_RuntimeTypeVars env)
+                                |\<union>| fset_of_list (FI_TyArgs funInfo) \<rparr>)
+                       (FI_ReturnType funInfo)"
+      and ret_cp: "FI_Ghost funInfo = NotGhost \<Longrightarrow> is_complete_type (FI_ReturnType funInfo)"
+      and elab: "elab_fun_contracts_for env elabEnv df funInfo = Inr funInfo'"
+  shows "\<exists>reqs enss. funInfo' = funInfo \<lparr> FI_Requires := reqs, FI_Ensures := enss \<rparr>"
+    and "fun_contracts_well_typed env funInfo'"
+    and "\<forall>tm \<in> set (FI_Requires funInfo') \<union> set (FI_Ensures funInfo').
+           core_term_free_tyvars tm
+             \<subseteq> fset (TE_AbstractTypes env |\<union>| fset_of_list (FI_TyArgs funInfo))"
+proof -
+  let ?n = "length (FI_TmArgs funInfo)"
+  let ?paramNames = "map (\<lambda>(n, _, _). n) (DF_TmArgs df)"
+  let ?pre = "module_body_env_for env (contract_arg_names ?n) funInfo"
+  let ?post = "module_body_env_for env (contract_post_names ?n) (post_funinfo funInfo)"
+  let ?bodyEE = "fun_body_elab_env elabEnv df"
+  let ?argMap = "rename_map ?paramNames (contract_arg_names ?n)"
+  let ?oldMap = "rename_map ?paramNames (contract_old_names ?n)"
+  have wf: "tyenv_well_formed env"
+    using inv unfolding elab_decls_invariant_def by blast
+  \<comment> \<open>Peel the definition.\<close>
+  from elab obtain reqs enss k where
+    con: "elab_fun_contracts ?pre ?post ?bodyEE ?argMap ?oldMap (DF_ReturnType df = None)
+            (DF_Attributes df) 0 = Inr (reqs, enss, k)" and
+    fi'_eq: "funInfo' = funInfo \<lparr> FI_Requires := reqs, FI_Ensures := enss \<rparr>"
+    unfolding elab_fun_contracts_for_def Let_def
+    by (cases "elab_fun_contracts ?pre ?post ?bodyEE ?argMap ?oldMap (DF_ReturnType df = None)
+                 (DF_Attributes df) 0")
+       (auto split: prod.splits)
+  \<comment> \<open>Entry conditions at the two contract envs.\<close>
+  have len_pre: "length (contract_arg_names ?n) = length (FI_TmArgs funInfo)"
+    by (rule length_contract_arg_names)
+  have wf_pre: "tyenv_well_formed ?pre"
+    by (rule module_body_env_for_well_formed_sig
+              [OF wf conjI[OF wk_args wk_ret] rt_p ret_cp len_pre])
+  have len_post: "length (contract_post_names ?n) = length (FI_TmArgs (post_funinfo funInfo))"
+    by (rule length_post_funinfo_args[symmetric])
+  have wf_post: "tyenv_well_formed ?post"
+    by (rule module_body_env_for_well_formed_post_sig
+              [OF wf conjI[OF wk_args wk_ret] rt_p ret_cp len_post])
+  note ee_pre = elab_decls_invariant_fun_body_elab_env
+                  [OF inv tyargs void_ret fresh, of "contract_arg_names ?n"]
+  have tyargs_post: "FI_TyArgs (post_funinfo funInfo) = DF_TyArgs df"
+    by (simp add: tyargs)
+  have void_post: "DF_ReturnType df = None \<Longrightarrow> FI_ReturnType (post_funinfo funInfo) = CoreTy_Record []"
+    by (simp add: void_ret)
+  have fresh_post: "list_all (\<lambda>n. tyvar_fresh_ok n 0) (FI_TyArgs (post_funinfo funInfo))"
+    by (simp add: fresh)
+  note ee_post = elab_decls_invariant_fun_body_elab_env
+                   [OF inv tyargs_post void_post fresh_post, of "contract_post_names ?n"]
+  \<comment> \<open>The contract terms are typed (and inferred) in their envs.\<close>
+  have typed: "list_all (\<lambda>tm. core_term_type ?pre Ghost tm = Some CoreTy_Bool
+                              \<and> term_inferred ?pre tm) reqs
+               \<and> list_all (\<lambda>tm. core_term_type ?post Ghost tm = Some CoreTy_Bool
+                                \<and> term_inferred ?post tm) enss"
+    by (rule elab_fun_contracts_correct[OF con wf_pre ee_pre(1) ee_pre(2) wf_post ee_post(1) ee_post(2)])
+  show "\<exists>reqs enss. funInfo' = funInfo \<lparr> FI_Requires := reqs, FI_Ensures := enss \<rparr>"
+    using fi'_eq by blast
+  show "fun_contracts_well_typed env funInfo'"
+    unfolding fun_contracts_well_typed_def contracts_typed_in_def fi'_eq
+              post_funinfo_contracts module_body_env_for_contracts_irrelevant
+    using typed by (simp add: list_all_iff)
+  \<comment> \<open>Free type variables: the inferred check says they are the env's.\<close>
+  have tv_pre: "TE_TypeVars ?pre = TE_AbstractTypes env |\<union>| fset_of_list (FI_TyArgs funInfo)"
+    by (simp add: module_body_env_for_def)
+  have tv_post: "TE_TypeVars ?post = TE_AbstractTypes env |\<union>| fset_of_list (FI_TyArgs funInfo)"
+    by (simp add: module_body_env_for_def)
+  show "\<forall>tm \<in> set (FI_Requires funInfo') \<union> set (FI_Ensures funInfo').
+          core_term_free_tyvars tm
+            \<subseteq> fset (TE_AbstractTypes env |\<union>| fset_of_list (FI_TyArgs funInfo))"
+  proof
+    fix tm assume "tm \<in> set (FI_Requires funInfo') \<union> set (FI_Ensures funInfo')"
+    then have "tm \<in> set reqs \<or> tm \<in> set enss" by (simp add: fi'_eq)
+    then show "core_term_free_tyvars tm
+                 \<subseteq> fset (TE_AbstractTypes env |\<union>| fset_of_list (FI_TyArgs funInfo))"
+    proof
+      assume "tm \<in> set reqs"
+      then have "term_inferred ?pre tm" using typed by (simp add: list_all_iff)
+      then show ?thesis
+        unfolding term_inferred_def tv_pre by (auto simp: list_all_iff)
+    next
+      assume "tm \<in> set enss"
+      then have "term_inferred ?post tm" using typed by (simp add: list_all_iff)
+      then show ?thesis
+        unfolding term_inferred_def tv_post by (auto simp: list_all_iff)
+    qed
   qed
 qed
 
@@ -3473,17 +3747,19 @@ qed
    the defining equations of the result. *)
 lemma elab_function_decl_Inr_elim:
   assumes ok: "elab_function_decl env elabEnv m df = Inr (env', elabEnv', m')"
-  obtains (Define) funInfo bodyOpt where
+  obtains (Define) funInfo declInfo bodyOpt where
     "first_duplicate_name (\<lambda>x. x) (DF_TyArgs df) = None"
     "first_duplicate_name (\<lambda>(n, _, _). n) (DF_TmArgs df) = None"
     "\<not> binder_captures env m (DF_TyArgs df)"
     "\<not> (DF_Extern df \<and> DF_Body df \<noteq> None)"
     "elab_fun_signature env elabEnv df = Inr funInfo"
-    "fmlookup (TE_Functions env) (DF_Name df) = Some funInfo"
+    "fmlookup (TE_Functions env) (DF_Name df) = Some declInfo"
+    "funInfo = declInfo \<lparr> FI_Requires := [], FI_Ensures := [] \<rparr>"
     "DF_Extern df \<or> DF_Body df \<noteq> None"
     "DF_Name df |\<notin>| fmdom (CM_Functions m)"
     "(DF_Name df |\<in>| EE_VoidFunctions elabEnv) = (DF_ReturnType df = None)"
-    "elab_fun_body_and_contracts env elabEnv df funInfo = Inr bodyOpt"
+    "fun_contracts_well_typed env declInfo"
+    "elab_fun_body env elabEnv df declInfo = Inr bodyOpt"
     "env' = env"
     "elabEnv' = elabEnv"
     "m' = m \<lparr> CM_Functions :=
@@ -3491,7 +3767,7 @@ lemma elab_function_decl_Inr_elim:
                       \<lparr> CF_Args = map (\<lambda>(n, _, _). n) (DF_TmArgs df),
                         CF_Body = bodyOpt \<rparr>
                       (CM_Functions m) \<rparr>"
-  | (Declare) funInfo bodyOpt where
+  | (Declare) funInfo funInfo' bodyOpt where
     "first_duplicate_name (\<lambda>x. x) (DF_TyArgs df) = None"
     "first_duplicate_name (\<lambda>(n, _, _). n) (DF_TmArgs df) = None"
     "\<not> binder_captures env m (DF_TyArgs df)"
@@ -3499,26 +3775,27 @@ lemma elab_function_decl_Inr_elim:
     "elab_fun_signature env elabEnv df = Inr funInfo"
     "fmlookup (TE_Functions env) (DF_Name df) = None"
     "\<not> term_name_in_scope env (DF_Name df)"
-    "elab_fun_body_and_contracts
-       (tyenv_add_function (DF_Name df) funInfo env)
+    "elab_fun_contracts_for env elabEnv df funInfo = Inr funInfo'"
+    "elab_fun_body
+       (tyenv_add_function (DF_Name df) funInfo' env)
        (if DF_ReturnType df = None
         then elabEnv \<lparr> EE_VoidFunctions :=
                finsert (DF_Name df) (EE_VoidFunctions elabEnv) \<rparr>
         else elabEnv)
-       df funInfo = Inr bodyOpt"
-    "env' = tyenv_add_function (DF_Name df) funInfo env"
+       df funInfo' = Inr bodyOpt"
+    "env' = tyenv_add_function (DF_Name df) funInfo' env"
     "elabEnv' = (if DF_ReturnType df = None
                  then elabEnv \<lparr> EE_VoidFunctions :=
                         finsert (DF_Name df) (EE_VoidFunctions elabEnv) \<rparr>
                  else elabEnv)"
     "m' = (if DF_Extern df \<or> DF_Body df \<noteq> None
-           then m \<lparr> CM_TyEnv := tyenv_add_function (DF_Name df) funInfo (CM_TyEnv m),
+           then m \<lparr> CM_TyEnv := tyenv_add_function (DF_Name df) funInfo' (CM_TyEnv m),
                     CM_Functions :=
                       fmupd (DF_Name df)
                             \<lparr> CF_Args = map (\<lambda>(n, _, _). n) (DF_TmArgs df),
                               CF_Body = bodyOpt \<rparr>
                             (CM_Functions m) \<rparr>
-           else m \<lparr> CM_TyEnv := tyenv_add_function (DF_Name df) funInfo
+           else m \<lparr> CM_TyEnv := tyenv_add_function (DF_Name df) funInfo'
                                   (CM_TyEnv m) \<rparr>)"
 proof -
   \<comment> \<open>Peel the guards and the signature one at a time (auto with the full
@@ -3574,16 +3851,25 @@ proof -
       using ok isdef unfolding elab_function_decl_def Let_def
       by (cases "DF_Name df |\<in>| EE_GhostConstants elabEnv")
          (auto simp: g1 g2 g3 g4 g4' g6' sig Some nd)
-    have fi_eq: "funInfo = declInfo"
+    have fi_eq: "funInfo = declInfo \<lparr> FI_Requires := [], FI_Ensures := [] \<rparr>"
       using ok isdef unfolding elab_function_decl_def Let_def
-      by (cases "funInfo = declInfo")
+      by (cases "funInfo = declInfo \<lparr> FI_Requires := [], FI_Ensures := [] \<rparr>")
          (auto simp: g1 g2 g3 g4 g4' g6' sig Some nd ngc)
     have vd: "(DF_Name df |\<in>| EE_VoidFunctions elabEnv) = (DF_ReturnType df = None)"
       using ok isdef unfolding elab_function_decl_def Let_def
       by (cases "(DF_Name df |\<in>| EE_VoidFunctions elabEnv) = (DF_ReturnType df = None)")
          (auto simp: g1 g2 g3 g4 g4' g6' sig Some nd ngc fi_eq)
+    from ok isdef obtain ci where
+      elabC: "elab_fun_contracts_for env elabEnv df declInfo = Inr ci"
+      unfolding elab_function_decl_def Let_def
+      by (cases "elab_fun_contracts_for env elabEnv df declInfo")
+         (auto simp: g1 g2 g3 g4 g4' g6' sig Some nd ngc fi_eq vd)
+    have ctr: "fun_contracts_well_typed env declInfo"
+      using ok isdef unfolding elab_function_decl_def Let_def
+      by (cases "fun_contracts_well_typed env declInfo")
+         (auto simp: g1 g2 g3 g4 g4' g6' sig Some nd ngc fi_eq vd elabC)
     from ok isdef obtain bodyOpt where
-      elabB: "elab_fun_body_and_contracts env elabEnv df funInfo = Inr bodyOpt" and
+      elabB: "elab_fun_body env elabEnv df declInfo = Inr bodyOpt" and
       eq1: "env' = env" and
       eq2: "elabEnv' = elabEnv" and
       eq3: "m' = m \<lparr> CM_Functions :=
@@ -3592,42 +3878,45 @@ proof -
                                CF_Body = bodyOpt \<rparr>
                              (CM_Functions m) \<rparr>"
       unfolding elab_function_decl_def Let_def
-      by (cases "elab_fun_body_and_contracts env elabEnv df funInfo")
-         (auto simp: g1 g2 g3 g4 g4' g6' sig Some nd ngc fi_eq vd)
-    have lk: "fmlookup (TE_Functions env) (DF_Name df) = Some funInfo"
-      using Some fi_eq by simp
+      by (cases "elab_fun_body env elabEnv df declInfo")
+         (auto simp: g1 g2 g3 g4 g4' g6' sig Some nd ngc fi_eq vd elabC ctr)
     show thesis
-      by (rule Define[OF g1 g2 g3 g4 sig lk isdef nd vd elabB eq1 eq2 eq3])
+      by (rule Define[OF g1 g2 g3 g4 sig Some fi_eq isdef nd vd ctr elabB eq1 eq2 eq3])
   next
     case None
     have notin: "\<not> term_name_in_scope env (DF_Name df)"
       using ok unfolding elab_function_decl_def Let_def
       by (cases "term_name_in_scope env (DF_Name df)")
          (auto simp: g1 g2 g3 g4 g4' g6' sig None)
-    let ?env1 = "tyenv_add_function (DF_Name df) funInfo env"
+    from ok obtain funInfo' where
+      elabC: "elab_fun_contracts_for env elabEnv df funInfo = Inr funInfo'"
+      unfolding elab_function_decl_def Let_def
+      by (cases "elab_fun_contracts_for env elabEnv df funInfo")
+         (auto simp: g1 g2 g3 g4 g4' g6' sig None notin)
+    let ?env1 = "tyenv_add_function (DF_Name df) funInfo' env"
     let ?ee1 = "(if DF_ReturnType df = None
                  then elabEnv \<lparr> EE_VoidFunctions :=
                         finsert (DF_Name df) (EE_VoidFunctions elabEnv) \<rparr>
                  else elabEnv)"
     from ok obtain bodyOpt where
-      elabB: "elab_fun_body_and_contracts ?env1 ?ee1 df funInfo = Inr bodyOpt" and
+      elabB: "elab_fun_body ?env1 ?ee1 df funInfo' = Inr bodyOpt" and
       eq1: "env' = ?env1" and
       eq2: "elabEnv' = ?ee1" and
       eq3: "m' = (if DF_Extern df \<or> DF_Body df \<noteq> None
-                  then m \<lparr> CM_TyEnv := tyenv_add_function (DF_Name df) funInfo
+                  then m \<lparr> CM_TyEnv := tyenv_add_function (DF_Name df) funInfo'
                                          (CM_TyEnv m),
                            CM_Functions :=
                              fmupd (DF_Name df)
                                    \<lparr> CF_Args = map (\<lambda>(n, _, _). n) (DF_TmArgs df),
                                      CF_Body = bodyOpt \<rparr>
                                    (CM_Functions m) \<rparr>
-                  else m \<lparr> CM_TyEnv := tyenv_add_function (DF_Name df) funInfo
+                  else m \<lparr> CM_TyEnv := tyenv_add_function (DF_Name df) funInfo'
                                          (CM_TyEnv m) \<rparr>)"
       unfolding elab_function_decl_def Let_def
-      by (cases "elab_fun_body_and_contracts ?env1 ?ee1 df funInfo")
-         (auto simp: g1 g2 g3 g4 g4' g6' sig None notin)
+      by (cases "elab_fun_body ?env1 ?ee1 df funInfo'")
+         (auto simp: g1 g2 g3 g4 g4' g6' sig None notin elabC)
     show thesis
-      by (rule Declare[OF g1 g2 g3 g4 sig None notin elabB eq1 eq2 eq3])
+      by (rule Declare[OF g1 g2 g3 g4 sig None notin elabC elabB eq1 eq2 eq3])
   qed
 qed
 
@@ -3712,56 +4001,134 @@ proof -
   qed
   have ret_cp': "FI_Ghost funInfo = NotGhost \<Longrightarrow> is_complete_type (FI_ReturnType funInfo)"
     using sigc(9) sigc(2) by simp
-  have ctr_tv': "\<forall>tm \<in> set (FI_Requires funInfo) \<union> set (FI_Ensures funInfo).
-                   core_term_free_tyvars tm
-                     \<subseteq> fset (TE_AbstractTypes env |\<union>| fset_of_list (FI_TyArgs funInfo))"
-    using sigc(10) sigc(11) by simp
-  have ctr_wt: "fun_contracts_well_typed e funInfo" for e
-    by (rule fun_contracts_well_typed_empty[OF sigc(10) sigc(11)])
   \<comment> \<open>Dispatch on whether the function is already declared.\<close>
   from elab show ?thesis
   proof (cases rule: elab_function_decl_Inr_elim)
-    case (Define funInfo2 bodyOpt)
+    case (Define funInfo2 declInfo bodyOpt)
     \<comment> \<open>Definition of a previously-declared function: only CM_Functions
         changes, and the guards force the elaborated signature to coincide
-        with the declared one.\<close>
+        with the declared one (up to the contract fields, which the
+        declaration keeps). The declaration's contracts were re-checked.\<close>
     have fi: "funInfo2 = funInfo" using Define(5) sig by simp
-    have lk: "fmlookup (TE_Functions env) ?name = Some funInfo"
-      using Define(6) fi by simp
-    have elabB: "elab_fun_body_and_contracts env elabEnv df funInfo = Inr bodyOpt"
-      using Define(10) fi by simp
+    have fi_eq: "funInfo = declInfo \<lparr> FI_Requires := [], FI_Ensures := [] \<rparr>"
+      using Define(7) fi by simp
+    note lk = Define(6)
+    have tyargs_d: "FI_TyArgs declInfo = DF_TyArgs df"
+      using sigc(1) by (simp add: fi_eq)
+    have ghost_d: "FI_Ghost declInfo = DF_Ghost df"
+      using sigc(2) by (simp add: fi_eq)
+    have len_d: "length ?paramNames = length (FI_TmArgs declInfo)"
+      using len_pn by (simp add: fi_eq)
+    have void_d: "DF_ReturnType df = None \<Longrightarrow> FI_ReturnType declInfo = CoreTy_Record []"
+      using sigc(8) by (simp add: fi_eq)
     have body_ok: "case bodyOpt of
                      None \<Rightarrow> True
                    | Some coreBody \<Rightarrow>
                        core_statement_list_type
-                         (module_body_env_for env ?paramNames funInfo)
-                         (FI_Ghost funInfo) coreBody \<noteq> None"
-      by (rule elab_fun_body_and_contracts_correct
-                 [OF inv lk sigc(1) sigc(2) len_pn sigc(8) elabB])
+                         (module_body_env_for env ?paramNames declInfo)
+                         (FI_Ghost declInfo) coreBody \<noteq> None"
+      by (rule elab_fun_body_correct[OF inv lk tyargs_d ghost_d len_d void_d Define(12)])
     have "elab_decls_invariant env0 ownAbstract ctxGlobals env elabEnv
             (m \<lparr> CM_Functions := fmupd ?name \<lparr> CF_Args = ?paramNames,
                                                 CF_Body = bodyOpt \<rparr>
                                        (CM_Functions m) \<rparr>)"
       by (rule elab_decls_invariant_define_function
-                 [OF inv lk len_pn dst_pn body_ok ctr_wt])
-    then show ?thesis using Define(11) Define(12) Define(13) by simp
+                 [OF inv lk len_d dst_pn body_ok Define(11)])
+    then show ?thesis using Define(13) Define(14) Define(15) by simp
   next
-    case (Declare funInfo2 bodyOpt)
-    \<comment> \<open>Fresh declaration: add the function to the state env and the module's
-        own type env, then (for a definition) record the body.\<close>
+    case (Declare funInfo2 funInfo' bodyOpt)
+    \<comment> \<open>Fresh declaration: elaborate the contracts (giving the final FunInfo),
+        add the function to the state env and the module's own type env, then
+        (for a definition) record the body.\<close>
     have fi: "funInfo2 = funInfo" using Declare(5) sig by simp
     note notin = Declare(7)
-    let ?env1 = "tyenv_add_function ?name funInfo env"
+    have elabC: "elab_fun_contracts_for env elabEnv df funInfo = Inr funInfo'"
+      using Declare(8) fi by simp
+    note cfc = elab_fun_contracts_for_correct
+                 [OF inv sigc(1) sigc(8) fi_fresh wk_args' wk_ret' rt_p' ret_cp' elabC]
+    obtain reqs enss where
+      fi'_eq: "funInfo' = funInfo \<lparr> FI_Requires := reqs, FI_Ensures := enss \<rparr>"
+      using cfc(1) by blast
+    \<comment> \<open>The final FunInfo differs from the elaborated signature only in its
+        contract fields, so the signature facts carry over.\<close>
+    have fields: "FI_TyArgs funInfo' = FI_TyArgs funInfo"
+                 "FI_TmArgs funInfo' = FI_TmArgs funInfo"
+                 "FI_ReturnType funInfo' = FI_ReturnType funInfo"
+                 "FI_Ghost funInfo' = FI_Ghost funInfo"
+                 "FI_Impure funInfo' = FI_Impure funInfo"
+      by (simp_all add: fi'_eq)
+    have fi_cap'': "subst_names (CM_TypeSubst m)
+                      |\<inter>| fset_of_list (FI_TyArgs funInfo') = {||}"
+      using fi_cap unfolding fields .
+    have fi_fresh'': "list_all (\<lambda>n. tyvar_fresh_ok n 0) (FI_TyArgs funInfo')"
+      using fi_fresh unfolding fields .
+    have dist_fi'': "distinct (FI_TyArgs funInfo')"
+      using dist_fi unfolding fields .
+    have wk_args'': "\<forall>ty \<in> fst ` set (FI_TmArgs funInfo').
+                       is_well_kinded (env \<lparr> TE_TypeVars := TE_AbstractTypes env
+                                               |\<union>| fset_of_list (FI_TyArgs funInfo') \<rparr>) ty"
+      using wk_args' unfolding fields .
+    have wk_ret'': "is_well_kinded (env \<lparr> TE_TypeVars := TE_AbstractTypes env
+                                            |\<union>| fset_of_list (FI_TyArgs funInfo') \<rparr>)
+                      (FI_ReturnType funInfo')"
+      using wk_ret' unfolding fields .
+    have rt_p'': "(\<forall>ty vor. (ty, vor, NotGhost) \<in> set (FI_TmArgs funInfo') \<longrightarrow>
+                     is_runtime_type
+                       (env \<lparr> TE_TypeVars := TE_AbstractTypes env
+                                |\<union>| fset_of_list (FI_TyArgs funInfo'),
+                              TE_RuntimeTypeVars :=
+                                (TE_AbstractTypes env |\<inter>| TE_RuntimeTypeVars env)
+                                |\<union>| fset_of_list (FI_TyArgs funInfo') \<rparr>) ty)
+                  \<and> is_runtime_type
+                      (env \<lparr> TE_TypeVars := TE_AbstractTypes env
+                               |\<union>| fset_of_list (FI_TyArgs funInfo'),
+                             TE_RuntimeTypeVars :=
+                               (TE_AbstractTypes env |\<inter>| TE_RuntimeTypeVars env)
+                               |\<union>| fset_of_list (FI_TyArgs funInfo') \<rparr>)
+                      (FI_ReturnType funInfo')"
+      if ng: "FI_Ghost funInfo' = NotGhost"
+    proof -
+      have ng0: "FI_Ghost funInfo = NotGhost" using ng unfolding fields .
+      from rt_p'[OF ng0] show ?thesis unfolding fields .
+    qed
+    have ret_cp'': "FI_Ghost funInfo' = NotGhost \<Longrightarrow> is_complete_type (FI_ReturnType funInfo')"
+      using ret_cp' by (simp add: fields)
+    have ctr_tv'': "\<forall>tm \<in> set (FI_Requires funInfo') \<union> set (FI_Ensures funInfo').
+                      core_term_free_tyvars tm
+                        \<subseteq> fset (TE_AbstractTypes env |\<union>| fset_of_list (FI_TyArgs funInfo'))"
+      using cfc(3) unfolding fields .
+    have tyargs'': "FI_TyArgs funInfo' = DF_TyArgs df"
+      using sigc(1) unfolding fields .
+    have ghost'': "FI_Ghost funInfo' = DF_Ghost df"
+      using sigc(2) unfolding fields .
+    have len'': "length ?paramNames = length (FI_TmArgs funInfo')"
+      using len_pn unfolding fields .
+    have void'': "DF_ReturnType df = None \<Longrightarrow> FI_ReturnType funInfo' = CoreTy_Record []"
+      using sigc(8) by (simp add: fields)
+    let ?env1 = "tyenv_add_function ?name funInfo' env"
     let ?ee1 = "(if DF_ReturnType df = None
                  then elabEnv \<lparr> EE_VoidFunctions :=
                         finsert ?name (EE_VoidFunctions elabEnv) \<rparr>
                  else elabEnv)"
-    let ?m1 = "m \<lparr> CM_TyEnv := tyenv_add_function ?name funInfo (CM_TyEnv m) \<rparr>"
-    have elabB: "elab_fun_body_and_contracts ?env1 ?ee1 df funInfo = Inr bodyOpt"
-      using Declare(8) fi by simp
+    let ?m1 = "m \<lparr> CM_TyEnv := tyenv_add_function ?name funInfo' (CM_TyEnv m) \<rparr>"
+    have elabB: "elab_fun_body ?env1 ?ee1 df funInfo' = Inr bodyOpt"
+      using Declare(9) .
     have inv1: "elab_decls_invariant env0 ownAbstract ctxGlobals ?env1 elabEnv ?m1"
       by (rule elab_decls_invariant_add_function
-                 [OF inv notin fi_cap fi_fresh dist_fi wk_args' wk_ret' rt_p' ret_cp' ctr_tv'])
+                 [OF inv notin fi_cap'' fi_fresh'' dist_fi'' wk_args'' wk_ret'' rt_p''
+                     ret_cp'' ctr_tv''])
+    \<comment> \<open>The contracts stay well-typed once the function is in the env.\<close>
+    have fresh_fn: "?name |\<notin>| fmdom (TE_Functions env)"
+      using notin unfolding term_name_in_scope_def by blast
+    have ctr1: "fun_contracts_well_typed ?env1 funInfo'"
+    proof (rule fun_contracts_well_typed_tyenv_extends[OF cfc(2)])
+      show "tyenv_extends env ?env1"
+        using tyenv_extends_add_function[OF fresh_fn] .
+      show "tyenv_ctors_consistent env"
+        using wf unfolding tyenv_well_formed_def by blast
+      show "TE_AbstractTypes ?env1 = TE_AbstractTypes env"
+        by (simp add: tyenv_add_function_def)
+    qed
     have ee_td: "EE_Typedefs ?ee1 = EE_Typedefs elabEnv"
       by (cases "DF_ReturnType df = None") simp_all
     have ee_vc: "EE_NullaryDataCtors ?ee1 = EE_NullaryDataCtors elabEnv"
@@ -3772,16 +4139,15 @@ proof -
       by (cases "DF_ReturnType df = None") simp_all
     have inv2: "elab_decls_invariant env0 ownAbstract ctxGlobals ?env1 ?ee1 ?m1"
       by (rule elab_decls_invariant_ee_cong[OF inv1 ee_td ee_vc ee_vd ee_gc])
-    have lk1: "fmlookup (TE_Functions ?env1) ?name = Some funInfo"
+    have lk1: "fmlookup (TE_Functions ?env1) ?name = Some funInfo'"
       by (simp add: tyenv_add_function_def)
     have body_ok: "case bodyOpt of
                      None \<Rightarrow> True
                    | Some coreBody \<Rightarrow>
                        core_statement_list_type
-                         (module_body_env_for ?env1 ?paramNames funInfo)
-                         (FI_Ghost funInfo) coreBody \<noteq> None"
-      by (rule elab_fun_body_and_contracts_correct
-                 [OF inv2 lk1 sigc(1) sigc(2) len_pn sigc(8) elabB])
+                         (module_body_env_for ?env1 ?paramNames funInfo')
+                         (FI_Ghost funInfo') coreBody \<noteq> None"
+      by (rule elab_fun_body_correct[OF inv2 lk1 tyargs'' ghost'' len'' void'' elabB])
     show ?thesis
     proof (cases "DF_Extern df \<or> DF_Body df \<noteq> None")
       case True
@@ -3790,11 +4156,11 @@ proof -
                                                     CF_Body = bodyOpt \<rparr>
                                            (CM_Functions ?m1) \<rparr>)"
         by (rule elab_decls_invariant_define_function
-                   [OF inv2 lk1 len_pn dst_pn body_ok ctr_wt])
-      then show ?thesis using Declare(9) Declare(10) Declare(11) fi True by simp
+                   [OF inv2 lk1 len'' dst_pn body_ok ctr1])
+      then show ?thesis using Declare(10) Declare(11) Declare(12) True by simp
     next
       case False
-      then show ?thesis using inv2 Declare(9) Declare(10) Declare(11) fi by simp
+      then show ?thesis using inv2 Declare(10) Declare(11) Declare(12) by simp
     qed
   qed
 qed
