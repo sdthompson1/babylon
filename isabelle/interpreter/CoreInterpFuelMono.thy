@@ -789,6 +789,8 @@ next
       ultimately show ?thesis using f'_eq Inr by simp
     qed
   qed
+next
+  case (13 vl vm n l) then show ?case by (metis Suc_le_D default_value.simps(10))
 qed
 
 
@@ -1143,6 +1145,10 @@ next
         case (CV_Real x8)
         have "interp_term d f'' state arrayTm = Inr arrVal" using IH_arr Inr f''_ge by metis
         thus ?thesis using f'_eq CV_Real Inr by simp
+      next
+        case (CV_Extern x91 x92 x93)
+        have "interp_term d f'' state arrayTm = Inr arrVal" using IH_arr Inr f''_ge by metis
+        thus ?thesis using f'_eq CV_Extern Inr by simp
       qed
     qed
   qed
@@ -1848,6 +1854,10 @@ next
             case (CV_Real x8)
             have "interp_term d f'' state condTm = Inr condVal" using IH_cond Inr f''_ge by metis
             thus ?thesis using f'_eq CV_Real Inr by simp
+          next
+            case (CV_Extern x91 x92 x93)
+            have "interp_term d f'' state condTm = Inr condVal" using IH_cond Inr f''_ge by metis
+            thus ?thesis using f'_eq CV_Extern Inr by simp
           qed
         qed
       qed

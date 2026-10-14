@@ -78,6 +78,7 @@ fun core_type_to_string :: "CoreType \<Rightarrow> string" where
      core_type_to_string elemTy
        @ ''['' @ intercalate '','' (map core_dimension_to_string dims) @ '']''"
 | "core_type_to_string (CoreTy_Var name) = name"
+| "core_type_to_string (CoreTy_Extern name _) = name"
 
 (* Quoted type, for use within error messages *)
 definition quote_type :: "CoreType \<Rightarrow> string" where
@@ -205,6 +206,9 @@ fun link_error_to_string :: "LinkError \<Rightarrow> string" where
      ''type variable capture involving: '' @ intercalate '', '' (map quote names)"
 | "link_error_to_string (LinkGhostResolution names) =
      ''non-ghost abstract type realized by ghost type: ''
+       @ intercalate '', '' (map quote names)"
+| "link_error_to_string (LinkAllocLevel names) =
+     ''type might be allocated, but this was not declared in the interface: ''
        @ intercalate '', '' (map quote names)"
 
 

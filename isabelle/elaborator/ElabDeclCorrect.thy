@@ -125,9 +125,10 @@ lemma map_dims_declaration_tyvars_fresh_ok:
 (* The elaborator's state env, reconstructed from the (fixed) context env and
    the (growing) module: field-wise combination of the context with the
    module's recorded declarations - definition maps right-biased-unioned, ghost
-   fsets unioned, the three type-variable fields unioned minus the domain of
-   the module's substitution (a realized abstract type is no longer abstract) -
-   with the module's substitution then applied to all recorded signatures.
+   fsets unioned, the two type-variable fields and the abstract-type level map
+   unioned minus the domain of the module's substitution (a realized abstract
+   type is no longer abstract) - with the module's substitution then applied to
+   all recorded signatures.
    The scope fields (locals, return type, proof fields) are inherited from the
    context, which is at module scope.
 
@@ -144,8 +145,9 @@ definition module_context_env :: "CoreTyEnv \<Rightarrow> CoreModule \<Rightarro
                            |-| fmdom (CM_TypeSubst m),
           TE_RuntimeTypeVars := (TE_RuntimeTypeVars ctx |\<union>| TE_RuntimeTypeVars (CM_TyEnv m))
                            |-| fmdom (CM_TypeSubst m),
-          TE_AbstractTypes := (TE_AbstractTypes ctx |\<union>| TE_AbstractTypes (CM_TyEnv m))
-                           |-| fmdom (CM_TypeSubst m),
+          TE_AbstractAllocLevels :=
+            fmdrop_fset (fmdom (CM_TypeSubst m))
+              (TE_AbstractAllocLevels ctx ++\<^sub>f TE_AbstractAllocLevels (CM_TyEnv m)),
           TE_Functions := TE_Functions ctx ++\<^sub>f TE_Functions (CM_TyEnv m),
           TE_Datatypes := TE_Datatypes ctx ++\<^sub>f TE_Datatypes (CM_TyEnv m),
           TE_DataCtors := TE_DataCtors ctx ++\<^sub>f TE_DataCtors (CM_TyEnv m),
@@ -303,7 +305,10 @@ lemma module_context_env_tyvar_fields:
      = (TE_RuntimeTypeVars ctx |\<union>| TE_RuntimeTypeVars (CM_TyEnv m)) |-| fmdom (CM_TypeSubst m)"
   "TE_AbstractTypes (module_context_env ctx m)
      = (TE_AbstractTypes ctx |\<union>| TE_AbstractTypes (CM_TyEnv m)) |-| fmdom (CM_TypeSubst m)"
-  unfolding module_context_env_def apply_subst_to_tyenv_def by simp_all
+  "TE_AbstractAllocLevels (module_context_env ctx m)
+     = fmdrop_fset (fmdom (CM_TypeSubst m))
+         (TE_AbstractAllocLevels ctx ++\<^sub>f TE_AbstractAllocLevels (CM_TyEnv m))"
+  unfolding module_context_env_def apply_subst_to_tyenv_def by (simp_all add: funion_fminus)
 
 (* The realizable abstract types are covered by the state env's type
    variables together with the recorded substitution domain: they live in the
@@ -323,17 +328,19 @@ proof -
     using own_sub by auto
 qed
 
-(* Growing TE_AbstractTypes (within TE_TypeVars) preserves tyenv_well_formed.
-   The clauses that read TE_AbstractTypes only use it as (part of) the
-   TE_TypeVars / TE_RuntimeTypeVars override of an inner env; the override
-   grows pointwise, so monotonicity of is_well_kinded / is_runtime_type
-   carries them over. The remaining clauses do not read the field. *)
+(* Growing the abstract-type level map (within TE_TypeVars) preserves
+   tyenv_well_formed. The clauses that read TE_AbstractTypes (the map's
+   domain) only use it as (part of) the TE_TypeVars / TE_RuntimeTypeVars
+   override of an inner env; the override grows pointwise, so monotonicity of
+   is_well_kinded / is_runtime_type carries them over. The remaining clauses
+   do not read the field. *)
 lemma tyenv_well_formed_grow_abstract_types:
   assumes wf: "tyenv_well_formed env"
-      and sub: "eAB |\<subseteq>| TE_TypeVars env"
-  shows "tyenv_well_formed (env \<lparr> TE_AbstractTypes := TE_AbstractTypes env |\<union>| eAB \<rparr>)"
+      and sub: "fmdom eAL |\<subseteq>| TE_TypeVars env"
+  shows "tyenv_well_formed
+           (env \<lparr> TE_AbstractAllocLevels := TE_AbstractAllocLevels env ++\<^sub>f eAL \<rparr>)"
 proof -
-  let ?env' = "env \<lparr> TE_AbstractTypes := TE_AbstractTypes env |\<union>| eAB \<rparr>"
+  let ?env' = "env \<lparr> TE_AbstractAllocLevels := TE_AbstractAllocLevels env ++\<^sub>f eAL \<rparr>"
   from wf have
     vars_wk: "tyenv_vars_well_kinded env" and
     vars_rt: "tyenv_vars_runtime env" and
@@ -570,39 +577,48 @@ proof -
     by blast
 qed
 
-(* Growing all three type-variable fields together. *)
+(* Growing the two type-variable fields and the level map together. *)
 lemma tyenv_well_formed_grow_tyvar_fields:
   assumes wf: "tyenv_well_formed env"
       and rt_sub: "eRT |\<subseteq>| eTV"
-      and ab_sub: "eAB |\<subseteq>| eTV"
+      and ab_sub: "fmdom eAL |\<subseteq>| eTV"
   shows "tyenv_well_formed
            (env \<lparr> TE_TypeVars := TE_TypeVars env |\<union>| eTV,
                   TE_RuntimeTypeVars := TE_RuntimeTypeVars env |\<union>| eRT,
-                  TE_AbstractTypes := TE_AbstractTypes env |\<union>| eAB \<rparr>)"
+                  TE_AbstractAllocLevels := TE_AbstractAllocLevels env ++\<^sub>f eAL \<rparr>)"
 proof -
   let ?mid = "env \<lparr> TE_TypeVars := TE_TypeVars env |\<union>| eTV,
                     TE_RuntimeTypeVars := TE_RuntimeTypeVars env |\<union>| eRT \<rparr>"
   have wf_mid: "tyenv_well_formed ?mid"
     using tyenv_well_formed_extend_tyvars[OF wf rt_sub] .
-  have sub_mid: "eAB |\<subseteq>| TE_TypeVars ?mid"
+  have sub_mid: "fmdom eAL |\<subseteq>| TE_TypeVars ?mid"
     using ab_sub by auto
-  have "tyenv_well_formed (?mid \<lparr> TE_AbstractTypes := TE_AbstractTypes ?mid |\<union>| eAB \<rparr>)"
+  have "tyenv_well_formed
+          (?mid \<lparr> TE_AbstractAllocLevels := TE_AbstractAllocLevels ?mid ++\<^sub>f eAL \<rparr>)"
     using tyenv_well_formed_grow_abstract_types[OF wf_mid sub_mid] .
   then show ?thesis by simp
 qed
 
-(* tyenv_add_abstract_type, phrased as a growth of the three tyvar fields. *)
+(* tyenv_add_abstract_type, phrased as a growth of the tyvar fields and the
+   level map. *)
 lemma tyenv_add_abstract_type_as_grow:
-  "tyenv_add_abstract_type name ghost env
+  "tyenv_add_abstract_type name ghost level env
      = env \<lparr> TE_TypeVars := TE_TypeVars env |\<union>| {|name|},
              TE_RuntimeTypeVars := TE_RuntimeTypeVars env
                 |\<union>| (if ghost = NotGhost then {|name|} else {||}),
-             TE_AbstractTypes := TE_AbstractTypes env |\<union>| {|name|} \<rparr>"
-  unfolding tyenv_add_abstract_type_def by (cases ghost) simp_all
+             TE_AbstractAllocLevels :=
+               TE_AbstractAllocLevels env ++\<^sub>f fmupd name level fmempty \<rparr>"
+proof -
+  have "fmupd name level (TE_AbstractAllocLevels env)
+          = TE_AbstractAllocLevels env ++\<^sub>f fmupd name level fmempty"
+    by (rule fmap_ext) simp
+  then show ?thesis
+    unfolding tyenv_add_abstract_type_def by (cases ghost) simp_all
+qed
 
 lemma tyenv_well_formed_add_abstract_type:
   assumes wf: "tyenv_well_formed env"
-  shows "tyenv_well_formed (tyenv_add_abstract_type name ghost env)"
+  shows "tyenv_well_formed (tyenv_add_abstract_type name ghost level env)"
   unfolding tyenv_add_abstract_type_as_grow
   by (rule tyenv_well_formed_grow_tyvar_fields[OF wf]) (auto split: if_splits)
 
@@ -614,11 +630,11 @@ lemma module_globals_well_typed_grow_tyvar_fields:
   shows "module_globals_well_typed
            (env \<lparr> TE_TypeVars := TE_TypeVars env |\<union>| eTV,
                   TE_RuntimeTypeVars := TE_RuntimeTypeVars env |\<union>| eRT,
-                  TE_AbstractTypes := TE_AbstractTypes env |\<union>| eAB \<rparr>) globals"
+                  TE_AbstractAllocLevels := TE_AbstractAllocLevels env ++\<^sub>f eAL \<rparr>) globals"
 proof -
   let ?env' = "env \<lparr> TE_TypeVars := TE_TypeVars env |\<union>| eTV,
                      TE_RuntimeTypeVars := TE_RuntimeTypeVars env |\<union>| eRT,
-                     TE_AbstractTypes := TE_AbstractTypes env |\<union>| eAB \<rparr>"
+                     TE_AbstractAllocLevels := TE_AbstractAllocLevels env ++\<^sub>f eAL \<rparr>"
   show ?thesis
     unfolding module_globals_well_typed_def
   proof (intro allI impI)
@@ -639,8 +655,9 @@ qed
 
 (* Recorded function bodies stay well-typed when the tyvar fields grow. The
    body env's TE_TypeVars / TE_RuntimeTypeVars are derived from
-   TE_AbstractTypes, so they grow pointwise (irrelevant-tyvar weakening), and
-   the leftover TE_AbstractTypes difference is again invisible. *)
+   TE_AbstractTypes (the level map's domain), so they grow pointwise
+   (irrelevant-tyvar weakening), and the leftover level-map difference is
+   again invisible. *)
 
 lemma fun_contracts_well_typed_grow_tyvar_fields:
   assumes ok: "fun_contracts_well_typed env info"
@@ -648,11 +665,11 @@ lemma fun_contracts_well_typed_grow_tyvar_fields:
   shows "fun_contracts_well_typed
            (env \<lparr> TE_TypeVars := TE_TypeVars env |\<union>| eTV,
                   TE_RuntimeTypeVars := TE_RuntimeTypeVars env |\<union>| eRT,
-                  TE_AbstractTypes := TE_AbstractTypes env |\<union>| eAB \<rparr>) info"
+                  TE_AbstractAllocLevels := TE_AbstractAllocLevels env ++\<^sub>f eAL \<rparr>) info"
 proof (rule fun_contracts_well_typed_mono[OF ok])
   let ?env' = "env \<lparr> TE_TypeVars := TE_TypeVars env |\<union>| eTV,
                      TE_RuntimeTypeVars := TE_RuntimeTypeVars env |\<union>| eRT,
-                     TE_AbstractTypes := TE_AbstractTypes env |\<union>| eAB \<rparr>"
+                     TE_AbstractAllocLevels := TE_AbstractAllocLevels env ++\<^sub>f eAL \<rparr>"
   fix names info' tm
   assume t0: "core_term_type (module_body_env_for env names info') Ghost tm = Some CoreTy_Bool"
   let ?B = "module_body_env_for env names info'"
@@ -677,11 +694,11 @@ lemma module_functions_well_typed_grow_tyvar_fields:
   shows "module_functions_well_typed
            (env \<lparr> TE_TypeVars := TE_TypeVars env |\<union>| eTV,
                   TE_RuntimeTypeVars := TE_RuntimeTypeVars env |\<union>| eRT,
-                  TE_AbstractTypes := TE_AbstractTypes env |\<union>| eAB \<rparr>) funs"
+                  TE_AbstractAllocLevels := TE_AbstractAllocLevels env ++\<^sub>f eAL \<rparr>) funs"
 proof -
   let ?env' = "env \<lparr> TE_TypeVars := TE_TypeVars env |\<union>| eTV,
                      TE_RuntimeTypeVars := TE_RuntimeTypeVars env |\<union>| eRT,
-                     TE_AbstractTypes := TE_AbstractTypes env |\<union>| eAB \<rparr>"
+                     TE_AbstractAllocLevels := TE_AbstractAllocLevels env ++\<^sub>f eAL \<rparr>"
   show ?thesis
     unfolding module_functions_well_typed_def
   proof (intro allI impI)
@@ -751,15 +768,22 @@ qed
 lemma module_context_env_add_abstract_type:
   assumes fresh: "name |\<notin>| fmdom (CM_TypeSubst m)"
   shows "module_context_env ctx
-           (m \<lparr> CM_TyEnv := tyenv_add_abstract_type name ghost (CM_TyEnv m) \<rparr>)
-       = tyenv_add_abstract_type name ghost (module_context_env ctx m)"
+           (m \<lparr> CM_TyEnv := tyenv_add_abstract_type name ghost level (CM_TyEnv m) \<rparr>)
+       = tyenv_add_abstract_type name ghost level (module_context_env ctx m)"
 proof -
   have ins_minus: "\<And>X. finsert name X |-| fmdom (CM_TypeSubst m)
                      = finsert name (X |-| fmdom (CM_TypeSubst m))"
     using fresh by (intro fset_eqI) auto
+  \<comment> \<open>The level map: the new entry commutes with the union and, name being
+     unresolved, with the drop of the substitution domain.\<close>
+  have upd_add: "\<And>X Y. X ++\<^sub>f fmupd name level Y = fmupd name level (X ++\<^sub>f Y)"
+    by (intro fmap_ext) auto
+  have upd_drop: "\<And>X. fmdrop_fset (fmdom (CM_TypeSubst m)) (fmupd name level X)
+                    = fmupd name level (fmdrop_fset (fmdom (CM_TypeSubst m)) X)"
+    using fresh by (intro fmap_ext) auto
   show ?thesis
     unfolding module_context_env_def tyenv_add_abstract_type_def apply_subst_to_tyenv_def
-    by (cases ghost) (simp_all add: ins_minus)
+    by (cases ghost) (simp_all add: ins_minus upd_add upd_drop)
 qed
 
 (* typedefs_well_formed is monotone in the env's type variables (with the
@@ -882,11 +906,11 @@ lemma elabenv_well_formed_grow_tyvar_fields:
   shows "elabenv_well_formed
            (env \<lparr> TE_TypeVars := TE_TypeVars env |\<union>| eTV,
                   TE_RuntimeTypeVars := TE_RuntimeTypeVars env |\<union>| eRT,
-                  TE_AbstractTypes := TE_AbstractTypes env |\<union>| eAB \<rparr>) elabEnv"
+                  TE_AbstractAllocLevels := TE_AbstractAllocLevels env ++\<^sub>f eAL \<rparr>) elabEnv"
 proof -
   let ?env' = "env \<lparr> TE_TypeVars := TE_TypeVars env |\<union>| eTV,
                      TE_RuntimeTypeVars := TE_RuntimeTypeVars env |\<union>| eRT,
-                     TE_AbstractTypes := TE_AbstractTypes env |\<union>| eAB \<rparr>"
+                     TE_AbstractAllocLevels := TE_AbstractAllocLevels env ++\<^sub>f eAL \<rparr>"
   have td: "typedefs_well_formed env (EE_Typedefs elabEnv)"
    and vd: "nullary_data_ctors_consistent env elabEnv"
    and gc: "ghost_constants_consistent env elabEnv"
@@ -956,7 +980,7 @@ lemma module_context_env_module_scope:
   shows "tyenv_module_scope (module_context_env env0 m)"
   using assms
   unfolding tyenv_module_scope_def module_context_env_def apply_subst_to_tyenv_def
-  by simp
+  by auto
 
 (* ... and hence so does the invariant's state env. *)
 lemma elab_decls_invariant_module_scope:
@@ -3085,7 +3109,7 @@ proof -
     using rtv_disj by (simp add: inf_commute)
   have abs_rtv_disj: "(TE_AbstractTypes env |\<inter>| TE_RuntimeTypeVars env)
                         |\<inter>| fmdom ?s = {||}"
-    using empty_inter_subset[OF dom_rtv inf_le2] by (simp add: inf_commute)
+    using empty_inter_subset[OF dom_rtv inf_le2] by (auto simp: inf_commute)
   have rtv_be: "TE_RuntimeTypeVars ?be |\<inter>| fmdom ?s = {||}"
     by (simp add: module_body_env_for_def inf_sup_distrib2 abs_rtv_disj fi_dom)
   show "module_env_subst_ok ?s ?be ?be"
@@ -5020,7 +5044,7 @@ lemma apply_realization_env_eq:
   shows "(apply_subst_to_tyenv (fmupd name target fmempty) env)
            \<lparr> TE_TypeVars := TE_TypeVars env |-| {|name|},
              TE_RuntimeTypeVars := TE_RuntimeTypeVars env |-| {|name|},
-             TE_AbstractTypes := TE_AbstractTypes env |-| {|name|} \<rparr>
+             TE_AbstractAllocLevels := fmdrop name (TE_AbstractAllocLevels env) \<rparr>
          = module_context_env env0
              (m \<lparr> CM_TypeSubst := fmupd name target
                     (fmmap (apply_subst (fmupd name target fmempty)) (CM_TypeSubst m)) \<rparr>)"
@@ -5249,7 +5273,7 @@ lemma apply_realization_scope_bound:
   assumes env'_eq: "env' = (apply_subst_to_tyenv (fmupd name target fmempty) env)
            \<lparr> TE_TypeVars := TE_TypeVars env |-| {|name|},
              TE_RuntimeTypeVars := TE_RuntimeTypeVars env |-| {|name|},
-             TE_AbstractTypes := TE_AbstractTypes env |-| {|name|} \<rparr>"
+             TE_AbstractAllocLevels := fmdrop name (TE_AbstractAllocLevels env) \<rparr>"
       and ee'_eq: "elabEnv' = elabEnv
            \<lparr> EE_Typedefs := fmupd name ([], target)
                (fmmap (\<lambda>(tyvars, ty). (tyvars, apply_subst (fmupd name target fmempty) ty))
@@ -5346,7 +5370,7 @@ lemma apply_realization_state_absorb:
   assumes env'_eq: "env' = (apply_subst_to_tyenv (fmupd name target fmempty) env)
            \<lparr> TE_TypeVars := TE_TypeVars env |-| {|name|},
              TE_RuntimeTypeVars := TE_RuntimeTypeVars env |-| {|name|},
-             TE_AbstractTypes := TE_AbstractTypes env |-| {|name|} \<rparr>"
+             TE_AbstractAllocLevels := fmdrop name (TE_AbstractAllocLevels env) \<rparr>"
       and scope_env: "tyenv_module_scope env"
   shows "apply_subst_to_module_env (fmupd name target fmempty) env' env = env'"
 proof -
@@ -5368,7 +5392,7 @@ lemma apply_realization_subst_ok:
   assumes env'_eq: "env' = (apply_subst_to_tyenv (fmupd name target fmempty) env)
            \<lparr> TE_TypeVars := TE_TypeVars env |-| {|name|},
              TE_RuntimeTypeVars := TE_RuntimeTypeVars env |-| {|name|},
-             TE_AbstractTypes := TE_AbstractTypes env |-| {|name|} \<rparr>"
+             TE_AbstractAllocLevels := fmdrop name (TE_AbstractAllocLevels env) \<rparr>"
       and wk': "is_well_kinded env' target"
       and rt': "name |\<in>| TE_RuntimeTypeVars env \<Longrightarrow> is_runtime_type env' target"
       and cap_new: "finsert name (fset_of_list (type_tyvars_list target))
@@ -5442,7 +5466,7 @@ lemma apply_realization_typedefs:
       and env'_eq: "env' = (apply_subst_to_tyenv (fmupd name target fmempty) env)
            \<lparr> TE_TypeVars := TE_TypeVars env |-| {|name|},
              TE_RuntimeTypeVars := TE_RuntimeTypeVars env |-| {|name|},
-             TE_AbstractTypes := TE_AbstractTypes env |-| {|name|} \<rparr>"
+             TE_AbstractAllocLevels := fmdrop name (TE_AbstractAllocLevels env) \<rparr>"
       and wk': "is_well_kinded env' target"
       and cap_new: "finsert name (fset_of_list (type_tyvars_list target))
                       |\<inter>| scope_bound_tyvars env elabEnv = {||}"
@@ -5537,7 +5561,7 @@ lemma apply_realization_nullary_ctors:
       and env'_eq: "env' = (apply_subst_to_tyenv (fmupd name target fmempty) env)
            \<lparr> TE_TypeVars := TE_TypeVars env |-| {|name|},
              TE_RuntimeTypeVars := TE_RuntimeTypeVars env |-| {|name|},
-             TE_AbstractTypes := TE_AbstractTypes env |-| {|name|} \<rparr>"
+             TE_AbstractAllocLevels := fmdrop name (TE_AbstractAllocLevels env) \<rparr>"
       and ee'_eq: "EE_NullaryDataCtors elabEnv' = EE_NullaryDataCtors elabEnv"
   shows "nullary_data_ctors_consistent env' elabEnv'"
 proof -
@@ -5566,7 +5590,7 @@ lemma apply_realization_ghost_constants:
       and env'_eq: "env' = (apply_subst_to_tyenv (fmupd name target fmempty) env)
            \<lparr> TE_TypeVars := TE_TypeVars env |-| {|name|},
              TE_RuntimeTypeVars := TE_RuntimeTypeVars env |-| {|name|},
-             TE_AbstractTypes := TE_AbstractTypes env |-| {|name|} \<rparr>"
+             TE_AbstractAllocLevels := fmdrop name (TE_AbstractAllocLevels env) \<rparr>"
       and ee'_eq: "EE_GhostConstants elabEnv' = EE_GhostConstants elabEnv"
   shows "ghost_constants_consistent env' elabEnv'"
 proof -
@@ -5608,7 +5632,7 @@ lemma apply_realization_body_collapse:
   assumes env'_eq: "env' = (apply_subst_to_tyenv (fmupd name target fmempty) env)
            \<lparr> TE_TypeVars := TE_TypeVars env |-| {|name|},
              TE_RuntimeTypeVars := TE_RuntimeTypeVars env |-| {|name|},
-             TE_AbstractTypes := TE_AbstractTypes env |-| {|name|} \<rparr>"
+             TE_AbstractAllocLevels := fmdrop name (TE_AbstractAllocLevels env) \<rparr>"
   shows "apply_subst_to_module_env (fmupd name target fmempty)
            (module_body_env_for env' names
               (apply_subst_to_funinfo (fmupd name target fmempty) info))
@@ -5648,7 +5672,7 @@ lemma apply_realization_body_subst_ok:
   assumes env'_eq: "env' = (apply_subst_to_tyenv (fmupd name target fmempty) env)
            \<lparr> TE_TypeVars := TE_TypeVars env |-| {|name|},
              TE_RuntimeTypeVars := TE_RuntimeTypeVars env |-| {|name|},
-             TE_AbstractTypes := TE_AbstractTypes env |-| {|name|} \<rparr>"
+             TE_AbstractAllocLevels := fmdrop name (TE_AbstractAllocLevels env) \<rparr>"
       and abs_tv: "TE_AbstractTypes env = TE_TypeVars env"
       and rtv_sub: "TE_RuntimeTypeVars env |\<subseteq>| TE_TypeVars env"
       and wk': "is_well_kinded env' target"
@@ -5814,7 +5838,7 @@ proof -
   have env'_eq: "env' = (apply_subst_to_tyenv ?s env)
            \<lparr> TE_TypeVars := TE_TypeVars env |-| {|name|},
              TE_RuntimeTypeVars := TE_RuntimeTypeVars env |-| {|name|},
-             TE_AbstractTypes := TE_AbstractTypes env |-| {|name|} \<rparr>"
+             TE_AbstractAllocLevels := fmdrop name (TE_AbstractAllocLevels env) \<rparr>"
    and ee'_eq: "elabEnv' = elabEnv
            \<lparr> EE_Typedefs := fmupd name ([], target)
                (fmmap (\<lambda>(tyvars, ty). (tyvars, apply_subst ?s ty))
@@ -7968,21 +7992,21 @@ proof -
 qed
 
 (* Recording a new abstract type ("type T;"): env, elabEnv and the module all
-   gain the name. *)
+   gain the name (and its declared alloc level). *)
 lemma elab_decls_invariant_add_abstract_type:
   assumes inv: "elab_decls_invariant env0 ownAbstract ctxGlobals env elabEnv m"
       and notin: "\<not> type_name_in_scope env elabEnv name"
       and fresh: "tyvar_fresh_ok name 0"
   shows "elab_decls_invariant env0 ownAbstract ctxGlobals
-           (tyenv_add_abstract_type name ghost env)
+           (tyenv_add_abstract_type name ghost level env)
            (elabEnv \<lparr> EE_Typedefs := fmupd name ([], CoreTy_Var name)
                                            (EE_Typedefs elabEnv) \<rparr>)
-           (m \<lparr> CM_TyEnv := tyenv_add_abstract_type name ghost (CM_TyEnv m) \<rparr>)"
+           (m \<lparr> CM_TyEnv := tyenv_add_abstract_type name ghost level (CM_TyEnv m) \<rparr>)"
 proof -
-  let ?env' = "tyenv_add_abstract_type name ghost env"
+  let ?env' = "tyenv_add_abstract_type name ghost level env"
   let ?ee' = "elabEnv \<lparr> EE_Typedefs := fmupd name ([], CoreTy_Var name)
                                             (EE_Typedefs elabEnv) \<rparr>"
-  let ?m' = "m \<lparr> CM_TyEnv := tyenv_add_abstract_type name ghost (CM_TyEnv m) \<rparr>"
+  let ?m' = "m \<lparr> CM_TyEnv := tyenv_add_abstract_type name ghost level (CM_TyEnv m) \<rparr>"
   have ctx: "elab_context_ok env0 ownAbstract"
    and env_eq: "env = module_context_env env0 m"
    and minv: "core_module_invariant m"
@@ -8148,11 +8172,12 @@ lemma elab_typedef_decl_Inr_elim:
     "\<not> type_name_in_scope env elabEnv (DT_Name dt)"
     "DT_Definition dt = None"
     "DT_TyArgs dt = []"
-    "env' = tyenv_add_abstract_type (DT_Name dt) (DT_Ghost dt) env"
+    "env' = tyenv_add_abstract_type (DT_Name dt) (DT_Ghost dt)
+              (alloc_level_to_core (DT_AllocLevel dt)) env"
     "elabEnv' = elabEnv \<lparr> EE_Typedefs := fmupd (DT_Name dt)
                             ([], CoreTy_Var (DT_Name dt)) (EE_Typedefs elabEnv) \<rparr>"
     "m' = m \<lparr> CM_TyEnv := tyenv_add_abstract_type (DT_Name dt) (DT_Ghost dt)
-                            (CM_TyEnv m) \<rparr>"
+                            (alloc_level_to_core (DT_AllocLevel dt)) (CM_TyEnv m) \<rparr>"
   | (Transparent) ty target where
     "\<not> DT_Extern dt"
     "DT_Name dt |\<notin>| TE_TypeVars env"
@@ -8230,11 +8255,12 @@ proof -
       have noargs: "DT_TyArgs dt = []"
         using ok unfolding elab_typedef_decl_def Let_def
         by (cases "DT_TyArgs dt = []") (auto simp: g1 False notin None)
-      have eq1: "env' = tyenv_add_abstract_type (DT_Name dt) (DT_Ghost dt) env"
+      have eq1: "env' = tyenv_add_abstract_type (DT_Name dt) (DT_Ghost dt)
+                          (alloc_level_to_core (DT_AllocLevel dt)) env"
        and eq2: "elabEnv' = elabEnv \<lparr> EE_Typedefs := fmupd (DT_Name dt)
                     ([], CoreTy_Var (DT_Name dt)) (EE_Typedefs elabEnv) \<rparr>"
        and eq3: "m' = m \<lparr> CM_TyEnv := tyenv_add_abstract_type (DT_Name dt)
-                    (DT_Ghost dt) (CM_TyEnv m) \<rparr>"
+                    (DT_Ghost dt) (alloc_level_to_core (DT_AllocLevel dt)) (CM_TyEnv m) \<rparr>"
         using ok unfolding elab_typedef_decl_def Let_def
         by (auto simp: g1 False notin None noargs)
       show thesis
@@ -8514,7 +8540,7 @@ proof -
   have env'_eq: "env' = (apply_subst_to_tyenv ?s env)
            \<lparr> TE_TypeVars := TE_TypeVars env |-| {|name|},
              TE_RuntimeTypeVars := TE_RuntimeTypeVars env |-| {|name|},
-             TE_AbstractTypes := TE_AbstractTypes env |-| {|name|} \<rparr>"
+             TE_AbstractAllocLevels := fmdrop name (TE_AbstractAllocLevels env) \<rparr>"
    and m'_eq: "m' = m \<lparr> CM_TypeSubst := fmupd name target
                           (fmmap (apply_subst ?s) (CM_TypeSubst m)) \<rparr>"
     using res unfolding apply_realization_def Let_def by auto
@@ -9283,9 +9309,9 @@ proof -
           TE_RuntimeTypeVars := (TE_RuntimeTypeVars (CM_TyEnv i)
                                  |\<union>| TE_RuntimeTypeVars (CM_TyEnv m))
                            |-| fmdom (CM_TypeSubst m),
-          TE_AbstractTypes := (TE_AbstractTypes (CM_TyEnv i)
-                               |\<union>| TE_AbstractTypes (CM_TyEnv m))
-                           |-| fmdom (CM_TypeSubst m),
+          TE_AbstractAllocLevels :=
+            fmdrop_fset (fmdom (CM_TypeSubst m))
+              (TE_AbstractAllocLevels (CM_TyEnv i) ++\<^sub>f TE_AbstractAllocLevels (CM_TyEnv m)),
           TE_Functions := TE_Functions (CM_TyEnv i) ++\<^sub>f TE_Functions (CM_TyEnv m),
           TE_Datatypes := TE_Datatypes (CM_TyEnv i) ++\<^sub>f TE_Datatypes (CM_TyEnv m),
           TE_DataCtors := TE_DataCtors (CM_TyEnv i) ++\<^sub>f TE_DataCtors (CM_TyEnv m),
@@ -9308,8 +9334,8 @@ proof -
       by (simp add: fL(5) subst_eq funion_list_def funion_fempty_right)
     show "TE_RuntimeTypeVars (CM_TyEnv l) = TE_RuntimeTypeVars ?pre"
       by (simp add: fL(6) subst_eq funion_list_def funion_fempty_right)
-    show "TE_AbstractTypes (CM_TyEnv l) = TE_AbstractTypes ?pre"
-      by (simp add: fL(7) subst_eq funion_list_def funion_fempty_right)
+    show "TE_AbstractAllocLevels (CM_TyEnv l) = TE_AbstractAllocLevels ?pre"
+      by (simp add: fL(20) subst_eq fmlist_union_def)
     show "TE_ReturnType (CM_TyEnv l) = TE_ReturnType ?pre"
       using fL(8) scope_i unfolding tyenv_module_scope_def by simp
     show "TE_FunctionGhost (CM_TyEnv l) = TE_FunctionGhost ?pre"
@@ -9805,7 +9831,7 @@ proof -
         assume lkB: "fmlookup (TE_GlobalVars ?envB) name = Some ty"
         show ?thesis
           by (rule wk_env_to_mid[OF gvwkE[OF gvB_env[OF lkB]]])
-             (auto simp: abs_env absL_eq)
+             (auto simp: abs_env absL_eq absI absM)
       qed
     qed
   next
@@ -9857,7 +9883,7 @@ proof -
           using gvrtE[OF gvB_env[OF lkB]] .
         show ?thesis
           by (rule rt_env_to_mid[OF rt1])
-             (auto simp: abs_env absL_eq rtv_env rtvL_eq)
+             (auto simp: abs_env absL_eq rtv_env rtvL_eq absI absM)
       qed
     qed
   next
@@ -9927,7 +9953,7 @@ proof -
                        = Some (dtName, tyVars, payload)"
         show ?thesis
           by (rule wk_env_to_mid[OF pwkE[OF dcB_env[OF lkB]]])
-             (auto simp: abs_env absL_eq)
+             (auto simp: abs_env absL_eq absI absM)
       qed
     qed
   next
@@ -10020,7 +10046,7 @@ proof -
           show "is_well_kinded (?mid \<lparr> TE_TypeVars :=
                     TE_AbstractTypes ?mid
                     |\<union>| fset_of_list (FI_TyArgs info) \<rparr>) ty"
-            by (rule wk_env_to_mid[OF w]) (auto simp: abs_env absL_eq)
+            by (rule wk_env_to_mid[OF w]) (auto simp: abs_env absL_eq absI absM)
         qed
         show ?thesis using ftwkE[OF fnB_env[OF lkB]] step by blast
       qed
@@ -10165,7 +10191,7 @@ proof -
                             (TE_AbstractTypes ?mid |\<inter>| TE_RuntimeTypeVars ?mid)
                             |\<union>| fset_of_list (FI_TyArgs info) \<rparr>) ty"
             by (rule rt_env_to_mid[OF r])
-               (auto simp: abs_env absL_eq rtv_env rtvL_eq)
+               (auto simp: abs_env absL_eq rtv_env rtvL_eq absI absM)
         qed
         show ?thesis using fgcE[OF fnB_env[OF lkB] ng] step by blast
       qed
@@ -10233,7 +10259,7 @@ proof -
           using nprE[OF dcB_env[OF lkB] ngE] .
         show ?thesis
           by (rule rt_env_to_mid[OF rt1])
-             (auto simp: abs_env absL_eq rtv_env rtvL_eq)
+             (auto simp: abs_env absL_eq rtv_env rtvL_eq absI absM)
       qed
     qed
   next
@@ -10252,7 +10278,7 @@ proof -
     qed
   next
     show "tyenv_abstract_types_subset ?mid"
-      unfolding tyenv_abstract_types_subset_def by simp
+      unfolding tyenv_abstract_types_subset_def by (simp add: absI absM)
   next
     show "tyenv_datatypes_nonempty ?mid"
       using dneE0 unfolding tyenv_datatypes_nonempty_def
@@ -10866,7 +10892,7 @@ proof -
                   mid_lk len0] .
         have ok_sb: "module_env_subst_ok ?\<sigma> ?tb ?sb"
           using link_mid_body_env_subst_ok[OF link m_raw refl
-                  elab_link_mid_env_subst_ok[OF I_wt I_norm inv link] absL refl,
+                  elab_link_mid_env_subst_ok[OF I_wt I_norm inv link] absL refl absI absM,
                   where names = "CF_Args f"]
           by (simp add: subst_eq)
         have rt_sb: "module_env_subst_runtime_ok ?\<sigma> ?tb ?sb"
@@ -10960,7 +10986,7 @@ proof -
           using which by auto
         have ok_n: "module_env_subst_ok (CM_TypeSubst L) ?tbN ?sbN"
           using link_mid_body_env_subst_ok[OF link m_raw refl
-                  elab_link_mid_env_subst_ok[OF I_wt I_norm inv link] absL tyargs1,
+                  elab_link_mid_env_subst_ok[OF I_wt I_norm inv link] absL tyargs1 absI absM,
                   where names = names] .
         have info_rel'': "info'' = apply_subst_to_funinfo (CM_TypeSubst I) info''"
           by (simp add: I_norm)

@@ -19,7 +19,10 @@ datatype CoreValue =
   | CV_Array "int list" "(int list, CoreValue) fmap"  (* size list, array index \<rightarrow> value *)
   | CV_Int int
   | CV_Real real
-  (* TODO: extern or abstract types? *)
+  | CV_Extern string CoreAllocLevel nat
+      (* Values of an extern type carry the type itself (name and alloc level) plus a nat
+         "handle" (this can be thought of as the "void *" value on the C side). The handle
+         is zero for the default value of each type. *)
 
 
 (* ========================================================================== *)
@@ -96,6 +99,7 @@ function value_has_type :: "CoreTyEnv \<Rightarrow> CoreValue \<Rightarrow> Core
     | _ => False)"
 | "value_has_type env (CV_Int _) ty = (ty = CoreTy_MathInt)"
 | "value_has_type env (CV_Real _) ty = (ty = CoreTy_MathReal)"
+| "value_has_type env (CV_Extern n l _) ty = (ty = CoreTy_Extern n l)"
 
   by pat_completeness auto
 
@@ -258,6 +262,9 @@ next
 next
   case (CV_Real r)
   then show ?case by simp
+next
+  case (CV_Extern n l k)
+  then show ?case by simp
 qed
 
 (* value_has_type only succeeds for ground types. The CV_Variant and CV_Array
@@ -323,6 +330,9 @@ next
 next
   case (CV_Real r)
   then show ?case by simp
+next
+  case (CV_Extern n l k)
+  then show ?case by simp
 qed
 
 
@@ -379,6 +389,9 @@ next
   then show ?case by simp
 next
   case (CV_Real r)
+  then show ?case by simp
+next
+  case (CV_Extern n l k)
   then show ?case by simp
 qed
 
@@ -601,6 +614,9 @@ next
 next
   case (CV_Real r)
   then show ?case by simp
+next
+  case (CV_Extern n l k)
+  then show ?case by simp
 qed
 
 
@@ -638,6 +654,11 @@ lemma value_has_type_MathReal:
   assumes "value_has_type env val CoreTy_MathReal"
   shows "\<exists>r. val = CV_Real r"
   using assms by (cases val; auto)
+
+lemma value_has_type_Extern:
+  assumes "value_has_type env val (CoreTy_Extern n l)"
+  shows "\<exists>k. val = CV_Extern n l k"
+  using assms by (cases val; auto split: CoreType.splits option.splits)
 
 (* An array value typed at dims is also typed at any well-kinded dims' that its
    sizes match. *)

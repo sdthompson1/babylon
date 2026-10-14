@@ -33,7 +33,9 @@ begin
       are reached along ua-chains).
    Everything else is finite-map/fset algebra: the field-wise unions over
    [a, m] equal those over as @ [m] because a's fields are already the
-   unions over as. *)
+   unions over as. The runtime and alloc-level checks transfer from the flat
+   link because the pair's declarer-side data (runtime type variables, level
+   map) are among the flat inputs' and the linked envs agree. *)
 
 
 (* ========================================================================== *)
@@ -123,6 +125,23 @@ proof -
   then have "fmdisjoint (fmlist_union xs) y"
     by (rule fmdisjoint_fmlist_union_left)
   then show ?thesis by (simp add: fmdisjoint_list_pair)
+qed
+
+(* The same with some keys dropped from the prefix's union (the shape of a
+   collapsed link result's level map): a smaller domain stays disjoint. *)
+lemma fmdisjoint_list_collapse_head_drop:
+  assumes "fmdisjoint_list (xs @ [y])"
+  shows "fmdisjoint_list [fmdrop_fset S (fmlist_union xs), y]"
+proof -
+  have dj: "fmdisjoint (fmlist_union xs) y"
+    using fmdisjoint_list_collapse_head[OF assms] by (simp add: fmdisjoint_list_pair)
+  show ?thesis
+    unfolding fmdisjoint_list_pair fmdisjoint_def
+  proof (rule fset_eqI)
+    fix n
+    show "n |\<in>| fmdom (fmdrop_fset S (fmlist_union xs)) |\<inter>| fmdom y \<longleftrightarrow> n |\<in>| {||}"
+      using fmdisjoint_not_both[OF dj] by auto
+  qed
 qed
 
 
@@ -406,19 +425,31 @@ qed
 
 (* Replacing a list prefix by its own link result leaves the outer link
    result unchanged: each field of link_result as \<sigma>a is already the union
-   over as (the unions re-associate), and the type-variable fields' earlier
-   subtraction of fmdom \<sigma>a is absorbed by the outer subtraction of the larger
-   fmdom \<sigma>. *)
+   over as (the unions re-associate), and the type-variable fields' (and the
+   level map's) earlier subtraction of fmdom \<sigma>a is absorbed by the outer
+   subtraction of the larger fmdom \<sigma>. *)
 lemma link_result_collapse:
   assumes dom_sub: "fmdom \<sigma>a |\<subseteq>| fmdom \<sigma>"
   shows "link_result (link_result as \<sigma>a # ms) \<sigma> = link_result (as @ ms) \<sigma>"
-  unfolding link_result_def
-  by (simp add: fmlist_union_Cons fmlist_union_append funion_list_append
-                fminus_union_absorb[OF dom_sub])
+proof -
+  \<comment> \<open>For the level map: fmdrop_fset_twice turns the nested drops into a drop
+     of the union of the two domains, which is the larger one.\<close>
+  have dom_abs: "fmdom \<sigma> |\<union>| fmdom \<sigma>a = fmdom \<sigma>"
+  proof (rule fset_eqI)
+    fix n
+    show "n |\<in>| fmdom \<sigma> |\<union>| fmdom \<sigma>a \<longleftrightarrow> n |\<in>| fmdom \<sigma>"
+      using dom_sub by (auto dest: fsubsetD)
+  qed
+  show ?thesis
+    unfolding link_result_def
+    by (simp add: fmlist_union_Cons fmlist_union_append funion_list_append
+                  fminus_union_absorb[OF dom_sub] dom_abs)
+qed
 
 (* The pairwise-disjointness of [link_result as \<sigma>, m] follows from that of
    as @ [m]: each of the seven families of the link result is the union of
-   the corresponding family over as. *)
+   the corresponding family over as, and the level map is such a union with
+   the resolved names dropped. *)
 lemma link_fields_disjoint_collapse:
   assumes disj: "link_fields_disjoint (as @ [m])"
   shows "link_fields_disjoint [link_result as \<sigma>, m]"
@@ -435,6 +466,8 @@ proof -
               @ [TE_DataCtorsByType (CM_TyEnv m)])"
    and d6: "fmdisjoint_list (map CM_GlobalVars as @ [CM_GlobalVars m])"
    and d7: "fmdisjoint_list (map CM_Functions as @ [CM_Functions m])"
+   and d8: "fmdisjoint_list (map (\<lambda>x. TE_AbstractAllocLevels (CM_TyEnv x)) as
+              @ [TE_AbstractAllocLevels (CM_TyEnv m)])"
     using disj unfolding link_fields_disjoint_def by simp_all
   show ?thesis
     unfolding link_fields_disjoint_def
@@ -442,7 +475,7 @@ proof -
                   fmdisjoint_list_collapse_head[OF d1] fmdisjoint_list_collapse_head[OF d2]
                   fmdisjoint_list_collapse_head[OF d3] fmdisjoint_list_collapse_head[OF d4]
                   fmdisjoint_list_collapse_head[OF d5] fmdisjoint_list_collapse_head[OF d6]
-                  fmdisjoint_list_collapse_head[OF d7])
+                  fmdisjoint_list_collapse_head[OF d7] fmdisjoint_list_collapse_head_drop[OF d8])
 qed
 
 
@@ -470,6 +503,7 @@ proof -
     acyc_L: "acyclic_subst_deps (fmlist_union (map CM_TypeSubst (as @ [m])))" and
     clos_L: "is_subst_closure (fmlist_union (map CM_TypeSubst (as @ [m]))) \<sigma>" and
     rok_L: "link_runtime_ok (as @ [m]) \<sigma>" and
+    aok_L: "link_alloc_ok (as @ [m]) \<sigma>" and
     L_eq: "L = link_result (as @ [m]) \<sigma>"
     using ok_L link_modules_Inr_iff_closure by blast
 
@@ -617,8 +651,30 @@ proof -
       using lr_eq by simp
   qed
 
+  \<comment> \<open>(6) The alloc-level check on the pair: the pair's level map is a sub-map
+      of the flat inputs' (a's map is the union over as minus the names
+      resolved inside as, which the flat check already covered), and the
+      linked envs agree by (1).\<close>
+  have aok_am: "link_alloc_ok [a, m] \<sigma>"
+    unfolding link_alloc_ok_def
+  proof (intro allI impI)
+    fix n ty l
+    assume lk: "fmlookup \<sigma> n = Some ty"
+       and ll: "fmlookup (fmlist_union (map (\<lambda>x. TE_AbstractAllocLevels (CM_TyEnv x)) [a, m])) n
+                  = Some l"
+    have "fmlookup (fmlist_union (map (\<lambda>x. TE_AbstractAllocLevels (CM_TyEnv x)) (as @ [m]))) n
+            = Some l"
+      using ll
+      by (auto simp: a_eq link_result_def fmlist_union_Cons fmlist_union_append
+               split: if_splits)
+    then have "alloc_level_compatible (CM_TyEnv (normalize_module (link_result (as @ [m]) \<sigma>))) l ty"
+      using lk aok_L unfolding link_alloc_ok_def by blast
+    then show "alloc_level_compatible (CM_TyEnv (normalize_module (link_result [a, m] \<sigma>))) l ty"
+      using lr_eq by simp
+  qed
+
   show ?thesis
-    using disj_am cap_am merge_am rok_am L_am link_modules_Inr_iff[of "[a, m]" L]
+    using disj_am cap_am merge_am rok_am aok_am L_am link_modules_Inr_iff[of "[a, m]" L]
     by blast
 qed
 
@@ -752,11 +808,14 @@ proof -
   have merge: "merge_all_substs (map CM_TypeSubst as) = Inr fmempty"
     unfolding merge_all_substs_Inr_iff u_empty
     using sdisj acyc clos by blast
-  \<comment> \<open>The runtime-resolution check is vacuous for an empty substitution.\<close>
+  \<comment> \<open>The runtime-resolution and alloc-level checks are vacuous for an empty
+     substitution.\<close>
   have rok: "link_runtime_ok as fmempty"
     unfolding link_runtime_ok_def by simp
+  have aok: "link_alloc_ok as fmempty"
+    unfolding link_alloc_ok_def by simp
   show ?thesis
-    using disj_as cap merge rok link_modules_Inr_iff[of as] by blast
+    using disj_as cap merge rok aok link_modules_Inr_iff[of as] by blast
 qed
 
 (* funion_list over a mapped list is monotone in the set of inputs. *)
@@ -829,19 +888,22 @@ qed
 
 (* The generalized sublink lemma: a sub-multiset of a successful link links
    successfully provided its own merged substitution passes the runtime-
-   resolution check. Field disjointness, the capture check, and merge
-   success all restrict to sub-multisets unconditionally (above); the
-   runtime check does NOT - is_runtime_type is evaluated in the sub-link's
-   smaller env, where a resolution target's datatype or type variable may
-   have lost its declaring module - so it is the caller's hypothesis. The
-   whole-program composition (step 8) discharges it for dependency-closed
+   resolution and alloc-level checks. Field disjointness, the capture check,
+   and merge success all restrict to sub-multisets unconditionally (above);
+   the runtime and alloc-level checks do NOT - is_runtime_type and
+   alloc_level_compatible are evaluated in the sub-link's smaller env, where
+   a resolution target's datatype or type variable may have lost its
+   declaring module - so they are the caller's hypotheses. The whole-program
+   composition (step 8) discharges the runtime check for dependency-closed
    prefixes of the whole-program link, where every declaring module is
-   present. *)
+   present; the corresponding discharge of the alloc-level check is still
+   to be done (see EXTERN.md). *)
 lemma link_modules_sublink:
   assumes ok: "link_modules ms = Inr m"
       and sub: "mset as \<subseteq># mset ms"
       and merge: "merge_all_substs (map CM_TypeSubst as) = Inr \<sigma>"
       and rt: "link_runtime_ok as \<sigma>"
+      and aok: "link_alloc_ok as \<sigma>"
   shows "link_modules as = Inr (link_result as \<sigma>)"
 proof -
   have msub: "mset (map f as) \<subseteq># mset (map f ms)" for f :: "CoreModule \<Rightarrow> 'b"
@@ -865,7 +927,7 @@ proof -
       by blast
   qed
   show ?thesis
-    using disj_as cap_as merge rt link_modules_Inr_iff[of as "link_result as \<sigma>"]
+    using disj_as cap_as merge rt aok link_modules_Inr_iff[of as "link_result as \<sigma>"]
     by blast
 qed
 
@@ -1073,14 +1135,20 @@ proof -
 qed
 
 (* The packaged form: a realization-closed sub-multiset of a successful link
-   links successfully, unconditionally. This is the workhorse for the
-   whole-program composition's prefix links (step 8b); the empty-substs form
-   above remains the right tool for interface-only sub-links. *)
+   links successfully, given the alloc-level check on its merged
+   substitution. This is the workhorse for the whole-program composition's
+   prefix links (step 8b); the empty-substs form above remains the right tool
+   for interface-only sub-links. The alloc-level check is the caller's
+   hypothesis for now: its transfer from the full link to a realization-closed
+   sub-list (the analogue of link_runtime_ok_sublist_ground) is still to be
+   proved; see EXTERN.md. *)
 lemma link_modules_sublink_ground:
   assumes ok: "link_modules ms = Inr m"
       and sub: "mset as \<subseteq># mset ms"
       and closed: "subst_range_tyvars (fmlist_union (map CM_TypeSubst as))
                      \<subseteq> fset (fmdom (fmlist_union (map CM_TypeSubst as)))"
+      and aok: "\<And>\<sigma>a. merge_all_substs (map CM_TypeSubst as) = Inr \<sigma>a
+                     \<Longrightarrow> link_alloc_ok as \<sigma>a"
   shows "\<exists>a. link_modules as = Inr a"
 proof -
   obtain \<sigma> where merge_ms: "merge_all_substs (map CM_TypeSubst ms) = Inr \<sigma>"
@@ -1092,7 +1160,7 @@ proof -
   have rt: "link_runtime_ok as \<sigma>a"
     using link_runtime_ok_sublist_ground[OF ok sub merge_as closed] .
   show ?thesis
-    using link_modules_sublink[OF ok sub merge_as rt] by blast
+    using link_modules_sublink[OF ok sub merge_as rt aok[OF merge_as]] by blast
 qed
 
 (* Every function signature of a linked module is some input's signature,

@@ -1185,6 +1185,8 @@ next
             case CV_Int with CoreStmt_While H cv show ?thesis by simp
           next
             case CV_Real with CoreStmt_While H cv show ?thesis by simp
+          next
+            case CV_Extern with CoreStmt_While H cv show ?thesis by simp
           qed
         qed
       next

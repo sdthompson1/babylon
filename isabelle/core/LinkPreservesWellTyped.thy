@@ -62,6 +62,8 @@ lemma apply_subst_to_tyenv_simps [simp]:
   "TE_ConstLocals (apply_subst_to_tyenv subst env) = TE_ConstLocals env"
   "TE_TypeVars (apply_subst_to_tyenv subst env) = TE_TypeVars env"
   "TE_RuntimeTypeVars (apply_subst_to_tyenv subst env) = TE_RuntimeTypeVars env"
+  \<comment> \<open>(7) is a consequence of (18): TE_AbstractTypes is the domain of the level
+      map. It is kept so that the equation numbering is stable.\<close>
   "TE_AbstractTypes (apply_subst_to_tyenv subst env) = TE_AbstractTypes env"
   "TE_ReturnType (apply_subst_to_tyenv subst env) = TE_ReturnType env"
   "TE_FunctionGhost (apply_subst_to_tyenv subst env) = TE_FunctionGhost env"
@@ -75,6 +77,7 @@ lemma apply_subst_to_tyenv_simps [simp]:
      = fmmap (apply_subst_to_datactor subst) (TE_DataCtors env)"
   "TE_DataCtorsByType (apply_subst_to_tyenv subst env) = TE_DataCtorsByType env"
   "TE_GhostDatatypes (apply_subst_to_tyenv subst env) = TE_GhostDatatypes env"
+  "TE_AbstractAllocLevels (apply_subst_to_tyenv subst env) = TE_AbstractAllocLevels env"
   by (simp_all add: apply_subst_to_tyenv_def)
 
 lemma normalize_module_simps [simp]:
@@ -396,6 +399,7 @@ lemma link_modules_result_fields:
     and "TE_RuntimeTypeVars (CM_TyEnv m)
            = funion_list (map (\<lambda>x. TE_RuntimeTypeVars (CM_TyEnv x)) ms)
              |-| fmdom (CM_TypeSubst m)"                                            \<comment> \<open>(6)\<close>
+    \<comment> \<open>(7) is the domain form of (20); kept so that the numbering is stable.\<close>
     and "TE_AbstractTypes (CM_TyEnv m)
            = funion_list (map (\<lambda>x. TE_AbstractTypes (CM_TyEnv x)) ms)
              |-| fmdom (CM_TypeSubst m)"                                            \<comment> \<open>(7)\<close>
@@ -416,6 +420,9 @@ lemma link_modules_result_fields:
     and "CM_GlobalVars m = fmlist_union (map CM_GlobalVars ms)"                     \<comment> \<open>(17)\<close>
     and "CM_Functions m = fmlist_union (map CM_Functions ms)"                       \<comment> \<open>(18)\<close>
     and "\<not> TE_FunctionImpure (CM_TyEnv m)"                                         \<comment> \<open>(19)\<close>
+    and "TE_AbstractAllocLevels (CM_TyEnv m)
+           = fmdrop_fset (fmdom (CM_TypeSubst m))
+               (fmlist_union (map (\<lambda>x. TE_AbstractAllocLevels (CM_TyEnv x)) ms))"  \<comment> \<open>(20)\<close>
 proof -
   obtain \<sigma> where meq: "m = link_result ms \<sigma>"
     using ok link_modules_Inr_iff by blast
@@ -450,13 +457,17 @@ proof -
     and "CM_GlobalVars m = fmlist_union (map CM_GlobalVars ms)"
     and "CM_Functions m = fmlist_union (map CM_Functions ms)"
     and "\<not> TE_FunctionImpure (CM_TyEnv m)"
-    unfolding meq link_result_def by simp_all
+    and "TE_AbstractAllocLevels (CM_TyEnv m)
+           = fmdrop_fset (fmdom (CM_TypeSubst m))
+               (fmlist_union (map (\<lambda>x. TE_AbstractAllocLevels (CM_TyEnv x)) ms))"
+    unfolding meq link_result_def by (simp_all add: fmdom_fmlist_union comp_def)
 qed
 
 (* The checks and closure facts of a successful link, phrased against the
    result's own CM_TypeSubst. Reference order: (1) link_fields_disjoint,
    (2) fmdisjoint_list of the substitution family, (3) acyclicity of the raw
-   union, (4) closure, (5) link_capture_ok, (6) link_runtime_ok. *)
+   union, (4) closure, (5) link_capture_ok, (6) link_runtime_ok,
+   (7) link_alloc_ok. *)
 lemma link_modules_success_facts:
   assumes ok: "link_modules ms = Inr m"
   shows "link_fields_disjoint ms"
@@ -465,6 +476,7 @@ lemma link_modules_success_facts:
     and "is_subst_closure (fmlist_union (map CM_TypeSubst ms)) (CM_TypeSubst m)"
     and "link_capture_ok ms"
     and "link_runtime_ok ms (CM_TypeSubst m)"
+    and "link_alloc_ok ms (CM_TypeSubst m)"
 proof -
   obtain \<sigma> where
     fdisj: "link_fields_disjoint ms" and
@@ -473,6 +485,7 @@ proof -
     acyc: "acyclic_subst_deps (fmlist_union (map CM_TypeSubst ms))" and
     clos: "is_subst_closure (fmlist_union (map CM_TypeSubst ms)) \<sigma>" and
     rok: "link_runtime_ok ms \<sigma>" and
+    aok: "link_alloc_ok ms \<sigma>" and
     meq: "m = link_result ms \<sigma>"
     using ok link_modules_Inr_iff_closure by blast
   have \<sigma>eq: "CM_TypeSubst m = \<sigma>"
@@ -484,6 +497,7 @@ proof -
     using clos \<sigma>eq by simp
   show "link_capture_ok ms" using cap .
   show "link_runtime_ok ms (CM_TypeSubst m)" using rok \<sigma>eq by simp
+  show "link_alloc_ok ms (CM_TypeSubst m)" using aok \<sigma>eq by simp
 qed
 
 (* The R2 runtime-resolution check, massaged into consumable form: a resolved
@@ -577,8 +591,8 @@ proof -
       unfolding fM(5) by auto
   qed
   \<comment> \<open>Abstract types: each input has TE_AbstractTypes = TE_TypeVars, and the
-     linker builds both fields as the same union-minus-domain, so the
-     equality carries over by congruence.\<close>
+     linker builds the level map's domain and TE_TypeVars as the same
+     union-minus-domain, so the equality carries over by congruence.\<close>
   have abs_tv: "TE_AbstractTypes (CM_TyEnv m) = TE_TypeVars (CM_TyEnv m)"
   proof -
     have "map (\<lambda>x. TE_AbstractTypes (CM_TyEnv x)) ms
@@ -817,8 +831,9 @@ qed
 (* link_mid_env a b m: the whole link's env (so the datatype tables, ghost    *)
 (* fsets, by-type table and inert scope fields are already m's), except:      *)
 (*   - the tyvar fields are the UNIONS of the two sides' (nothing subtracted  *)
-(*     - the substitution has not been applied yet), with TE_AbstractTypes =  *)
-(*     TE_TypeVars as at any module level;                                    *)
+(*     - the substitution has not been applied yet), and so is the level map  *)
+(*     (whose domain is then TE_TypeVars, as at any module level, since each  *)
+(*     side's is);                                                            *)
 (*   - the three substituted declaration maps hold the a-side entries with    *)
 (*     \<sigma>_A applied (= normalize_module a's entries), overlaid (a preferring)  *)
 (*     with the b-side entries with \<sigma>_B applied. On keys both sides declare   *)
@@ -838,7 +853,8 @@ definition link_mid_env :: "CoreModule \<Rightarrow> CoreModule \<Rightarrow> Co
        TE_TypeVars := TE_TypeVars (CM_TyEnv a) |\<union>| TE_TypeVars (CM_TyEnv b),
        TE_RuntimeTypeVars :=
          TE_RuntimeTypeVars (CM_TyEnv a) |\<union>| TE_RuntimeTypeVars (CM_TyEnv b),
-       TE_AbstractTypes := TE_TypeVars (CM_TyEnv a) |\<union>| TE_TypeVars (CM_TyEnv b),
+       TE_AbstractAllocLevels :=
+         TE_AbstractAllocLevels (CM_TyEnv a) ++\<^sub>f TE_AbstractAllocLevels (CM_TyEnv b),
        TE_Functions :=
          TE_Functions (CM_TyEnv (normalize_module a))
          ++\<^sub>f fmdrop_fset (fmdom (TE_Functions (CM_TyEnv (normalize_module a))))
@@ -861,8 +877,11 @@ lemma link_mid_env_simps [simp]:
      = TE_TypeVars (CM_TyEnv a) |\<union>| TE_TypeVars (CM_TyEnv b)"
   "TE_RuntimeTypeVars (link_mid_env a b m)
      = TE_RuntimeTypeVars (CM_TyEnv a) |\<union>| TE_RuntimeTypeVars (CM_TyEnv b)"
+  \<comment> \<open>(7) is the domain form of (18), kept for stable numbering. On
+      module-level sides it is TE_TypeVars (CM_TyEnv a) |\<union>| TE_TypeVars
+      (CM_TyEnv b), given each side's TE_AbstractTypes = TE_TypeVars.\<close>
   "TE_AbstractTypes (link_mid_env a b m)
-     = TE_TypeVars (CM_TyEnv a) |\<union>| TE_TypeVars (CM_TyEnv b)"
+     = TE_AbstractTypes (CM_TyEnv a) |\<union>| TE_AbstractTypes (CM_TyEnv b)"
   "TE_ReturnType (link_mid_env a b m) = TE_ReturnType (CM_TyEnv m)"
   "TE_FunctionGhost (link_mid_env a b m) = TE_FunctionGhost (CM_TyEnv m)"
   "TE_FunctionImpure (link_mid_env a b m) = TE_FunctionImpure (CM_TyEnv m)"
@@ -879,6 +898,8 @@ lemma link_mid_env_simps [simp]:
                         (TE_DataCtors (CM_TyEnv (normalize_module b)))"
   "TE_DataCtorsByType (link_mid_env a b m) = TE_DataCtorsByType (CM_TyEnv m)"
   "TE_GhostDatatypes (link_mid_env a b m) = TE_GhostDatatypes (CM_TyEnv m)"
+  "TE_AbstractAllocLevels (link_mid_env a b m)
+     = TE_AbstractAllocLevels (CM_TyEnv a) ++\<^sub>f TE_AbstractAllocLevels (CM_TyEnv b)"
   by (simp_all add: link_mid_env_def)
 
 
@@ -1061,10 +1082,6 @@ proof -
             (CM_TyEnv (normalize_module m)) (link_mid_env a b m))
             = TE_RuntimeTypeVars (CM_TyEnv (normalize_module m))"
       by simp
-    show "TE_AbstractTypes (apply_subst_to_module_env (CM_TypeSubst m)
-            (CM_TyEnv (normalize_module m)) (link_mid_env a b m))
-            = TE_AbstractTypes (CM_TyEnv (normalize_module m))"
-      by simp
     show "TE_ReturnType (apply_subst_to_module_env (CM_TypeSubst m)
             (CM_TyEnv (normalize_module m)) (link_mid_env a b m))
             = TE_ReturnType (CM_TyEnv (normalize_module m))"
@@ -1104,6 +1121,10 @@ proof -
     show "TE_GhostDatatypes (apply_subst_to_module_env (CM_TypeSubst m)
             (CM_TyEnv (normalize_module m)) (link_mid_env a b m))
             = TE_GhostDatatypes (CM_TyEnv (normalize_module m))"
+      by simp
+    show "TE_AbstractAllocLevels (apply_subst_to_module_env (CM_TypeSubst m)
+            (CM_TyEnv (normalize_module m)) (link_mid_env a b m))
+            = TE_AbstractAllocLevels (CM_TyEnv (normalize_module m))"
       by simp
     show "CoreTyEnv.more (apply_subst_to_module_env (CM_TypeSubst m)
             (CM_TyEnv (normalize_module m)) (link_mid_env a b m))
@@ -2368,7 +2389,7 @@ proof -
     qed
   next
     show "tyenv_abstract_types_subset ?mid"
-      unfolding tyenv_abstract_types_subset_def by simp
+      unfolding tyenv_abstract_types_subset_def by (simp add: absa absb)
   next
     have H: "\<And>dtName. dtName |\<in>| fmdom (TE_Datatypes ?mid) \<Longrightarrow>
                \<exists>ctorName ctors.
@@ -2764,7 +2785,7 @@ proof -
     show "TE_ConstLocals ?be2 = TE_ConstLocals ?e1"
       by (simp add: module_body_env_for_def)
     show "TE_TypeVars ?be2 = TE_TypeVars ?e1"
-      by (rule fset_eqI) (auto simp: module_body_env_for_def absa)
+      by (rule fset_eqI) (auto simp: module_body_env_for_def absa absb)
     show "TE_RuntimeTypeVars ?be2 = TE_RuntimeTypeVars ?e1"
     proof (rule fset_eqI)
       fix n
@@ -2809,10 +2830,12 @@ qed
    parameters, which the whole link's capture check keeps out of the
    substitution.
 
-   The module-level module_env_subst_ok fact and the whole link's
-   abstract-types convention are taken as premises, so this works from any
-   proof of the module-level fact (both sides well-typed, or one side carrying
-   only the structural invariant).
+   The module-level module_env_subst_ok fact and the abstract-types
+   convention of the whole link and of both sides are taken as premises, so
+   this works from any proof of the module-level fact (both sides well-typed,
+   or one side carrying only the structural invariant). The sides' convention
+   is what identifies the mid env's abstract types (the union of the two
+   level maps' domains) with its type variables.
 
    The signature info0 need not itself be declared in m: it is enough that it
    has the type parameters of some function info1 that is (for instance,
@@ -2825,6 +2848,8 @@ lemma link_mid_body_env_subst_ok:
                      (CM_TyEnv (normalize_module m)) (link_mid_env a b m)"
       and absM: "TE_AbstractTypes (CM_TyEnv m) = TE_TypeVars (CM_TyEnv m)"
       and tyargs1: "FI_TyArgs info0 = FI_TyArgs info1"
+      and absa: "TE_AbstractTypes (CM_TyEnv a) = TE_TypeVars (CM_TyEnv a)"
+      and absb: "TE_AbstractTypes (CM_TyEnv b) = TE_TypeVars (CM_TyEnv b)"
   shows "module_env_subst_ok (CM_TypeSubst m)
            (module_body_env_for (CM_TyEnv (normalize_module m)) names
               (apply_subst_to_funinfo (CM_TypeSubst m) info0))
@@ -2862,7 +2887,7 @@ proof -
     proof (intro allI impI)
       fix n assume "n |\<in>| TE_TypeVars ?sb"
       then have "n |\<in>| TE_TypeVars ?mid \<or> n |\<in>| fset_of_list (FI_TyArgs info0)"
-        by (auto simp: module_body_env_for_def tyargs)
+        by (auto simp: module_body_env_for_def tyargs absa absb)
       then show "case fmlookup (CM_TypeSubst m) n of
                    Some ty' \<Rightarrow> is_well_kinded ?tb ty'
                  | None \<Rightarrow> n |\<in>| TE_TypeVars ?tb"
@@ -3083,8 +3108,6 @@ proof -
       by simp
     show "TE_RuntimeTypeVars ?lhs = TE_RuntimeTypeVars ?tb"
       by simp
-    show "TE_AbstractTypes ?lhs = TE_AbstractTypes ?tb"
-      by simp
     show "TE_ReturnType ?lhs = TE_ReturnType ?tb"
       by (simp add: module_body_env_for_def info_rel apply_subst_to_funinfo_def absA)
     show "TE_FunctionGhost ?lhs = TE_FunctionGhost ?tb"
@@ -3105,6 +3128,8 @@ proof -
       by (simp add: module_body_env_for_def)
     show "TE_GhostDatatypes ?lhs = TE_GhostDatatypes ?tb"
       by (simp add: module_body_env_for_def)
+    show "TE_AbstractAllocLevels ?lhs = TE_AbstractAllocLevels ?tb"
+      by simp
     show "CoreTyEnv.more ?lhs = CoreTyEnv.more ?tb"
       by (simp add: apply_subst_to_module_env_def module_body_env_for_def
                     link_mid_env_def apply_subst_to_tyenv_def)
@@ -3379,7 +3404,8 @@ proof -
               mid_lk len0] .
     have ok_sb: "module_env_subst_ok ?\<sigma>M ?tb ?sb"
       using link_mid_body_env_subst_ok[OF linkM m_raw tyargs
-              link_mid_env_subst_ok[OF linkA wtA linkB wtB linkM setMS] absM refl] .
+              link_mid_env_subst_ok[OF linkA wtA linkB wtB linkM setMS] absM refl
+              absa absb] .
     have rt_sb: "module_env_subst_runtime_ok ?\<sigma>M ?tb ?sb"
       using link_mid_body_env_runtime_ok[OF linkA linkB linkM setMS
                                             m_raw tyargs ghostA absM rtvM] .
@@ -3483,7 +3509,7 @@ proof -
     have ok_n: "module_env_subst_ok ?\<sigma>M
                   (module_body_env_for ?envM names (apply_subst_to_funinfo ?\<sigma>M info0''))
                   (module_body_env_for ?mid names info'')"
-      using link_mid_body_env_subst_ok[OF linkM m_raw ty_n mid_ok absM ty1] .
+      using link_mid_body_env_subst_ok[OF linkM m_raw ty_n mid_ok absM ty1 absa absb] .
     have coll: "apply_subst_to_module_env ?\<sigma>M
                   (module_body_env_for ?envM names (apply_subst_to_funinfo ?\<sigma>M info0''))
                   (module_body_env_for ?mid names info'')

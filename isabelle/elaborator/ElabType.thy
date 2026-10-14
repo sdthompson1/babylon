@@ -5,6 +5,12 @@ begin
 (* Input: env, elabEnv, ghost mode, input type (or list) *)
 (* Output: either a list of errors, or an elaborated type (or list) *)
 
+(* Convert AllocLevel to CoreAllocLevel *)
+fun alloc_level_to_core :: "AllocLevel \<Rightarrow> CoreAllocLevel" where
+  "alloc_level_to_core AllocNever = CoreAlloc_Never"
+| "alloc_level_to_core AllocIfNotDefault = CoreAlloc_IfNotDefault"
+| "alloc_level_to_core AllocAlways = CoreAlloc_Always"
+
 (* Elaborate a single array dimension.
    BabDim_Fixed must contain a literal integer within uint64 range;
    anything else produces TyErr_InvalidArrayDimension. (Non-literal dimension

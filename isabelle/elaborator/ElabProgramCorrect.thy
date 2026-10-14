@@ -1858,9 +1858,17 @@ proof -
       using merge_all_substs_sublist[OF mergeW msubB'] by blast
     have rtB: "link_runtime_ok (map (face_module ps) bkeys) \<sigma>B"
       using pipeline_entry_okD(14)[OF em_ok, folded B_eq, OF mergeB] .
+    \<comment> \<open>The alloc-level gate of the derived implementation link. Still to be
+       discharged: it should come from the elaborator's realization-time
+       check, stored as a further conclusion of elab_module_well_typed and
+       carried through pipeline_entry_ok like the runtime gate (vi), plus a
+       monotonicity lemma to move the level computation from the fold's env
+       to the normalized linked env (EXTERN.md).\<close>
+    have aokB: "link_alloc_ok (map (face_module ps) bkeys) \<sigma>B"
+      sorry
     have linkB: "link_modules (map (face_module ps) bkeys)
                    = Inr (link_result (map (face_module ps) bkeys) \<sigma>B)"
-      using link_modules_sublink[OF linkW msubB mergeB rtB] .
+      using link_modules_sublink[OF linkW msubB mergeB rtB aokB] .
     have wtB: "core_module_well_typed (link_result (map (face_module ps) bkeys) \<sigma>B)"
       using pipeline_entry_okD(13)[OF em_ok, folded B_eq, OF linkB] .
     \<comment> \<open>The extended prefix links: a realization-closed sub-multiset.\<close>
@@ -1899,9 +1907,17 @@ proof -
           \<subseteq> fset (fmdom (fmlist_union (map CM_TypeSubst
                (map (face_module ps) (face_keys (take (Suc i) names))))))"
       using state_prefix_ground[OF st(1) dom_take closed_take] .
+    \<comment> \<open>The alloc-level gate of the realization-closed prefix link. Still to
+       be discharged: the transfer of link_alloc_ok from the whole-program
+       link to a realization-closed sub-list (the analogue of
+       link_runtime_ok_sublist_ground) is deferred; see EXTERN.md.\<close>
+    have aokT: "\<And>\<sigma>a. merge_all_substs (map CM_TypeSubst
+                   (map (face_module ps) (face_keys (take (Suc i) names)))) = Inr \<sigma>a
+                 \<Longrightarrow> link_alloc_ok (map (face_module ps) (face_keys (take (Suc i) names))) \<sigma>a"
+      sorry
     obtain p where linkP: "link_modules
         (map (face_module ps) (face_keys (take (Suc i) names))) = Inr p"
-      using link_modules_sublink_ground[OF linkW msubT ground] by blast
+      using link_modules_sublink_ground[OF linkW msubT ground aokT] by blast
     \<comment> \<open>Reassemble: everything the B-list adds beyond its own two faces is
        an earlier module's interface, already in the previous prefix.\<close>
     have sub1: "set (map (face_module ps) bkeys)

@@ -62,6 +62,10 @@ fun is_well_kinded :: "CoreTyEnv \<Rightarrow> CoreType \<Rightarrow> bool" wher
 | "is_well_kinded env (CoreTy_Array elemTy dims) =
     (is_well_kinded env elemTy \<and> array_dims_well_kinded dims)"
 | "is_well_kinded env (CoreTy_Var n) = (n |\<in>| TE_TypeVars env)"
+(* Note that in Core, all possible CoreTy_Extern types are considered well-kinded; unlike
+   type variables, extern types are self-describing and there is no notion of "which extern
+   types are in scope". *)
+| "is_well_kinded env (CoreTy_Extern _ _) = True"
 
 (* Integer types are always well-kinded *)
 lemma is_integer_type_well_kinded:

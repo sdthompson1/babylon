@@ -59,7 +59,7 @@ definition apply_subst_to_module_env ::
       TE_GlobalVars := fmmap (apply_subst subst) (TE_GlobalVars env),
       TE_TypeVars := TE_TypeVars targetEnv,
       TE_RuntimeTypeVars := TE_RuntimeTypeVars targetEnv,
-      TE_AbstractTypes := TE_AbstractTypes targetEnv,
+      TE_AbstractAllocLevels := TE_AbstractAllocLevels targetEnv,
       TE_ReturnType := apply_subst subst (TE_ReturnType env),
       TE_ProofGoal := map_option (apply_subst_to_term subst) (TE_ProofGoal env),
       TE_Functions := fmmap (apply_subst_to_funinfo subst) (TE_Functions env),
@@ -97,6 +97,8 @@ lemma apply_subst_to_module_env_TE_RuntimeTypeVars [simp]:
      = TE_RuntimeTypeVars targetEnv"
   by (simp add: apply_subst_to_module_env_def)
 
+(* A consequence of apply_subst_to_module_env_TE_AbstractAllocLevels (below),
+   TE_AbstractTypes being the domain of the level map; kept for reference. *)
 lemma apply_subst_to_module_env_TE_AbstractTypes [simp]:
   "TE_AbstractTypes (apply_subst_to_module_env subst targetEnv env)
      = TE_AbstractTypes targetEnv"
@@ -150,6 +152,11 @@ lemma apply_subst_to_module_env_TE_DataCtorsByType [simp]:
 lemma apply_subst_to_module_env_TE_GhostDatatypes [simp]:
   "TE_GhostDatatypes (apply_subst_to_module_env subst targetEnv env)
      = TE_GhostDatatypes env"
+  by (simp add: apply_subst_to_module_env_def)
+
+lemma apply_subst_to_module_env_TE_AbstractAllocLevels [simp]:
+  "TE_AbstractAllocLevels (apply_subst_to_module_env subst targetEnv env)
+     = TE_AbstractAllocLevels targetEnv"
   by (simp add: apply_subst_to_module_env_def)
 
 

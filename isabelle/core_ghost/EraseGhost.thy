@@ -213,6 +213,17 @@ definition tyenv_nonghost_ctor :: "CoreTyEnv \<Rightarrow> string \<Rightarrow> 
        None \<Rightarrow> False
      | Some (dtName, _, _) \<Rightarrow> dtName |\<notin>| TE_GhostDatatypes env)"
 
+(* The domain of a restricted map, exactly (the library only has the subset
+   form fmdom_restrict_fset). Needed so that TE_AbstractTypes of the erased
+   env, which is the domain of its restricted level map, normalizes. *)
+lemma fmdom_fmrestrict_fset [simp]:
+  "fmdom (fmrestrict_fset A m) = fmdom m |\<inter>| A"
+proof (rule fset_eqI)
+  fix n
+  show "n |\<in>| fmdom (fmrestrict_fset A m) \<longleftrightarrow> n |\<in>| fmdom m |\<inter>| A"
+    by (auto simp: fmlookup_dom_iff)
+qed
+
 (* Erase all ghost functions, ghost datatypes, and non-runtime type variables
    from a type environment, and the ghost parameters from the signatures of the
    functions that stay. Global variables are never ghost, so they all stay.
@@ -221,7 +232,8 @@ definition erase_ghost_tyenv :: "CoreTyEnv \<Rightarrow> CoreTyEnv" where
   "erase_ghost_tyenv env =
     env \<lparr>
       TE_TypeVars := TE_TypeVars env |\<inter>| TE_RuntimeTypeVars env,
-      TE_AbstractTypes := TE_AbstractTypes env |\<inter>| TE_RuntimeTypeVars env,
+      TE_AbstractAllocLevels :=
+        fmrestrict_fset (TE_RuntimeTypeVars env) (TE_AbstractAllocLevels env),
       TE_Functions := fmmap erase_ghost_funinfo
                         (fmfilter (tyenv_nonghost_fun env) (TE_Functions env)),
       TE_Datatypes := fmfilter (\<lambda>dtName. dtName |\<notin>| TE_GhostDatatypes env) (TE_Datatypes env),
@@ -238,6 +250,8 @@ lemma erase_ghost_tyenv_simps [simp]:
   "TE_ConstLocals (erase_ghost_tyenv env) = TE_ConstLocals env"
   "TE_TypeVars (erase_ghost_tyenv env) = TE_TypeVars env |\<inter>| TE_RuntimeTypeVars env"
   "TE_RuntimeTypeVars (erase_ghost_tyenv env) = TE_RuntimeTypeVars env"
+  "TE_AbstractAllocLevels (erase_ghost_tyenv env)
+     = fmrestrict_fset (TE_RuntimeTypeVars env) (TE_AbstractAllocLevels env)"
   "TE_AbstractTypes (erase_ghost_tyenv env) = TE_AbstractTypes env |\<inter>| TE_RuntimeTypeVars env"
   "TE_ReturnType (erase_ghost_tyenv env) = TE_ReturnType env"
   "TE_FunctionGhost (erase_ghost_tyenv env) = TE_FunctionGhost env"

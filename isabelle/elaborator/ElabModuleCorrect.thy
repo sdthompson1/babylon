@@ -623,15 +623,19 @@ lemma elab_module_Inr_elim:
    realization lives there); (vi) the runtime-resolution gate (link_runtime_ok)
    of the derived linked implementation holds for ANY successfully merged
    substitution of that input list. The pipeline needs conclusion (ii)'s link
-   to SUCCEED, not merely to be well-typed if it does; of link_modules' four
-   checks, the runtime gate is the only one that does not restrict from the
-   (successful) whole-program link to a sub-multiset, so it is exactly the
-   hypothesis link_modules_sublink leaves with the caller - and the input list
-   here is NOT realization-closed (dep implementations are absent), putting it
-   outside link_modules_sublink_ground. (vi) discharges the gate from the
+   to SUCCEED, not merely to be well-typed if it does; of link_modules' five
+   checks, the runtime gate and the alloc-level gate (link_alloc_ok) are the
+   only ones that do not restrict from the (successful) whole-program link to
+   a sub-multiset, so they are exactly the hypotheses link_modules_sublink
+   leaves with the caller - and the input list here is NOT realization-closed
+   (dep implementations are absent), putting it outside
+   link_modules_sublink_ground. (vi) discharges the runtime gate from the
    elaborator's own realization-site checks, carried through the fold by
    subst_runtime_ok. It is conditional on merge success alone, which the
    pipeline inherits from the whole-program link via merge_all_substs_sublist.
+   The corresponding conclusion for the alloc-level gate is still to be
+   added (the pipeline currently assumes it; see EXTERN.md): it should follow
+   from the elaborator's realization-time alloc-level check in the same way.
 
    Conclusions (vii)-(ix) feed the OTHER sublink obligation of step 8: the
    growing prefixes of the whole-program link go through

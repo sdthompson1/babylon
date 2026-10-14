@@ -269,7 +269,7 @@ proof -
       by (rule fun_info_matches_interp_fun_ground_cong_env
                  [OF pEnv_globals pEnv_funs pEnv_datatypes pEnv_dactors
                      pEnv_dactors_by_ty pEnv_ghost_dt])
-         (simp add: abs_empty abs_pEnv)
+         (simp_all add: abs_empty abs_pEnv partial_body_env_for_def body_env_for_def)
     show "case fmlookup (IS_Functions ?clearedState) name of None \<Rightarrow> False
           | Some interpFun \<Rightarrow> fun_info_matches_interp_fun ?pEnv info' interpFun"
       using outer fi_eq by (auto split: option.splits)

@@ -354,6 +354,12 @@ definition ty_args_well_formed :: "'w InterpState \<Rightarrow> CoreTyEnv \<Righ
      subst_range_tyvars (IS_TyArgs state) = {} \<and>
      (\<forall>ty \<in> fmran' (IS_TyArgs state). is_well_kinded env ty)"
 
+(* Note that state_matches_env says nothing about the extern allocation oracle
+   IS_ExternAlloc: it is unconstrained. The facts promised by an extern type's
+   alloc level are built into is_allocated (CoreInterp.thy) -- the oracle cannot
+   "override" these (the oracle is not even consulted, if the extern value is
+   already known to be unallocated based on its type). *)
+
 (* The state's datatype tables are those of the env. *)
 definition tables_match :: "'w InterpState \<Rightarrow> CoreTyEnv \<Rightarrow> bool" where
   "tables_match state env \<equiv>
@@ -464,9 +470,9 @@ lemma body_env_for_well_formed_post:
 
 (* body_env_for only depends on the "global" fields of env (TE_GlobalVars,
    TE_Functions, TE_Datatypes, TE_DataCtors, TE_DataCtorsByType,
-   TE_GhostDatatypes); the "local" fields it sets are all overwritten from
-   funInfo. So if two envs agree on the global fields, body_env_for produces
-   the same env. *)
+   TE_GhostDatatypes, TE_AbstractAllocLevels); the "local" fields it sets
+   are all overwritten from funInfo. So if two envs agree on the global
+   fields, body_env_for produces the same env. *)
 lemma body_env_for_cong:
   assumes "TE_GlobalVars env1 = TE_GlobalVars env2"
       and "TE_Functions env1 = TE_Functions env2"
@@ -474,7 +480,7 @@ lemma body_env_for_cong:
       and "TE_DataCtors env1 = TE_DataCtors env2"
       and "TE_DataCtorsByType env1 = TE_DataCtorsByType env2"
       and "TE_GhostDatatypes env1 = TE_GhostDatatypes env2"
-      and "TE_AbstractTypes env1 = TE_AbstractTypes env2"
+      and "TE_AbstractAllocLevels env1 = TE_AbstractAllocLevels env2"
   shows "body_env_for env1 names funInfo = body_env_for env2 names funInfo"
   using assms unfolding body_env_for_def by simp
 
@@ -492,14 +498,14 @@ lemma fun_info_matches_interp_fun_cong_env:
       and gd: "TE_GhostDatatypes env1 = TE_GhostDatatypes env2"
       and tv: "TE_TypeVars env1 = TE_TypeVars env2"
       and rtv: "TE_RuntimeTypeVars env1 = TE_RuntimeTypeVars env2"
-      and abs: "TE_AbstractTypes env1 = TE_AbstractTypes env2"
+      and al: "TE_AbstractAllocLevels env1 = TE_AbstractAllocLevels env2"
   shows "fun_info_matches_interp_fun env1 funInfo interpFun =
          fun_info_matches_interp_fun env2 funInfo interpFun"
 proof -
   have body_eq: "\<And>names. body_env_for env1 names funInfo = body_env_for env2 names funInfo"
-    by (rule body_env_for_cong[OF gv fn dt dc dcbt gd abs])
+    by (rule body_env_for_cong[OF gv fn dt dc dcbt gd al])
   have body_fun_eq: "body_env_for env1 = body_env_for env2"
-    by (rule ext)+ (rule body_env_for_cong[OF gv fn dt dc dcbt gd abs])
+    by (rule ext)+ (rule body_env_for_cong[OF gv fn dt dc dcbt gd al])
   have wk_eq: "\<And>ty. is_well_kinded env1 ty = is_well_kinded env2 ty"
     by (rule is_well_kinded_cong_env[OF tv dt])
   have rt_eq: "\<And>ty. is_runtime_type env1 ty = is_runtime_type env2 ty"

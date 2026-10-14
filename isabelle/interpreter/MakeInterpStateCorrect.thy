@@ -170,10 +170,12 @@ lemma assembled_state_matches:
               fmlookup externs name = Some externFun \<rbrakk> \<Longrightarrow>
             extern_fun_contract env info externFun"
   shows "state_matches_env
-           (base_interp_state env world \<lparr> IS_Globals := globals, IS_Functions := funs \<rparr>)
+           (base_interp_state env world externAlloc
+              \<lparr> IS_Globals := globals, IS_Functions := funs \<rparr>)
            env []"
 proof -
-  let ?st = "base_interp_state env world \<lparr> IS_Globals := globals, IS_Functions := funs \<rparr>"
+  let ?st = "base_interp_state env world externAlloc
+               \<lparr> IS_Globals := globals, IS_Functions := funs \<rparr>"
 
   from scope have locals: "TE_LocalVars env = fmempty"
     and constlocals: "TE_ConstLocals env = {||}"
@@ -410,7 +412,7 @@ theorem make_interp_state_matches_env:
             \<lbrakk> fmlookup (TE_Functions (CM_TyEnv (normalize_module m))) name = Some info;
               fmlookup externs name = Some externFun \<rbrakk> \<Longrightarrow>
             extern_fun_contract (CM_TyEnv (normalize_module m)) info externFun"
-      and ok: "make_interp_state world externs m = Inr state"
+      and ok: "make_interp_state world externs externAlloc m = Inr state"
   shows "state_matches_env state (CM_TyEnv (normalize_module m)) []"
 proof -
   define m' where "m' = normalize_module m"
@@ -439,7 +441,7 @@ proof -
   \<comment> \<open>Decompose the construction.\<close>
   from ok obtain funs where
     funs_ok: "build_interp_funs externs env funPairs = Inr funs" and
-    state_eq: "state = base_interp_state env world
+    state_eq: "state = base_interp_state env world externAlloc
                          \<lparr> IS_Globals := CM_GlobalVars m', IS_Functions := funs \<rparr>"
     unfolding make_interp_state_def Let_def
               m'_def[symmetric] env_def[symmetric] funPairs_def[symmetric]

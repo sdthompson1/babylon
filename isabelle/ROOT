@@ -36,6 +36,7 @@ session Babylon = "HOL-Library" +
 
     (* core *)
     "core/ContractNames"
+    "core/CoreAllocLevel"
     "core/CoreContractTypecheck"
     "core/CoreFreeVars"
     "core/CoreKindcheck"

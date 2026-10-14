@@ -1611,7 +1611,7 @@ next
          Ghost body = Some bodyTy"
       using CoreTm_Quantifier.IH[OF body_ty] .
     from Ghost wk' body_ty' body_env_shape body_bool ty_eq show ?thesis
-      by (metis CoreType.simps(63) core_term_type.simps(10) option.simps(5))
+      by (metis CoreType.case(2) core_term_type.simps(10) option.simps(5))
   qed
 next
   case (CoreTm_FunctionCall fnName tyArgs args)
@@ -2017,7 +2017,7 @@ next
     have body_ty: "core_term_type ?body_env Ghost body = Some bodyTy"
       by (rule CoreTm_Quantifier.IH[OF body_ty'[unfolded body_env_shape] CoreTm_Quantifier.prems(2) body_disj])
     from Ghost wk body_ty body_env_shape body_bool ty_eq show ?thesis
-      by (metis CoreType.simps(63) core_term_type.simps(10) option.simps(5))
+      by (metis CoreType.case(2) core_term_type.simps(10) option.simps(5))
   qed
 next
   case (CoreTm_FunctionCall fnName tyArgs args)

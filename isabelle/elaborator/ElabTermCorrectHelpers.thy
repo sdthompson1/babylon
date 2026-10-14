@@ -2428,6 +2428,9 @@ proof (cases ty1)
   next
     case other: (CoreTy_Var x)
     with assms(1) \<open>ty1 = CoreTy_FiniteInt sign1 bits1\<close> show ?thesis by simp
+  next
+    case other: (CoreTy_Extern x1 x2)
+    with assms(1) \<open>ty1 = CoreTy_FiniteInt sign1 bits1\<close> show ?thesis by simp
   qed
 next
   case other: CoreTy_Bool
@@ -2449,6 +2452,9 @@ next
   with assms(1) show ?thesis by simp
 next
   case other: (CoreTy_Var x)
+  with assms(1) show ?thesis by simp
+next
+  case other: (CoreTy_Extern x1 x2)
   with assms(1) show ?thesis by simp
 qed
 

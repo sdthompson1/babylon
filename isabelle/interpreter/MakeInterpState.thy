@@ -38,9 +38,11 @@ datatype InterpStateError =
 (* ========================================================================== *)
 
 (* The state before globals and functions are installed: everything empty
-   except the datatype tables and the world. *)
-definition base_interp_state :: "CoreTyEnv \<Rightarrow> 'w \<Rightarrow> 'w InterpState" where
-  "base_interp_state env world =
+   except the datatype tables, the world and the extern allocation oracle. *)
+definition base_interp_state ::
+  "CoreTyEnv \<Rightarrow> 'w \<Rightarrow> (string \<Rightarrow> CoreAllocLevel \<Rightarrow> nat \<Rightarrow> bool)
+   \<Rightarrow> 'w InterpState" where
+  "base_interp_state env world externAlloc =
      \<lparr> IS_Globals = fmempty,
        IS_Locals = fmempty,
        IS_Refs = fmempty,
@@ -51,7 +53,8 @@ definition base_interp_state :: "CoreTyEnv \<Rightarrow> 'w \<Rightarrow> 'w Int
        IS_DataCtors = TE_DataCtors env,
        IS_DataCtorsByType = TE_DataCtorsByType env,
        IS_Functions = fmempty,
-       IS_World = world \<rparr>"
+       IS_World = world,
+       IS_ExternAlloc = externAlloc \<rparr>"
 
 
 (* ========================================================================== *)
@@ -100,17 +103,18 @@ fun build_interp_funs ::
 (* ========================================================================== *)
 
 (* Build an InterpState from a closed CoreModule. `externs` supplies an
-   ExternFunc for each extern (CF_Body = None) function. *)
+   ExternFunc for each extern (CF_Body = None) function, and `externAlloc` is
+   the allocation oracle for extern types (see IS_ExternAlloc). *)
 definition make_interp_state ::
-  "'w \<Rightarrow> (string, 'w ExternFunc) fmap \<Rightarrow> CoreModule
-   \<Rightarrow> InterpStateError + 'w InterpState" where
-  "make_interp_state world externs m =
+  "'w \<Rightarrow> (string, 'w ExternFunc) fmap \<Rightarrow> (string \<Rightarrow> CoreAllocLevel \<Rightarrow> nat \<Rightarrow> bool)
+   \<Rightarrow> CoreModule \<Rightarrow> InterpStateError + 'w InterpState" where
+  "make_interp_state world externs externAlloc m =
     (let m' = normalize_module m;
          env = CM_TyEnv m'
      in case build_interp_funs externs env (sorted_list_of_fmap (CM_Functions m')) of
           Inl err \<Rightarrow> Inl err
         | Inr funs \<Rightarrow>
-            Inr (base_interp_state env world
+            Inr (base_interp_state env world externAlloc
                    \<lparr> IS_Globals := CM_GlobalVars m', IS_Functions := funs \<rparr>))"
 
 end

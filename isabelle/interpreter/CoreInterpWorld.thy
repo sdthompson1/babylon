@@ -464,6 +464,8 @@ next
             case CV_Int with H CoreStmt_Assert Some cv show ?thesis by simp
           next
             case CV_Real with H CoreStmt_Assert Some cv show ?thesis by simp
+          next
+            case CV_Extern with H CoreStmt_Assert Some cv show ?thesis by simp
           qed
         qed
         show ?thesis by (simp add: res_eq)
@@ -556,6 +558,8 @@ next
           case CV_Int with CoreStmt_While H cv show ?thesis by simp
         next
           case CV_Real with CoreStmt_While H cv show ?thesis by simp
+        next
+          case CV_Extern with CoreStmt_While H cv show ?thesis by simp
         qed
       next
         case (CoreStmt_Match gm scrutTm arms)

@@ -237,6 +237,9 @@ next
 next
   case (CV_Real r)
   then show ?case by simp
+next
+  case (CV_Extern n l k)
+  then show ?case by simp
 qed
 
 (* Corollary in terms of tyenv_extends: the extension's lookup-preservation
@@ -334,7 +337,7 @@ next
       using CoreTy_Record by simp
     show ?thesis
       unfolding ty'_eq using target dn fst_eq
-      by (metis (no_types, lifting) CoreType.simps(67) value_has_type.simps(3))
+      by (metis (no_types, lifting) CoreType.case(6) value_has_type.simps(3))
   qed (use CV_Record.prems in auto)
 next
   case (CV_Variant ctor payload)
@@ -431,6 +434,9 @@ next
   then show ?case by simp
 next
   case (CV_Real r)
+  then show ?case by simp
+next
+  case (CV_Extern n l k)
   then show ?case by simp
 qed
 

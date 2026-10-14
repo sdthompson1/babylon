@@ -3703,6 +3703,11 @@ next
       show ?thesis by simp
     qed
   qed
+next
+  \<comment> \<open>Extern: the default is the handle 0, a value of the extern type
+      (same name, same level). \<close>
+  case (13 vl vm n l)
+  then show ?case by simp
 qed
 
 
@@ -3762,11 +3767,12 @@ qed
 (* is_allocated never fails on a well-typed value, provided the constructor
    table is the one the value was typed against. Groundness is not needed:
    is_allocated only fails on a type variable or an unknown constructor, and
-   value_has_type already rules out both. *)
+   value_has_type already rules out both. The allocation oracle is total, so
+   an extern value never fails either. *)
 lemma is_allocated_sound:
   assumes "value_has_type env val ty"
       and "ctors = TE_DataCtors env"
-  shows "\<exists>b. is_allocated ctors val ty = Inr b"
+  shows "\<exists>b. is_allocated ctors extAlloc val ty = Inr b"
 using assms proof (induction val arbitrary: ty)
   case (CV_Bool b) show ?case by (rule exI[of _ False]) simp
 next
@@ -3776,6 +3782,8 @@ next
 next
   case (CV_Real r) show ?case by (rule exI[of _ False]) simp
 next
+  case (CV_Extern n l k) show ?case by simp
+next
   case (CV_Record fieldValues)
   from CV_Record.prems(1) obtain fieldTypes where
     ty_eq: "ty = CoreTy_Record fieldTypes" and
@@ -3783,15 +3791,15 @@ next
              fieldValues fieldTypes"
     by (cases ty) auto
   have IH: "\<And>v t. v \<in> snd ` set fieldValues \<Longrightarrow> value_has_type env v t \<Longrightarrow>
-              \<exists>b. is_allocated ctors v t = Inr b"
+              \<exists>b. is_allocated ctors extAlloc v t = Inr b"
     using CV_Record.IH CV_Record.prems(2) by auto
-  have each: "\<forall>r \<in> set (map (\<lambda>p. is_allocated ctors (snd (fst p)) (snd (snd p)))
+  have each: "\<forall>r \<in> set (map (\<lambda>p. is_allocated ctors extAlloc (snd (fst p)) (snd (snd p)))
                               (zip fieldValues fieldTypes)). \<exists>b. r = Inr b"
   proof
-    fix r assume "r \<in> set (map (\<lambda>p. is_allocated ctors (snd (fst p)) (snd (snd p)))
+    fix r assume "r \<in> set (map (\<lambda>p. is_allocated ctors extAlloc (snd (fst p)) (snd (snd p)))
                               (zip fieldValues fieldTypes))"
     then obtain p where p_in: "p \<in> set (zip fieldValues fieldTypes)" and
-      r_eq: "r = is_allocated ctors (snd (fst p)) (snd (snd p))" by auto
+      r_eq: "r = is_allocated ctors extAlloc (snd (fst p)) (snd (snd p))" by auto
     from p_in obtain i where
       fv_i: "fieldValues ! i = fst p" and ft_i: "fieldTypes ! i = snd p" and
       i_lt: "i < length fieldValues"
@@ -3823,7 +3831,7 @@ next
     fms: "fmap_matches_sizes sizes valuesMap"
     by (cases ty) auto
   have IH: "\<And>v t. v \<in> fmran' valuesMap \<Longrightarrow> value_has_type env v t \<Longrightarrow>
-              \<exists>b. is_allocated ctors v t = Inr b"
+              \<exists>b. is_allocated ctors extAlloc v t = Inr b"
     using CV_Array.IH CV_Array.prems(2) by auto
   show ?case
   proof (cases "list_ex (\<lambda>d. d = CoreDim_Allocatable) dims")
@@ -3832,7 +3840,7 @@ next
   next
     case False
     let ?check = "\<lambda>idx. case fmlookup valuesMap idx of
-                          Some v \<Rightarrow> is_allocated ctors v elemTy
+                          Some v \<Rightarrow> is_allocated ctors extAlloc v elemTy
                         | None \<Rightarrow> Inl TypeError"
     have each: "\<forall>r \<in> set (map ?check (all_indices sizes)). \<exists>b. r = Inr b"
     proof
@@ -3880,7 +3888,8 @@ proof -
     with tm_sound have val_typed:
       "value_has_type env val (apply_subst (IS_TyArgs state) annTy)" by simp
     from is_allocated_sound[OF val_typed dc] obtain b where
-      alloc: "is_allocated (IS_DataCtors state) val (apply_subst (IS_TyArgs state) annTy) = Inr b"
+      alloc: "is_allocated (IS_DataCtors state) (IS_ExternAlloc state) val
+                           (apply_subst (IS_TyArgs state) annTy) = Inr b"
       by blast
     have "interp_term d (Suc fuel) state (CoreTm_Allocated annTy tm) = Inr (CV_Bool b)"
       using Inr alloc by simp

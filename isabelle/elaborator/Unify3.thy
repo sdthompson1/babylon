@@ -192,6 +192,9 @@ next
     next
       case (CoreTy_Array elem dims)
       then show ?thesis using 8(1) flex_n_false by simp
+    next
+      case (CoreTy_Extern n' l')
+      then show ?thesis using 8(1) flex_n_false by simp
     qed
   qed
 next
@@ -250,6 +253,15 @@ next
   (* Now show composed substitution range is runtime *)
   from compose_subst_preserves_runtime[OF subst1_runtime subst2_runtime]
   show ?case using subst_compose by simp
+next
+  (* CoreTy_Extern / ty2 *)
+  case (13 is_flex n l ty2)
+  then show ?case
+  proof (cases ty2)
+    case (CoreTy_Var m)
+    then have "subst = singleton_subst m (CoreTy_Extern n l)" using 13(1) by (simp split: if_splits)
+    then show ?thesis by (auto simp: fmran'_singleton_subst)
+  qed (auto simp: fmran'_def split: if_splits)
 qed
 
 
@@ -442,6 +454,9 @@ next
     next
       case (CoreTy_Array elem dims)
       then show ?thesis using 8(1) flex_n_false by simp
+    next
+      case (CoreTy_Extern n' l')
+      then show ?thesis using 8(1) flex_n_false by simp
     qed
   qed
 next
@@ -500,6 +515,15 @@ next
   (* Now show composed substitution range is well-kinded *)
   from compose_subst_preserves_well_kinded[OF subst1_wk subst2_wk]
   show ?case using subst_compose by simp
+next
+  (* CoreTy_Extern / ty2 *)
+  case (13 is_flex n l ty2)
+  then show ?case
+  proof (cases ty2)
+    case (CoreTy_Var m)
+    then have "subst = singleton_subst m (CoreTy_Extern n l)" using 13(1) by (simp split: if_splits)
+    then show ?thesis by (auto simp: fmran'_singleton_subst)
+  qed (auto simp: fmran'_def split: if_splits)
 qed
 
 end

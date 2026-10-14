@@ -54,15 +54,6 @@ record CoreTyEnv =
   (* Type variables that are known to be bound to runtime types - subset of TE_TypeVars *)
   TE_RuntimeTypeVars :: "string fset"
 
-  (* Type variables representing abstract types ("type T;" in a module interface).
-     - Always a subset of TE_TypeVars.
-     - Variables in TE_AbstractTypes can be thought of as global type variables; other
-       type variables are local to the current function.
-     - In the interpreter, TE_AbstractTypes is always empty, since the interpreter only
-       runs fully-linked programs. But in other contexts, where we are separately compiling
-       individual modules, TE_AbstractTypes can be non-empty. *)
-  TE_AbstractTypes :: "string fset"
-
   (* Expected return type of the enclosing function *)
   TE_ReturnType :: CoreType
 
@@ -102,6 +93,21 @@ record CoreTyEnv =
      sizes are not known. A datatype is ghost if any of its constructor payloads
      contains MathInt, MathReal, or another ghost datatype. *)
   TE_GhostDatatypes :: "string fset"
+
+  (* The set of type variables that represent abstract types ("type T;" in a module
+     interface), paired with their declared alloc levels.
+      - The domain is a subset of TE_TypeVars.
+      - Abstract types can be thought of as "global" type variables; other type variables
+        are "local" to the current function.
+      - In the interpreter, this map is always empty, because the interpreter only runs
+        fully-linked programs (with no abstract types); but in other contexts (e.g. when
+        separately compiling programs) it might be non-empty. *)
+  TE_AbstractAllocLevels :: "(string, CoreAllocLevel) fmap"
+
+(* TE_AbstractTypes is defined as an abbreviation of "the domain of TE_AbstractAllocLevels".
+   This can be read as "the set of abstract type variables" (in a given env). *)
+abbreviation TE_AbstractTypes :: "CoreTyEnv \<Rightarrow> string fset" where
+  "TE_AbstractTypes env \<equiv> fmdom (TE_AbstractAllocLevels env)"
 
 
 (* This is true if a function has no ghost parameter. *)

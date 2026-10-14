@@ -29,6 +29,7 @@ fun apply_subst :: "TypeSubst \<Rightarrow> CoreType \<Rightarrow> CoreType" whe
     (case fmlookup subst n of
       Some ty \<Rightarrow> ty
     | None \<Rightarrow> CoreTy_Var n)"
+| "apply_subst subst (CoreTy_Extern n l) = CoreTy_Extern n l"
 
 (* Find all type variables appearing in the range of a substitution *)
 definition subst_range_tyvars :: "TypeSubst \<Rightarrow> string set" where

@@ -21,6 +21,7 @@ fun is_runtime_type :: "CoreTyEnv \<Rightarrow> CoreType \<Rightarrow> bool" whe
 | "is_runtime_type env (CoreTy_Record flds) = list_all (is_runtime_type env) (map snd flds)"
 | "is_runtime_type env (CoreTy_Array elemTy dims) = is_runtime_type env elemTy"
 | "is_runtime_type env (CoreTy_Var n) = (n |\<in>| TE_RuntimeTypeVars env)"
+| "is_runtime_type env (CoreTy_Extern _ _) = True"
 
 (* Check if a type is complete. An incomplete type is one that mentions an array with
    a dimension of unknown size (T[]): values of such a type only exist as views onto
@@ -40,6 +41,7 @@ fun is_complete_type :: "CoreType \<Rightarrow> bool" where
 | "is_complete_type (CoreTy_Array elemTy dims) =
      (list_all (\<lambda>d. d \<noteq> CoreDim_Unknown) dims \<and> is_complete_type elemTy)"
 | "is_complete_type (CoreTy_Var _) = True"
+| "is_complete_type (CoreTy_Extern _ _) = True"
 
 (* Check if a type is a numeric type *)
 fun is_numeric_type :: "CoreType \<Rightarrow> bool" where

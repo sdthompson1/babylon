@@ -238,6 +238,8 @@ next
     case CoreTy_MathReal with Cons.prems show ?thesis by (cases step) simp_all
   next
     case (CoreTy_Var x) with Cons.prems show ?thesis by (cases step) simp_all
+  next
+    case (CoreTy_Extern x l) with Cons.prems show ?thesis by (cases step) simp_all
   qed
 qed
 
@@ -274,6 +276,8 @@ next
     case CoreTy_MathReal then show ?thesis by (cases step) simp_all
   next
     case (CoreTy_Var x) then show ?thesis by (cases step) simp_all
+  next
+    case (CoreTy_Extern x l) then show ?thesis by (cases step) simp_all
   qed
 qed
 
@@ -364,6 +368,9 @@ next
 next
   case (CV_Real r)
   then show ?case by simp
+next
+  case (CV_Extern n l k)
+  then show ?case by simp
 qed
 
 (* The contract of an extern function quantifies over ground type arguments
@@ -392,14 +399,14 @@ lemma fun_info_matches_interp_fun_ground_cong_env:
       and dc: "TE_DataCtors env1 = TE_DataCtors env2"
       and dcbt: "TE_DataCtorsByType env1 = TE_DataCtorsByType env2"
       and gd: "TE_GhostDatatypes env1 = TE_GhostDatatypes env2"
-      and abs: "TE_AbstractTypes env1 = TE_AbstractTypes env2"
+      and al: "TE_AbstractAllocLevels env1 = TE_AbstractAllocLevels env2"
   shows "fun_info_matches_interp_fun env1 funInfo interpFun =
          fun_info_matches_interp_fun env2 funInfo interpFun"
 proof -
   have body_eq: "\<And>names. body_env_for env1 names funInfo = body_env_for env2 names funInfo"
-    by (rule body_env_for_cong[OF gv fn dt dc dcbt gd abs])
+    by (rule body_env_for_cong[OF gv fn dt dc dcbt gd al])
   have body_fun_eq: "body_env_for env1 = body_env_for env2"
-    by (rule ext)+ (rule body_env_for_cong[OF gv fn dt dc dcbt gd abs])
+    by (rule ext)+ (rule body_env_for_cong[OF gv fn dt dc dcbt gd al])
   have ext_eq: "\<And>externFun. extern_fun_contract env1 funInfo externFun
                               = extern_fun_contract env2 funInfo externFun"
     by (rule extern_fun_contract_ground_cong_env[OF dc dt])
@@ -417,12 +424,12 @@ lemma state_matches_env_cong_env:
       and cl: "TE_ConstLocals env1 = TE_ConstLocals env2"
       and tv: "TE_TypeVars env1 = TE_TypeVars env2"
       and rtv: "TE_RuntimeTypeVars env1 = TE_RuntimeTypeVars env2"
-      and abs: "TE_AbstractTypes env1 = TE_AbstractTypes env2"
       and fn: "TE_Functions env1 = TE_Functions env2"
       and dt: "TE_Datatypes env1 = TE_Datatypes env2"
       and dc: "TE_DataCtors env1 = TE_DataCtors env2"
       and dcbt: "TE_DataCtorsByType env1 = TE_DataCtorsByType env2"
       and gd: "TE_GhostDatatypes env1 = TE_GhostDatatypes env2"
+      and al: "TE_AbstractAllocLevels env1 = TE_AbstractAllocLevels env2"
   shows "state_matches_env state env1 storeTyping = state_matches_env state env2 storeTyping"
 proof -
   have wk_eq: "\<And>ty. is_well_kinded env1 ty = is_well_kinded env2 ty"
@@ -433,7 +440,7 @@ proof -
     by (rule type_at_path_cong_env[OF dc[symmetric]])
   have fi_eq: "\<And>info ifn. fun_info_matches_interp_fun env1 info ifn
                             = fun_info_matches_interp_fun env2 info ifn"
-    by (rule fun_info_matches_interp_fun_cong_env[OF gv fn dt dc dcbt gd tv rtv abs])
+    by (rule fun_info_matches_interp_fun_cong_env[OF gv fn dt dc dcbt gd tv rtv al])
   \<comment> \<open>The rewriting is done by unfolding, not by simp, so that it also reaches
       inside the branches of the case expressions. \<close>
   show ?thesis
@@ -444,7 +451,7 @@ proof -
               const_locals_match_def store_well_typed_def ty_args_well_formed_def
               tables_match_def
               local_var_in_state_with_type_def global_var_in_state_with_type_def
-              lv gv cl tv abs fn dt dc dcbt wk_eq vht_eq tap_eq fi_eq
+              lv gv cl tv al fn dt dc dcbt wk_eq vht_eq tap_eq fi_eq
     by simp
 qed
 
@@ -459,14 +466,14 @@ lemma state_matches_env_transfer:
       and cl: "TE_ConstLocals env2 = TE_ConstLocals env1"
       and tv: "TE_TypeVars env2 = TE_TypeVars env1"
       and rtv: "TE_RuntimeTypeVars env2 = TE_RuntimeTypeVars env1"
-      and abs: "TE_AbstractTypes env2 = TE_AbstractTypes env1"
       and fn: "TE_Functions env2 = TE_Functions env1"
       and dt: "TE_Datatypes env2 = TE_Datatypes env1"
       and dc: "TE_DataCtors env2 = TE_DataCtors env1"
       and dcbt: "TE_DataCtorsByType env2 = TE_DataCtorsByType env1"
       and gd: "TE_GhostDatatypes env2 = TE_GhostDatatypes env1"
+      and al: "TE_AbstractAllocLevels env2 = TE_AbstractAllocLevels env1"
   shows "state_matches_env state env2 storeTyping"
-  using state_matches_env_cong_env[OF lv gv cl tv rtv abs fn dt dc dcbt gd] sme
+  using state_matches_env_cong_env[OF lv gv cl tv rtv fn dt dc dcbt gd al] sme
   by auto
 
 (* After alloc_store + fmupd of locals, the new state matches the extended env
@@ -1137,6 +1144,9 @@ next
   next
     case (CV_Real x)
     then show ?thesis by (cases step) auto
+  next
+    case (CV_Extern n l k)
+    then show ?thesis by (cases step) auto
   qed
 qed
 
@@ -1458,6 +1468,9 @@ next
   next
     case (CV_Real x)
     with Cons.prems show ?thesis by (cases step) auto
+  next
+    case (CV_Extern n l k)
+    with Cons.prems show ?thesis by (cases step) auto
   qed
 qed
 
@@ -1577,6 +1590,9 @@ next
     with Cons.prems show ?thesis by (cases ty) auto
   next
     case (CV_Real x)
+    with Cons.prems show ?thesis by (cases ty) auto
+  next
+    case (CV_Extern n l k)
     with Cons.prems show ?thesis by (cases ty) auto
   qed
 qed
@@ -1718,6 +1734,8 @@ next
     case (CV_Int x) with Cons.prems show ?thesis by (cases slotTy) auto
   next
     case (CV_Real x) with Cons.prems show ?thesis by (cases slotTy) auto
+  next
+    case (CV_Extern n l k) with Cons.prems show ?thesis by (cases slotTy) auto
   qed
 qed
 
@@ -1893,6 +1911,8 @@ next
     case (CV_Int x) with Cons.prems show ?thesis by (cases slotTy) auto
   next
     case (CV_Real x) with Cons.prems show ?thesis by (cases slotTy) auto
+  next
+    case (CV_Extern n l k) with Cons.prems show ?thesis by (cases slotTy) auto
   qed
 qed
 

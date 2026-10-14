@@ -163,6 +163,12 @@ next
     by (simp add: compose_subst_def)
   show ?case
     using subst_eq dom_union head_flex tail_flex by auto
+next
+  case (13 is_flex n l ty2)
+  \<comment> \<open>Extern on left: only succeeds when ty2 is the same extern type (empty subst)
+      or a flex meta. \<close>
+  from "13.prems" show ?case
+    by (cases ty2) (auto split: if_splits simp: singleton_subst_def)
 qed
 
 lemma unify_dom_flex:
@@ -414,6 +420,9 @@ next
     next
       case (CoreTy_Array elem dims)
       then show ?thesis using 8 flex_n_false by simp
+    next
+      case (CoreTy_Extern n' l')
+      then show ?thesis using 8 flex_n_false by simp
     qed
   qed
 next
@@ -449,6 +458,10 @@ next
   hence "apply_subst subst ty1 = apply_subst subst ty2"
     using subst_compose compose_subst_correct by simp
   then show ?case using rest_eq by simp
+next
+  (* CoreTy_Extern / ty2 *)
+  case (13 is_flex n l ty2)
+  then show ?case by (cases ty2; auto simp: apply_subst_singleton singleton_subst_def split: if_splits)
 qed
 
 
@@ -514,6 +527,9 @@ proof (intro allI)
     then show ?case by auto
   next
     case (CoreTy_Array elemTy dims)
+    then show ?case by simp
+  next
+    case (CoreTy_Extern n' l')
     then show ?case by simp
   qed
 qed
@@ -753,6 +769,9 @@ next
     next
       case (CoreTy_Array elem dims)
       then show ?thesis using 8(1) flex_n_false by simp
+    next
+      case (CoreTy_Extern n' l')
+      then show ?thesis using 8(1) flex_n_false by simp
     qed
   qed
 next
@@ -816,6 +835,20 @@ next
   also have "... = apply_subst subst' (apply_subst (compose_subst subst2 subst1) ty)"
     by (simp add: compose_subst_correct)
   finally show ?case using subst_compose by simp
+next
+  (* CoreTy_Extern / ty2 *)
+  case (13 is_flex n l ty2)
+  then show ?case
+  proof (cases ty2)
+    case (CoreTy_Var m)
+    then have subst_eq: "subst = singleton_subst m (CoreTy_Extern n l)"
+      using 13(1) by (simp split: if_splits)
+    have no_occurs: "\<not> occurs m (CoreTy_Extern n l)" by (simp add: occurs_def)
+    have "apply_subst subst' (CoreTy_Extern n l) = apply_subst subst' (CoreTy_Var m)"
+      using 13(2) CoreTy_Var by blast
+    from unifier_factors_singleton[OF this[symmetric] no_occurs] subst_eq
+    show ?thesis by blast
+  qed (auto split: if_splits)
 qed
 
 (* Standard form of MGU theorem: any unifier factors through the MGU. *)
@@ -956,6 +989,9 @@ proof (induction ty rule: measure_induct_rule[where f=core_type_size])
       also have "... < 1 + core_type_size (apply_subst \<sigma> elem)" by simp
       finally show ?thesis using CoreTy_Array by simp
     qed
+  next
+    case (CoreTy_Extern n' l')
+    from less.prems CoreTy_Extern show ?thesis by (simp add: occurs_def)
   qed
 qed
 
@@ -1086,7 +1122,7 @@ next
       case True
       from occurs_check_no_unifier[OF True] "6.prems"(1) CoreTy_Var
       show ?thesis
-        by (metis CoreType.distinct(53))
+        by (metis CoreType.distinct(63))
     next
       case False
       then show ?thesis using CoreTy_Var \<open>is_flex n\<close> by auto
@@ -1138,7 +1174,7 @@ next
       case True
       from occurs_check_no_unifier[OF True] "7.prems"(1) CoreTy_Var
       show ?thesis
-        by (metis CoreType.distinct(55))
+        by (metis CoreType.distinct(67))
     next
       case False
       then show ?thesis using CoreTy_Var \<open>is_flex n\<close> by auto
@@ -1212,6 +1248,9 @@ next
     next
       case (CoreTy_Array elem dims)
       with ty2_eq show ?thesis by simp
+    next
+      case (CoreTy_Extern n' l')
+      with ty2_eq show ?thesis by simp
     qed
   qed
 next
@@ -1270,6 +1309,17 @@ next
   have "unify_list is_flex (ty1 # tys1) (ty2 # tys2) = Some (compose_subst \<theta>2 \<theta>1)"
     using unify_head unify_rest by simp
   then show ?case by blast
+next
+  (* CoreTy_Extern / ty2 *)
+  case (13 is_flex n l ty2)
+  then show ?case
+  proof (cases ty2)
+    case (CoreTy_Var m)
+    from unifier_binds_meta[of \<sigma> "CoreTy_Extern n l" m] "13.prems" CoreTy_Var
+    have "is_flex m" by blast
+    have "\<not> occurs m (CoreTy_Extern n l)" by (simp add: occurs_def)
+    then show ?thesis using CoreTy_Var \<open>is_flex m\<close> by auto
+  qed auto
 qed
 
 

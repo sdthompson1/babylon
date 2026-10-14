@@ -1,5 +1,5 @@
 theory LinkModules
-  imports CoreModule MergeAllSubsts
+  imports CoreModule MergeAllSubsts CoreAllocLevel
 begin
 
 (* The **link_modules** function merges a list of CoreModules into a single
@@ -9,10 +9,8 @@ begin
    combines them all, in one pass over the whole list.
 
    The semantics is "multiple definition is an error": it is a LinkConflict
-   for the same name to be declared/defined by two of the input modules. This
-   is decided on map domains alone (no entry comparison) - the renamer
-   guarantees globally-unique top-level names, so a shared key signals a
-   genuine upstream problem. Concretely:
+   for the same name to be declared/defined by two of the input modules.
+   Concretely:
 
    - CM_TypeSubst: the inputs' substitutions are combined by merge_all_substs
      (MergeAllSubsts.thy), which fails with LinkConflict if an abstract type
@@ -26,21 +24,29 @@ begin
      fmlist_union, util/FmapDisjointUnion.thy), failing with LinkConflict on
      a shared key.
 
-   - The ghost fset (TE_GhostDatatypes) is combined by plain union: it is a
-     subset of its parent map's keys (TE_Datatypes) in a well-formed env, so
-     its disjointness is implied by the parent check.
+   - The ghost datatype fset (TE_GhostDatatypes) is combined by plain union:
+     it is a subset of its parent map's keys (TE_Datatypes) in a well-formed
+     env, so its disjointness is implied by the parent check.
 
    - The type-variable fields (TE_TypeVars, TE_RuntimeTypeVars,
-     TE_AbstractTypes) are combined by union, minus the domain of the merged
-     substitution: an abstract type that has been given a definition is
-     recorded in the substitution and removed from the in-scope type
-     variables. (Linking performs NO substitution into types or terms; that
-     is normalize_module's job, applied to the linked result later.)
+     TE_AbstractAllocLevels) are combined by union, minus the domain of the
+     merged substitution: an abstract type that has been given a definition is
+     recorded in the substitution and removed from the in-scope type variables.
+     (Linking performs NO substitution into types or terms; that is
+     normalize_module's job, applied to the linked result later.)
+      - If an abstract type is declared in more than one input, that is a
+        LinkConflict, and is detected by checking that the TE_AbstractTypes sets
+        from all the inputs are pairwise disjoint (recall that TE_AbstractTypes
+        is an abbreviation for the domain of TE_AbstractAllocLevels).
+      - In inputs satisfying core_module_invariant, TE_TypeVars equals
+        TE_AbstractTypes and is a superset of TE_RuntimeTypeVars, so this check
+        implies that those other sets were disjoint (in the inputs) as well.
 
    - The "current scope" fields of the result's type environment are inert,
      holding the module-level conventional values (no locals, no proof goal,
-     return type CoreTy_Record [], non-ghost). Well-typed modules carry
-     exactly these values, so nothing is lost on such inputs.
+     return type CoreTy_Record [], non-ghost). Modules satisfying
+     core_module_invariant carry exactly these values, so nothing is lost on
+     such inputs.
 
    Additionally, linking checks capture-avoidance (LinkCapture on failure):
    no name TOUCHED by any input's CM_TypeSubst - a domain entry, or a type
@@ -53,6 +59,11 @@ begin
    some input declared as a runtime abstract type (n |\<in>| TE_RuntimeTypeVars)
    must be resolved to a runtime type.
 
+   Linking also checks the alloc-level condition (LinkAllocLevel on failure):
+   if some input declares a name T to be an abstract type with level L, then
+   the type that T resolves to must have alloc level \<le> L. This is checked by
+   link_alloc_ok (with a separate executable version, link_alloc_ok_code).
+
    link_modules is **executable**. Its behaviour on success is specified by:
 
      link_modules_Inr_iff:
@@ -61,6 +72,7 @@ begin
          \<and> link_capture_ok ms
          \<and> (\<exists>\<sigma>. merge_all_substs (map CM_TypeSubst ms) = Inr \<sigma>
                \<and> link_runtime_ok ms \<sigma>
+               \<and> link_alloc_ok ms \<sigma>
                \<and> m = link_result ms \<sigma>)
 
    (and link_modules_Inr_iff_closure, the same statement with merge_all_substs
@@ -169,8 +181,10 @@ lemma funion_list_map_cong:
    error, decided on names alone.
 
    (The ghost fset TE_GhostDatatypes is not checked: it is a subset of the
-   keys of its parent map in a well-formed env, so its disjointness is
-   implied by the parent's.) *)
+   keys of its parent map, in any module satisfying core_module_invariant, so its
+   disjointness is implied by the parent's. Similarly, the disjointness of
+   TE_TypeVars and TE_RuntimeTypeVars is implied by the disjointness-check for
+   TE_AbstractAllocLevels.) *)
 definition link_fields_disjoint :: "CoreModule list \<Rightarrow> bool" where
   "link_fields_disjoint ms \<equiv>
        fmdisjoint_list (map (\<lambda>x. TE_GlobalVars (CM_TyEnv x)) ms)
@@ -179,7 +193,8 @@ definition link_fields_disjoint :: "CoreModule list \<Rightarrow> bool" where
      \<and> fmdisjoint_list (map (\<lambda>x. TE_DataCtors (CM_TyEnv x)) ms)
      \<and> fmdisjoint_list (map (\<lambda>x. TE_DataCtorsByType (CM_TyEnv x)) ms)
      \<and> fmdisjoint_list (map CM_GlobalVars ms)
-     \<and> fmdisjoint_list (map CM_Functions ms)"
+     \<and> fmdisjoint_list (map CM_Functions ms)
+     \<and> fmdisjoint_list (map (\<lambda>x. TE_AbstractAllocLevels (CM_TyEnv x)) ms)"
 
 (* Disjointness of every family depends only on the multiset of inputs. *)
 lemma link_fields_disjoint_mset_cong:
@@ -202,7 +217,8 @@ definition link_conflict_names :: "CoreModule list \<Rightarrow> string list" wh
       @ fmdup_keys (map (\<lambda>x. TE_DataCtors (CM_TyEnv x)) ms)
       @ fmdup_keys (map (\<lambda>x. TE_DataCtorsByType (CM_TyEnv x)) ms)
       @ fmdup_keys (map CM_GlobalVars ms)
-      @ fmdup_keys (map CM_Functions ms))"
+      @ fmdup_keys (map CM_Functions ms)
+      @ fmdup_keys (map (\<lambda>x. TE_AbstractAllocLevels (CM_TyEnv x)) ms))"
 
 
 (* ========================================================================== *)
@@ -352,12 +368,7 @@ lemma link_capture_ok_mset_cong:
      conventional values;
    - CM_TypeSubst is \<sigma> itself; no substitution is applied to any type or term
      (normalize_module does that later).
-
-   TE_AbstractTypes gets the same union-minus-resolved treatment as
-   TE_TypeVars: this preserves TE_AbstractTypes |\<subseteq>| TE_TypeVars, and on
-   module-level inputs (where TE_AbstractTypes = TE_TypeVars, every in-scope
-   type variable being a module-level abstract type) it keeps that equation
-   for the result. *)
+*)
 definition link_result :: "CoreModule list \<Rightarrow> TypeSubst \<Rightarrow> CoreModule" where
   "link_result ms \<sigma> =
      \<lparr> CM_TyEnv =
@@ -369,8 +380,6 @@ definition link_result :: "CoreModule list \<Rightarrow> TypeSubst \<Rightarrow>
              funion_list (map (\<lambda>x. TE_TypeVars (CM_TyEnv x)) ms) |-| fmdom \<sigma>,
            TE_RuntimeTypeVars =
              funion_list (map (\<lambda>x. TE_RuntimeTypeVars (CM_TyEnv x)) ms) |-| fmdom \<sigma>,
-           TE_AbstractTypes =
-             funion_list (map (\<lambda>x. TE_AbstractTypes (CM_TyEnv x)) ms) |-| fmdom \<sigma>,
            TE_ReturnType = CoreTy_Record [],
            TE_FunctionGhost = NotGhost,
            TE_FunctionImpure = False,
@@ -380,7 +389,10 @@ definition link_result :: "CoreModule list \<Rightarrow> TypeSubst \<Rightarrow>
            TE_Datatypes = fmlist_union (map (\<lambda>x. TE_Datatypes (CM_TyEnv x)) ms),
            TE_DataCtors = fmlist_union (map (\<lambda>x. TE_DataCtors (CM_TyEnv x)) ms),
            TE_DataCtorsByType = fmlist_union (map (\<lambda>x. TE_DataCtorsByType (CM_TyEnv x)) ms),
-           TE_GhostDatatypes = funion_list (map (\<lambda>x. TE_GhostDatatypes (CM_TyEnv x)) ms) \<rparr>,
+           TE_GhostDatatypes = funion_list (map (\<lambda>x. TE_GhostDatatypes (CM_TyEnv x)) ms),
+           TE_AbstractAllocLevels =
+             fmdrop_fset (fmdom \<sigma>)
+               (fmlist_union (map (\<lambda>x. TE_AbstractAllocLevels (CM_TyEnv x)) ms)) \<rparr>,
        CM_TypeSubst = \<sigma>,
        CM_GlobalVars = fmlist_union (map CM_GlobalVars ms),
        CM_Functions = fmlist_union (map CM_Functions ms) \<rparr>"
@@ -400,6 +412,7 @@ proof -
    and d5: "fmdisjoint_list (map (\<lambda>x. TE_DataCtorsByType (CM_TyEnv x)) ms)"
    and d6: "fmdisjoint_list (map CM_GlobalVars ms)"
    and d7: "fmdisjoint_list (map CM_Functions ms)"
+   and d8: "fmdisjoint_list (map (\<lambda>x. TE_AbstractAllocLevels (CM_TyEnv x)) ms)"
     using disj by (auto simp: link_fields_disjoint_def)
   show ?thesis
     unfolding link_result_def
@@ -407,7 +420,7 @@ proof -
                   fmlist_union_map_cong[OF m d1] fmlist_union_map_cong[OF m d2]
                   fmlist_union_map_cong[OF m d3] fmlist_union_map_cong[OF m d4]
                   fmlist_union_map_cong[OF m d5] fmlist_union_map_cong[OF m d6]
-                  fmlist_union_map_cong[OF m d7])
+                  fmlist_union_map_cong[OF m d7] fmlist_union_map_cong[OF m d8])
 qed
 
 
@@ -417,18 +430,19 @@ qed
 
 (* After merge_all_substs succeeds with \<sigma>, every resolved name that SOME input
    lists in its TE_RuntimeTypeVars (i.e. declared as a runtime abstract type)
-   must be resolved to an is_runtime_type in the linked result's env. A runtime
-   abstract type resolved by a ghost type falsifies the whole-program linking
-   (Target) theorem, and the mismatch is invisible to any per-module predicate:
-   the declarer records the runtime-ness, the resolver has forgotten the name;
-   they first meet at link time. Resolving a ghost abstract type by a ghost
-   type remains legal (the check is keyed on the declarer's TE_RuntimeTypeVars).
-   Depends on both ms and \<sigma>, so it is gated inside the Inr \<sigma> branch of
-   link_modules (unlike link_capture_ok, which depends on ms alone). *)
+   must be resolved to an is_runtime_type in the linked result's env.
+
+   Resolving a ghost abstract type by a ghost type remains legal (the check is
+   keyed on the declarer's TE_RuntimeTypeVars). *)
 definition link_runtime_ok :: "CoreModule list \<Rightarrow> TypeSubst \<Rightarrow> bool" where
   "link_runtime_ok ms \<sigma> =
      (\<forall>n. n |\<in>| fmdom \<sigma>
              |\<inter>| funion_list (map (\<lambda>x. TE_RuntimeTypeVars (CM_TyEnv x)) ms)
+          \<comment> \<open>Note: unlike link_alloc_ok, there is no need to call normalize_module here.
+             \<sigma> n does not contain resolved type variables (that would be in the domain of \<sigma>)
+             because it is an idempotent substitution; and is_runtime_type only looks at
+             TE_RuntimeTypeVars and TE_GhostDatatypes, which are unaffected by normalization
+             anyway.\<close>
           \<longrightarrow> is_runtime_type (CM_TyEnv (link_result ms \<sigma>)) (the (fmlookup \<sigma> n)))"
 
 (* Executable form of the above (needed for code generation: the definition
@@ -462,6 +476,103 @@ lemma link_runtime_ok_mset_cong:
 
 
 (* ========================================================================== *)
+(* The alloc-level check                                                      *)
+(* ========================================================================== *)
+
+(* After merge_all_substs succeeds with \<sigma>, every resolved name that SOME input
+   declares as an abstract type with alloc level L must be resolved to a type
+   whose alloc level is \<le> L (alloc_level_compatible, CoreAllocLevel.thy).
+
+   Edge cases: A target mentioning a type variable that no input declares as
+   an abstract type has level CoreAlloc_Always, so it is compatible only with
+   a declared level of CoreAlloc_Always. A resolved name that no input declares
+   is not checked. *)
+definition link_alloc_ok :: "CoreModule list \<Rightarrow> TypeSubst \<Rightarrow> bool" where
+  "link_alloc_ok ms \<sigma> =
+     (\<forall>n ty l. fmlookup \<sigma> n = Some ty \<longrightarrow>
+               fmlookup (fmlist_union (map (\<lambda>x. TE_AbstractAllocLevels (CM_TyEnv x)) ms)) n
+                 = Some l \<longrightarrow>
+               \<comment> \<open>Note: Even though \<sigma> n only mentions unresolved type variables (because \<sigma>
+                  is an idempotent closure), computing the alloc level of a type requires
+                  looking at TE_DataCtors, which has not been substituted yet; so a call
+                  to normalize_module is required here, to do the required substitutions.\<close>
+               alloc_level_compatible (CM_TyEnv (normalize_module (link_result ms \<sigma>))) l ty)"
+
+(* A bounded quantification over the substitution's domain. *)
+lemma link_alloc_ok_fBall:
+  "link_alloc_ok ms \<sigma> =
+     fBall (fmdom \<sigma>)
+       (\<lambda>n. case fmlookup (fmlist_union (map (\<lambda>x. TE_AbstractAllocLevels (CM_TyEnv x)) ms)) n of
+              None \<Rightarrow> True
+            | Some l \<Rightarrow> alloc_level_compatible
+                          (CM_TyEnv (normalize_module (link_result ms \<sigma>))) l (the (fmlookup \<sigma> n)))"
+  (is "_ = fBall _ ?P")
+proof
+  assume ok: "link_alloc_ok ms \<sigma>"
+  show "fBall (fmdom \<sigma>) ?P"
+  proof (rule fBallI)
+    fix n assume "n |\<in>| fmdom \<sigma>"
+    then obtain ty where lk: "fmlookup \<sigma> n = Some ty"
+      by (auto simp: fmlookup_dom_iff)
+    show "?P n"
+      using ok lk unfolding link_alloc_ok_def by (auto split: option.splits)
+  qed
+next
+  assume ball: "fBall (fmdom \<sigma>) ?P"
+  show "link_alloc_ok ms \<sigma>"
+    unfolding link_alloc_ok_def
+  proof (intro allI impI)
+    fix n ty l
+    assume lk: "fmlookup \<sigma> n = Some ty"
+       and ll: "fmlookup (fmlist_union (map (\<lambda>x. TE_AbstractAllocLevels (CM_TyEnv x)) ms)) n
+                  = Some l"
+    have "n |\<in>| fmdom \<sigma>" using lk by (rule fmdomI)
+    then have "?P n" by (rule fbspec[OF ball])
+    then show "alloc_level_compatible (CM_TyEnv (normalize_module (link_result ms \<sigma>))) l ty"
+      using lk ll by simp
+  qed
+qed
+
+(* Executable form: the linked env and its datatype summaries (the fixpoint
+   of CoreAllocLevel.thy) are computed once, not once per binding. *)
+lemma link_alloc_ok_code [code]:
+  "link_alloc_ok ms \<sigma> =
+     (let env = CM_TyEnv (normalize_module (link_result ms \<sigma>));
+          info = datatype_alloc_info env
+      in fBall (fmdom \<sigma>)
+           (\<lambda>n. case fmlookup (fmlist_union (map (\<lambda>x. TE_AbstractAllocLevels (CM_TyEnv x)) ms)) n of
+                  None \<Rightarrow> True
+                | Some l \<Rightarrow> alloc_level_compatible_info env info l (the (fmlookup \<sigma> n))))"
+  unfolding Let_def alloc_level_compatible_info_eq[symmetric] by (rule link_alloc_ok_fBall)
+
+(* The offending names, for the LinkAllocLevel payload. Purely diagnostic. *)
+definition link_alloc_level_names :: "CoreModule list \<Rightarrow> TypeSubst \<Rightarrow> string list" where
+  "link_alloc_level_names ms \<sigma> =
+     sorted_list_of_fset
+       (ffilter (\<lambda>n. case fmlookup (fmlist_union (map (\<lambda>x. TE_AbstractAllocLevels (CM_TyEnv x)) ms)) n of
+                       None \<Rightarrow> False
+                     | Some l \<Rightarrow> \<not> alloc_level_compatible
+                                    (CM_TyEnv (normalize_module (link_result ms \<sigma>))) l
+                                    (the (fmlookup \<sigma> n)))
+          (fmdom \<sigma>))"
+
+(* The check depends only on the multiset of inputs (with a fixed \<sigma>): the level
+   map union is permutation-invariant given its disjointness, and so is the
+   linked env (both from the field-disjointness a successful link supplies). *)
+lemma link_alloc_ok_mset_cong:
+  assumes m: "mset ms = mset ms'"
+      and disj: "link_fields_disjoint ms"
+  shows "link_alloc_ok ms \<sigma> = link_alloc_ok ms' \<sigma>"
+proof -
+  have d8: "fmdisjoint_list (map (\<lambda>x. TE_AbstractAllocLevels (CM_TyEnv x)) ms)"
+    using disj unfolding link_fields_disjoint_def by blast
+  show ?thesis
+    unfolding link_alloc_ok_def
+    by (simp add: fmlist_union_map_cong[OF m d8] link_result_mset_cong[OF m disj])
+qed
+
+
+(* ========================================================================== *)
 (* Definition of link_modules                                                 *)
 (* ========================================================================== *)
 
@@ -472,8 +583,9 @@ lemma link_runtime_ok_mset_cong:
    capture-avoidance (LinkCapture otherwise); then merge the abstract-type
    substitutions (a LinkConflict or LinkCycle from merge_all_substs propagates);
    then, with the merged \<sigma> in hand, check that no runtime (non-ghost) abstract
-   type resolves to a ghost type (LinkGhostResolution otherwise); on success,
-   assemble the field-wise union. *)
+   type resolves to a ghost type (LinkGhostResolution otherwise) and that every
+   declared abstract type resolves to a type of a compatible alloc level
+   (LinkAllocLevel otherwise); on success, assemble the field-wise union. *)
 definition link_modules :: "CoreModule list \<Rightarrow> (LinkError, CoreModule) sum" where
   "link_modules ms =
      (if \<not> link_fields_disjoint ms
@@ -483,9 +595,11 @@ definition link_modules :: "CoreModule list \<Rightarrow> (LinkError, CoreModule
       else case merge_all_substs (map CM_TypeSubst ms) of
              Inl e \<Rightarrow> Inl e
            | Inr \<sigma> \<Rightarrow>
-               if link_runtime_ok ms \<sigma>
-               then Inr (link_result ms \<sigma>)
-               else Inl (LinkGhostResolution (link_ghost_resolution_names ms \<sigma>)))"
+               if \<not> link_runtime_ok ms \<sigma>
+               then Inl (LinkGhostResolution (link_ghost_resolution_names ms \<sigma>))
+               else if \<not> link_alloc_ok ms \<sigma>
+               then Inl (LinkAllocLevel (link_alloc_level_names ms \<sigma>))
+               else Inr (link_result ms \<sigma>))"
 
 
 (* ========================================================================== *)
@@ -494,14 +608,16 @@ definition link_modules :: "CoreModule list \<Rightarrow> (LinkError, CoreModule
 
 (* link_modules succeeds with result m exactly when the declaration/definition
    families are pairwise domain-disjoint, the capture check passes, the
-   substitution merge succeeds (with some \<sigma>), and m is the field-wise union
-   with that \<sigma> and the type-variable subtraction. *)
+   substitution merge succeeds (with some \<sigma>), the runtime and alloc-level
+   checks pass for that \<sigma>, and m is the field-wise union with that \<sigma> and the
+   type-variable subtraction. *)
 theorem link_modules_Inr_iff:
   "link_modules ms = Inr m \<longleftrightarrow>
      link_fields_disjoint ms
      \<and> link_capture_ok ms
      \<and> (\<exists>\<sigma>. merge_all_substs (map CM_TypeSubst ms) = Inr \<sigma>
            \<and> link_runtime_ok ms \<sigma>
+           \<and> link_alloc_ok ms \<sigma>
            \<and> m = link_result ms \<sigma>)"
 proof (cases "link_fields_disjoint ms")
   case False
@@ -529,28 +645,60 @@ next
       show ?thesis
       proof (cases "link_runtime_ok ms \<sigma>")
         case rok: True
-        then have lhs: "link_modules ms = Inr (link_result ms \<sigma>)"
-          unfolding link_modules_def using disj cap Inr by simp
         show ?thesis
-        proof
-          assume "link_modules ms = Inr m"
-          then have "m = link_result ms \<sigma>" using lhs by simp
-          then show "link_fields_disjoint ms
-                     \<and> link_capture_ok ms
-                     \<and> (\<exists>\<sigma>'. merge_all_substs (map CM_TypeSubst ms) = Inr \<sigma>'
-                            \<and> link_runtime_ok ms \<sigma>'
-                            \<and> m = link_result ms \<sigma>')"
-            using disj cap Inr rok by blast
+        proof (cases "link_alloc_ok ms \<sigma>")
+          case aok: True
+          have lhs: "link_modules ms = Inr (link_result ms \<sigma>)"
+            unfolding link_modules_def using disj cap Inr rok aok by simp
+          show ?thesis
+          proof
+            assume "link_modules ms = Inr m"
+            then have "m = link_result ms \<sigma>" using lhs by simp
+            then show "link_fields_disjoint ms
+                       \<and> link_capture_ok ms
+                       \<and> (\<exists>\<sigma>'. merge_all_substs (map CM_TypeSubst ms) = Inr \<sigma>'
+                              \<and> link_runtime_ok ms \<sigma>'
+                              \<and> link_alloc_ok ms \<sigma>'
+                              \<and> m = link_result ms \<sigma>')"
+              using disj cap Inr rok aok by blast
+          next
+            assume "link_fields_disjoint ms
+                    \<and> link_capture_ok ms
+                    \<and> (\<exists>\<sigma>'. merge_all_substs (map CM_TypeSubst ms) = Inr \<sigma>'
+                           \<and> link_runtime_ok ms \<sigma>'
+                           \<and> link_alloc_ok ms \<sigma>'
+                           \<and> m = link_result ms \<sigma>')"
+            then obtain \<sigma>' where "merge_all_substs (map CM_TypeSubst ms) = Inr \<sigma>'"
+                             and "m = link_result ms \<sigma>'" by blast
+            then have "m = link_result ms \<sigma>" using Inr by simp
+            then show "link_modules ms = Inr m" using lhs by simp
+          qed
         next
-          assume "link_fields_disjoint ms
-                  \<and> link_capture_ok ms
-                  \<and> (\<exists>\<sigma>'. merge_all_substs (map CM_TypeSubst ms) = Inr \<sigma>'
-                         \<and> link_runtime_ok ms \<sigma>'
-                         \<and> m = link_result ms \<sigma>')"
-          then obtain \<sigma>' where "merge_all_substs (map CM_TypeSubst ms) = Inr \<sigma>'"
-                           and "m = link_result ms \<sigma>'" by blast
-          then have "m = link_result ms \<sigma>" using Inr by simp
-          then show "link_modules ms = Inr m" using lhs by simp
+          case aok: False
+          then have lhs: "link_modules ms = Inl (LinkAllocLevel (link_alloc_level_names ms \<sigma>))"
+            unfolding link_modules_def using disj cap Inr rok by simp
+          show ?thesis
+          proof
+            assume "link_modules ms = Inr m"
+            then show "link_fields_disjoint ms
+                       \<and> link_capture_ok ms
+                       \<and> (\<exists>\<sigma>'. merge_all_substs (map CM_TypeSubst ms) = Inr \<sigma>'
+                              \<and> link_runtime_ok ms \<sigma>'
+                              \<and> link_alloc_ok ms \<sigma>'
+                              \<and> m = link_result ms \<sigma>')"
+              using lhs by simp
+          next
+            assume "link_fields_disjoint ms
+                    \<and> link_capture_ok ms
+                    \<and> (\<exists>\<sigma>'. merge_all_substs (map CM_TypeSubst ms) = Inr \<sigma>'
+                           \<and> link_runtime_ok ms \<sigma>'
+                           \<and> link_alloc_ok ms \<sigma>'
+                           \<and> m = link_result ms \<sigma>')"
+            then obtain \<sigma>' where "merge_all_substs (map CM_TypeSubst ms) = Inr \<sigma>'"
+                             and "link_alloc_ok ms \<sigma>'" by blast
+            then have "link_alloc_ok ms \<sigma>" using Inr by simp
+            with aok show "link_modules ms = Inr m" by simp
+          qed
         qed
       next
         case rok: False
@@ -563,6 +711,7 @@ next
                      \<and> link_capture_ok ms
                      \<and> (\<exists>\<sigma>'. merge_all_substs (map CM_TypeSubst ms) = Inr \<sigma>'
                             \<and> link_runtime_ok ms \<sigma>'
+                            \<and> link_alloc_ok ms \<sigma>'
                             \<and> m = link_result ms \<sigma>')"
             using lhs by simp
         next
@@ -570,6 +719,7 @@ next
                   \<and> link_capture_ok ms
                   \<and> (\<exists>\<sigma>'. merge_all_substs (map CM_TypeSubst ms) = Inr \<sigma>'
                          \<and> link_runtime_ok ms \<sigma>'
+                         \<and> link_alloc_ok ms \<sigma>'
                          \<and> m = link_result ms \<sigma>')"
           then obtain \<sigma>' where "merge_all_substs (map CM_TypeSubst ms) = Inr \<sigma>'"
                            and "link_runtime_ok ms \<sigma>'" by blast
@@ -594,6 +744,7 @@ corollary link_modules_Inr_iff_closure:
      \<and> acyclic_subst_deps (fmlist_union (map CM_TypeSubst ms))
      \<and> (\<exists>\<sigma>. is_subst_closure (fmlist_union (map CM_TypeSubst ms)) \<sigma>
            \<and> link_runtime_ok ms \<sigma>
+           \<and> link_alloc_ok ms \<sigma>
            \<and> m = link_result ms \<sigma>)"
   unfolding link_modules_Inr_iff merge_all_substs_Inr_iff by blast
 
@@ -640,6 +791,7 @@ proof -
         and cap: "link_capture_ok xs"
         and mer: "merge_all_substs (map CM_TypeSubst xs) = Inr \<sigma>"
         and rok: "link_runtime_ok xs \<sigma>"
+        and aok: "link_alloc_ok xs \<sigma>"
         and meq: "m = link_result xs \<sigma>"
       using ok link_modules_Inr_iff[of xs m] by blast
     have disj': "link_fields_disjoint ys"
@@ -650,10 +802,12 @@ proof -
       using merge_all_substs_perm[OF mset_map_perm_cong[OF eq]] mer by blast
     have rok': "link_runtime_ok ys \<sigma>"
       using link_runtime_ok_mset_cong[OF eq disj] rok by simp
+    have aok': "link_alloc_ok ys \<sigma>"
+      using link_alloc_ok_mset_cong[OF eq disj] aok by simp
     have meq': "m = link_result ys \<sigma>"
       using meq link_result_mset_cong[OF eq disj] by simp
     show ?thesis
-      using disj' cap' mer' rok' meq' link_modules_Inr_iff[of ys m] by blast
+      using disj' cap' mer' rok' aok' meq' link_modules_Inr_iff[of ys m] by blast
   qed
   show ?thesis using one[OF _ perm] one[OF _ perm[symmetric]] by blast
 qed
@@ -678,7 +832,9 @@ corollary link_modules_perm_fails:
    - the module is capture-avoiding, so the capture check passes;
    - the substitution's domain avoids the module's own type variables (a
      resolved abstract type is recorded in the substitution and removed from
-     TE_TypeVars), so the type-variable subtraction is the identity;
+     TE_TypeVars), so the type-variable subtraction is the identity, and so
+     is the subtraction from the alloc-level map (whose domain is within
+     TE_TypeVars); for the same reason the alloc-level check is vacuous;
    - the type env is at module scope, so the "current scope" fields hold
      their inert module-level values.
    The unconditional form is false: link_result pins the inert fields to
@@ -724,9 +880,26 @@ proof -
   have rtv_sub: "TE_RuntimeTypeVars (CM_TyEnv m) |-| fmdom (CM_TypeSubst m)
                    = TE_RuntimeTypeVars (CM_TyEnv m)"
     using sub_id[OF rtv] .
-  have abs_sub: "TE_AbstractTypes (CM_TyEnv m) |-| fmdom (CM_TypeSubst m)
-                   = TE_AbstractTypes (CM_TyEnv m)"
-    using sub_id[OF abst] .
+  \<comment> \<open>The level map's domain is within TE_TypeVars, so dropping the
+     substitution's domain from it is the identity too.\<close>
+  have lv_sub: "fmdrop_fset (fmdom (CM_TypeSubst m)) (TE_AbstractAllocLevels (CM_TyEnv m))
+                  = TE_AbstractAllocLevels (CM_TyEnv m)"
+  proof (rule fmap_ext)
+    fix n
+    show "fmlookup (fmdrop_fset (fmdom (CM_TypeSubst m)) (TE_AbstractAllocLevels (CM_TyEnv m))) n
+            = fmlookup (TE_AbstractAllocLevels (CM_TyEnv m)) n"
+    proof (cases "n |\<in>| fmdom (CM_TypeSubst m)")
+      case True
+      have "n |\<notin>| TE_AbstractTypes (CM_TyEnv m)"
+        using True notin abst by (auto dest: fsubsetD)
+      then have "fmlookup (TE_AbstractAllocLevels (CM_TyEnv m)) n = None"
+        by (rule fmdom_notD)
+      then show ?thesis using True by simp
+    next
+      case False
+      then show ?thesis by simp
+    qed
+  qed
 
   \<comment> \<open>The one-element substitution merge returns the substitution itself.\<close>
   have merge: "merge_all_substs (map CM_TypeSubst [m]) = Inr (CM_TypeSubst m)"
@@ -735,7 +908,7 @@ proof -
   \<comment> \<open>The assembled module is m itself, field by field.\<close>
   have env_eq: "CM_TyEnv (link_result [m] (CM_TypeSubst m)) = CM_TyEnv m"
     by (rule CoreTyEnv.equality)
-       (simp_all add: link_result_def inert tv_sub rtv_sub abs_sub)
+       (simp_all add: link_result_def inert tv_sub rtv_sub lv_sub)
   have mod_eq: "link_result [m] (CM_TypeSubst m) = m"
   proof (rule CoreModule.equality)
     show "CM_TyEnv (link_result [m] (CM_TypeSubst m)) = CM_TyEnv m"
@@ -812,8 +985,29 @@ proof -
       by simp
   qed
 
+  \<comment> \<open>The alloc-level check is vacuous for the same reason: a resolved name
+     has no entry in the module's own level map, whose domain
+     (TE_AbstractTypes) is within TE_TypeVars.\<close>
+  have alloc_ok: "link_alloc_ok [m] (CM_TypeSubst m)"
+    unfolding link_alloc_ok_def
+  proof (intro allI impI)
+    fix n ty l
+    assume lk: "fmlookup (CM_TypeSubst m) n = Some ty"
+       and ll: "fmlookup (fmlist_union (map (\<lambda>x. TE_AbstractAllocLevels (CM_TyEnv x)) [m])) n
+                  = Some l"
+    have nd: "n |\<in>| fmdom (CM_TypeSubst m)" using lk by (rule fmdomI)
+    have "fmlookup (TE_AbstractAllocLevels (CM_TyEnv m)) n = Some l" using ll by simp
+    then have "n |\<in>| TE_AbstractTypes (CM_TyEnv m)" by (rule fmdomI)
+    with abst have "n |\<in>| TE_TypeVars (CM_TyEnv m)" by (auto dest: fsubsetD)
+    with nd have "n |\<in>| fmdom (CM_TypeSubst m) |\<inter>| TE_TypeVars (CM_TyEnv m)" by simp
+    with tv have False by simp
+    then show "alloc_level_compatible
+                 (CM_TyEnv (normalize_module (link_result [m] (CM_TypeSubst m)))) l ty"
+      by simp
+  qed
+
   show ?thesis
-    using disj cap_ok merge runtime_ok mod_eq link_modules_Inr_iff by simp
+    using disj cap_ok merge runtime_ok alloc_ok mod_eq link_modules_Inr_iff by simp
 qed
 
 

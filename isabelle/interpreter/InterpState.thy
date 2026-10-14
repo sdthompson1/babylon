@@ -80,5 +80,15 @@ record 'world InterpState =
   (* Current "world state" for extern functions *)
   IS_World :: 'world
 
+  (* Allocation oracle for extern types. Given an extern type (identified by
+     its name and alloc level) and a handle, this determines whether that handle
+     counts as "allocated". This is a question that is decided by the external
+     environment, not the interpreter itself.
+
+     Note that the interpreter does not consult IS_ExternAlloc n l h when
+     l = CoreAlloc_IfNotDefault and h = 0, or at all when l = CoreAlloc_Never;
+     this means that an oracle cannot "override" the built-in assumptions about
+     allocated-ness of CoreAlloc_IfNotDefault or CoreAlloc_Never types. *)
+  IS_ExternAlloc :: "string \<Rightarrow> CoreAllocLevel \<Rightarrow> nat \<Rightarrow> bool"
 
 end

@@ -29,4 +29,9 @@ datatype LinkError =
      Payload = the offending abstract-type names. *)
   | LinkGhostResolution "string list"
 
+  (* Alloc-level error: one module declares an abstract type with some alloc level, and
+     another module resolves it to a type whose alloc level is not <= the declared one.
+     Payload = the offending abstract-type names. *)
+  | LinkAllocLevel "string list"
+
 end

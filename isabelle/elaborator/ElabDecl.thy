@@ -50,7 +50,6 @@ definition empty_module_tyenv :: CoreTyEnv where
        TE_ConstLocals = {||},
        TE_TypeVars = {||},
        TE_RuntimeTypeVars = {||},
-       TE_AbstractTypes = {||},
        TE_ReturnType = CoreTy_Record [],
        TE_FunctionGhost = NotGhost,
        TE_FunctionImpure = False,
@@ -60,7 +59,8 @@ definition empty_module_tyenv :: CoreTyEnv where
        TE_Datatypes = fmempty,
        TE_DataCtors = fmempty,
        TE_DataCtorsByType = fmempty,
-       TE_GhostDatatypes = {||} \<rparr>"
+       TE_GhostDatatypes = {||},
+       TE_AbstractAllocLevels = fmempty \<rparr>"
 
 (* The empty module. *)
 definition empty_core_module :: CoreModule where
@@ -141,15 +141,17 @@ definition tyenv_add_function :: "string \<Rightarrow> FunInfo \<Rightarrow> Cor
   "tyenv_add_function name info env =
      env \<lparr> TE_Functions := fmupd name info (TE_Functions env) \<rparr>"
 
-(* Add a new abstract type ("type T;") to the CoreTyEnv. Abstract types are added
-   to TE_TypeVars and TE_AbstractTypes, and also to TE_RuntimeTypeVars if NotGhost. *)
-definition tyenv_add_abstract_type :: "string \<Rightarrow> GhostOrNot \<Rightarrow> CoreTyEnv \<Rightarrow> CoreTyEnv" where
-  "tyenv_add_abstract_type name ghost env =
+(* Add a new abstract type ("type T;") to the CoreTyEnv, with its declared alloc
+   level. Abstract types are added to TE_TypeVars and (with their level) to
+   TE_AbstractAllocLevels, and also to TE_RuntimeTypeVars if NotGhost. *)
+definition tyenv_add_abstract_type ::
+  "string \<Rightarrow> GhostOrNot \<Rightarrow> CoreAllocLevel \<Rightarrow> CoreTyEnv \<Rightarrow> CoreTyEnv" where
+  "tyenv_add_abstract_type name ghost level env =
      env \<lparr> TE_TypeVars := finsert name (TE_TypeVars env),
            TE_RuntimeTypeVars := (if ghost = NotGhost
                                   then finsert name (TE_RuntimeTypeVars env)
                                   else TE_RuntimeTypeVars env),
-           TE_AbstractTypes := finsert name (TE_AbstractTypes env) \<rparr>"
+           TE_AbstractAllocLevels := fmupd name level (TE_AbstractAllocLevels env) \<rparr>"
 
 (* Add a datatype to the CoreTyEnv, updating all relevant fields (TE_Datatypes,
    TE_DataCtors, TE_DataCtorsByType, TE_GhostDatatypes) accordingly. *)
@@ -186,7 +188,9 @@ definition tyenv_add_datatype ::
        - Again, we also apply [T:=Foo] to any existing entries in EE_Typedefs.
 
     - The name "T" is no longer an abstract type, so it is removed from TE_TypeVars
-      and related sets.
+      and related sets, and its entry is dropped from TE_AbstractAllocLevels (the
+      alloc-level check against the declared level is made before this point, and
+      again by link_modules).
        - We also apply [T:=Foo] to the type env itself (this updates the types of
          global vars, functions and data ctors to mention Foo instead of T everywhere).
 
@@ -202,7 +206,7 @@ definition apply_realization ::
           env' = (apply_subst_to_tyenv s env)
                    \<lparr> TE_TypeVars := TE_TypeVars env |-| {|name|},
                      TE_RuntimeTypeVars := TE_RuntimeTypeVars env |-| {|name|},
-                     TE_AbstractTypes := TE_AbstractTypes env |-| {|name|} \<rparr>;
+                     TE_AbstractAllocLevels := fmdrop name (TE_AbstractAllocLevels env) \<rparr>;
           elabEnv' = elabEnv
                    \<lparr> EE_Typedefs := fmupd name ([], target)
                        (fmmap (\<lambda>(tyvars, ty). (tyvars, apply_subst s ty))
@@ -936,11 +940,13 @@ definition elab_typedef_decl ::
                  (if tyvars \<noteq> [] then Inl [TyErr_TypeArgsNotAllowed loc name]
                   else
                     \<comment> \<open>Add the new abstract type to the env and module.\<close>
-                    Inr (tyenv_add_abstract_type name (DT_Ghost dt) env,
+                    Inr (tyenv_add_abstract_type name (DT_Ghost dt)
+                           (alloc_level_to_core (DT_AllocLevel dt)) env,
                          elabEnv \<lparr> EE_Typedefs :=
                              fmupd name ([], CoreTy_Var name) (EE_Typedefs elabEnv) \<rparr>,
                          m \<lparr> CM_TyEnv :=
-                               tyenv_add_abstract_type name (DT_Ghost dt) (CM_TyEnv m) \<rparr>))
+                               tyenv_add_abstract_type name (DT_Ghost dt)
+                                 (alloc_level_to_core (DT_AllocLevel dt)) (CM_TyEnv m) \<rparr>))
              | Some ty \<Rightarrow>
                  \<comment> \<open>An ordinary transparent typedef.\<close>
                  \<comment> \<open>Type variables allowed, so long as they are distinct.\<close>

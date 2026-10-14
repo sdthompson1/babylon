@@ -4,6 +4,12 @@ begin
 
 (* Abstract syntax for the "Core" language *)
 
+(* Alloc levels: see CoreAllocLevel.thy. *)
+datatype CoreAllocLevel =
+  CoreAlloc_Never
+  | CoreAlloc_IfNotDefault
+  | CoreAlloc_Always
+
 (* Array dimension *)
 datatype CoreDimension =
   CoreDim_Unknown
@@ -20,6 +26,9 @@ datatype CoreType =
   | CoreTy_Record "(string \<times> CoreType) list"
   | CoreTy_Array CoreType "CoreDimension list"
   | CoreTy_Var string   (* Type variable (with its name) *)
+  | CoreTy_Extern string CoreAllocLevel
+      (* Extern type (with its name and alloc level). Note that types with the same
+         name, but different alloc levels, are considered distinct. *)
 
 (* Pattern *)
 datatype CorePattern =
@@ -29,11 +38,10 @@ datatype CorePattern =
   | CorePat_Record "(string \<times> CorePattern) list"
   | CorePat_Wildcard
 
-(* A pattern is "flat" if it tests only at its top level: variant payloads
-   must be wildcards, and record patterns are disallowed entirely. The
-   match-compilation pass (core_passes/MatchCompile.thy) guarantees that
-   every pattern in its output is flat; downstream consumers (code
-   generation, etc.) may rely on this. *)
+(* A pattern is "flat" if it tests only at its top level (variant payloads
+   must be wildcards, and record patterns are disallowed entirely). The
+   match-compilation pass (core_passes/MatchCompile.thy) can convert non-flat
+   patterns into flat ones. *)
 fun flat_pattern :: "CorePattern \<Rightarrow> bool" where
   "flat_pattern (CorePat_Variant _ p) = (p = CorePat_Wildcard)"
 | "flat_pattern (CorePat_Record _) = False"

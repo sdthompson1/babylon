@@ -16,6 +16,7 @@ fun type_tyvars :: "CoreType \<Rightarrow> string set" where
 | "type_tyvars (CoreTy_Record flds) = \<Union>(set (map (type_tyvars \<circ> snd) flds))"
 | "type_tyvars (CoreTy_Array elemTy dims) = type_tyvars elemTy"
 | "type_tyvars (CoreTy_Var n) = {n}"
+| "type_tyvars (CoreTy_Extern _ _) = {}"
 
 (* Executable version of type_tyvars, returning a list (possibly with duplicates) *)
 fun type_tyvars_list :: "CoreType \<Rightarrow> string list" where
@@ -27,6 +28,7 @@ fun type_tyvars_list :: "CoreType \<Rightarrow> string list" where
 | "type_tyvars_list (CoreTy_Record flds) = concat (map (type_tyvars_list \<circ> snd) flds)"
 | "type_tyvars_list (CoreTy_Array elemTy _) = type_tyvars_list elemTy"
 | "type_tyvars_list (CoreTy_Var n) = [n]"
+| "type_tyvars_list (CoreTy_Extern _ _) = []"
 
 (* Collect all type variables in a list of types *)
 definition list_tyvars :: "CoreType list \<Rightarrow> string set" where

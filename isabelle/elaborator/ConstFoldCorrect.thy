@@ -1193,7 +1193,8 @@ definition const_eval_state :: "(string, CoreValue) fmap \<Rightarrow> unit Inte
        IS_DataCtors = fmempty,
        IS_DataCtorsByType = fmempty,
        IS_Functions = fmempty,
-       IS_World = () \<rparr>"
+       IS_World = (),
+       IS_ExternAlloc = (\<lambda>_ _ _. False) \<rparr>"
 
 lemma const_eval_state_agrees: "vals_agree (const_eval_state vals) vals"
   by (simp add: vals_agree_def const_eval_state_def)

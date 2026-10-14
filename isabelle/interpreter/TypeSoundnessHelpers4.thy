@@ -63,6 +63,10 @@ next
     case (Some err)
     with hd show ?thesis by simp
   qed
+next
+  \<comment> \<open>An extern value: its type is an extern type, which is not a decreases type. \<close>
+  case (10 n l k)
+  from "10.prems" show ?case by (cases ty) auto
 qed
 
 (* The main type soundness theorem, stated at fixed depth d, given that terms are sound

@@ -598,6 +598,9 @@ next
 next
   case (CV_Real r)
   then show ?case by simp
+next
+  case (CV_Extern n l k)
+  then show ?case by simp
 qed
 
 
