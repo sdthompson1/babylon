@@ -18,7 +18,7 @@
 
 MAIN="isabelle/export/Babylon.CodeExport/code/export1/Main"
 CASES_DIR="test/cases"
-TEST_MODULE="test/isabelle_support/Test.b"
+TEST_MODULE="test/test-support-0.1/src/Test.b"
 TIMEOUT=60
 
 FILTER=$1

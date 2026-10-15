@@ -934,4 +934,18 @@ lemma alloc_level_of_type_Var [simp]:
   by (cases "fmlookup (TE_AbstractAllocLevels env) n")
      (simp_all add: alloc_level_of_type_def alloc_level_of_type_info_def summary_const_def)
 
+(* Look up the declared alloc level of an abstract type in the type environment.
+   If the name isn't found in TE_AbstractAllocLevels, then return CoreAlloc_Always
+   (but this shouldn't happen, as this function is only intended to be called on
+   valid abstract type names). *)
+definition declared_alloc_level :: "CoreTyEnv \<Rightarrow> string \<Rightarrow> CoreAllocLevel" where
+  "declared_alloc_level env name =
+     (case fmlookup (TE_AbstractAllocLevels env) name of
+        None \<Rightarrow> CoreAlloc_Always
+      | Some l \<Rightarrow> l)"
+
+lemma alloc_level_of_type_Var_declared:
+  "alloc_level_of_type env (CoreTy_Var n) = declared_alloc_level env n"
+  by (simp add: declared_alloc_level_def)
+
 end

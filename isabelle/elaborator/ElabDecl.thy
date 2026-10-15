@@ -1,5 +1,5 @@
 theory ElabDecl
-  imports ElabStmt ConstFold "../core/CoreModuleTypecheck"
+  imports ElabStmt ConstFold "../core/CoreModuleTypecheck" "../core/CoreAllocLevel"
     "../bab_passes/BabContractRename" "../bab_passes/BabMapDims"
 begin
 
@@ -188,9 +188,7 @@ definition tyenv_add_datatype ::
        - Again, we also apply [T:=Foo] to any existing entries in EE_Typedefs.
 
     - The name "T" is no longer an abstract type, so it is removed from TE_TypeVars
-      and related sets, and its entry is dropped from TE_AbstractAllocLevels (the
-      alloc-level check against the declared level is made before this point, and
-      again by link_modules).
+      and related sets, and its entry is dropped from TE_AbstractAllocLevels.
        - We also apply [T:=Foo] to the type env itself (this updates the types of
          global vars, functions and data ctors to mention Foo instead of T everywhere).
 
@@ -198,6 +196,15 @@ definition tyenv_add_datatype ::
    the module continues to mention "T", with [T:=Foo] being applied lazily when needed, by
    normalize_module.
 *)
+
+(* Note: It is a rule of the language that a realizing type must have an equal or lower
+   AllocLevel than the one that specified in the abstract type's declaration (i.e.,
+   alloc_level_compatible must be true). This is checked by realization_alloc_ok, which
+   the elaborator calls before apply_realization. *)
+definition realization_alloc_ok :: "CoreTyEnv \<Rightarrow> string \<Rightarrow> CoreType \<Rightarrow> bool" where
+  "realization_alloc_ok env name target =
+     alloc_level_compatible env (declared_alloc_level env name) target"
+
 definition apply_realization ::
   "string \<Rightarrow> CoreType \<Rightarrow> CoreTyEnv \<Rightarrow> ElabEnv \<Rightarrow> CoreModule
    \<Rightarrow> CoreTyEnv \<times> ElabEnv \<times> CoreModule" where
@@ -856,7 +863,7 @@ definition elab_datatype_decl ::
                                           (CoreTy_Datatype name [])
                                    then Inl [TyErr_TypeVarCapture loc name]
                                    else
-                                     \<comment> \<open>Success: update the env and module with the new datatype
+                                     \<comment> \<open>Update the env and module with the new datatype
                                         (and realization if applicable).\<close>
                                      (let ctors = map (\<lambda>(cn, payload, _). (cn, payload)) ctorInfo;
                                           env1 = tyenv_add_datatype name tyvars ctors isGhost env;
@@ -868,7 +875,13 @@ definition elab_datatype_decl ::
                                           m1 = m \<lparr> CM_TyEnv :=
                                                      tyenv_add_datatype name tyvars ctors isGhost
                                                        (CM_TyEnv m) \<rparr>
-                                      in if isRealization
+                                      \<comment> \<open>A realization must respect the alloc level declared for
+                                         the abstract type. The datatype's level is computed in
+                                         env1, where the datatype is in scope.\<close>
+                                      in if isRealization \<and>
+                                            \<not> realization_alloc_ok env1 name (CoreTy_Datatype name [])
+                                         then Inl [TyErr_IncompatibleAllocLevel loc name]
+                                         else if isRealization
                                          then Inr (apply_realization name
                                                      (CoreTy_Datatype name []) env1 elabEnv1 m1)
                                          else Inr (env1, elabEnv1, m1))))))))"
@@ -879,7 +892,10 @@ definition elab_datatype_decl ::
 (* ========================================================================== *)
 
 (* Elaborate a typedef declaration. Cases:
-    - An extern type - `extern type T;` - this is not currently supported.
+    - A new extern type - `extern type T;`, `extern type T (allocated);` or
+      `extern type T (allocated_always);`. This cannot be ghost and cannot have
+      type variables. If T was previously declared as an abstract type then this
+      also realizes the abstract type by the new extern type.
 
     - Realization - `type T = Foo;` after a previous `type T;` (or `ghost type T;`).
       Type variables are not allowed. If the type T was declared runtime (non-ghost), then
@@ -898,7 +914,29 @@ definition elab_typedef_decl ::
     (let loc = DT_Location dt;
          name = DT_Name dt;
          tyvars = DT_TyArgs dt
-     in if DT_Extern dt then Inl [TyErr_ExternTypeNotImplemented loc] \<comment> \<open>Not yet implemented\<close>
+     in if DT_Extern dt then
+          \<comment> \<open>A new extern type. `ghost` or type variables are not allowed.\<close>
+          (if DT_Ghost dt = Ghost then Inl [TyErr_GhostTypeMustBeAbstract loc]
+           else if tyvars \<noteq> [] then Inl [TyErr_TypeArgsNotAllowed loc name]
+           else let target = CoreTy_Extern name (alloc_level_to_core (DT_AllocLevel dt))
+                in if name |\<in>| TE_TypeVars env then
+                     \<comment> \<open>The new extern type is realizing an abstract type declaration.
+                        Error checks: the abstract type must have been declared in this module
+                        (not an import); the alloc level must be compatible with the
+                        declaration; and no variable capture.\<close>
+                     (if name |\<notin>| ownAbstract then Inl [TyErr_CannotRealizeImportedType loc name]
+                      else if \<not> realization_alloc_ok env name target
+                      then Inl [TyErr_IncompatibleAllocLevel loc name]
+                      else if realization_captures env elabEnv name target
+                      then Inl [TyErr_TypeVarCapture loc name]
+                      else Inr (apply_realization name target env elabEnv m))
+                   \<comment> \<open>Not a realization: just record it as a typedef with no parameters.\<close>
+                   else if type_name_in_scope env elabEnv name
+                   then Inl [TyErr_DuplicateName loc name]
+                   else Inr (env,
+                             elabEnv \<lparr> EE_Typedefs :=
+                                 fmupd name ([], target) (EE_Typedefs elabEnv) \<rparr>,
+                             m))
         else if name |\<in>| TE_TypeVars env then
           \<comment> \<open>Realization of an abstract type.\<close>
           \<comment> \<open>Check errors: realizing an imported type (not possible in renamer output),
@@ -925,6 +963,9 @@ definition elab_typedef_decl ::
                            \<comment> \<open>Abstract types must be realized by complete types.\<close>
                            else if \<not> is_complete_type target
                            then Inl [TyErr_IncompleteTypeArgument loc]
+                           \<comment> \<open>The realization must respect the declared alloc level.\<close>
+                           else if \<not> realization_alloc_ok env name target
+                           then Inl [TyErr_IncompatibleAllocLevel loc name]
                            \<comment> \<open>Variable capture check.\<close>
                            else if realization_captures env elabEnv name target
                            then Inl [TyErr_TypeVarCapture loc name]

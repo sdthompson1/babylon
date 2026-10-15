@@ -38,7 +38,7 @@ fun is_decl_only :: "BabDeclaration \<Rightarrow> bool" where
   "is_decl_only (BabDecl_Const dc) = (DC_Value dc = None)"
 | "is_decl_only (BabDecl_Function df) = (DF_Body df = None \<and> \<not> DF_Extern df)"
 | "is_decl_only (BabDecl_Datatype dd) = False"
-| "is_decl_only (BabDecl_Typedef dt) = (DT_Definition dt = None)"
+| "is_decl_only (BabDecl_Typedef dt) = (DT_Definition dt = None \<and> \<not> DT_Extern dt)"
 
 (* True if a BabDeclaration declares a term-namespace name (a constant or a
    function), as opposed to a type-namespace name (a datatype or typedef). *)
@@ -117,7 +117,7 @@ definition check_completeness ::
             else [])
        | BabDecl_Datatype dd \<Rightarrow> []
        | BabDecl_Typedef dt \<Rightarrow>
-           (if DT_Definition dt = None
+           (if DT_Definition dt = None \<and> \<not> DT_Extern dt
                \<and> DT_Name dt |\<notin>| fmdom (CM_TypeSubst implMod)
             then [TyErr_AbstractTypeNotRealized (DT_Location dt) (DT_Name dt)]
             else []))

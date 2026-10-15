@@ -1,6 +1,6 @@
 theory ElabDeclCorrect
   imports ElabDecl ElabStmtCorrect ConstFoldCorrect "../core/LinkPreservesWellTyped"
-          "../util/FSetExtras"
+          "../core/AllocLevelSubst" "../util/FSetExtras"
 begin
 
 (* Correctness of the declaration-list elaborator: "elaboration produces
@@ -7774,6 +7774,10 @@ lemma elab_datatype_decl_Inr_elim:
                           (map (\<lambda>(cn, pay, _). (cn, pay)) ctorInfo) isGhost
                           (CM_TyEnv m) \<rparr>)
      = (env', elabEnv', m')"
+    "realization_alloc_ok
+       (tyenv_add_datatype (DD_Name dd) (DD_TyArgs dd)
+          (map (\<lambda>(cn, pay, _). (cn, pay)) ctorInfo) isGhost env)
+       (DD_Name dd) (CoreTy_Datatype (DD_Name dd) [])"
   | (Plain) ctorInfo isGhost where
     "DD_Name dd |\<notin>| TE_TypeVars env"
     "\<not> type_name_in_scope env elabEnv (DD_Name dd)"
@@ -8148,9 +8152,9 @@ qed
 
 (* The elimination rule for elab_typedef_decl success: one case per branch of
    the elaborator (a realization of one of the module's own abstract types; a
-   new abstract type; an ordinary transparent typedef). Each case records the
-   guards that must have passed and states the defining equations of the
-   result. *)
+   new abstract type; an ordinary transparent typedef; a realization by an
+   extern type; a new extern type). Each case records the guards that must
+   have passed and states the defining equations of the result. *)
 lemma elab_typedef_decl_Inr_elim:
   assumes ok: "elab_typedef_decl env elabEnv ownAbstract m dt
                  = Inr (env', elabEnv', m')"
@@ -8166,6 +8170,7 @@ lemma elab_typedef_decl_Inr_elim:
     "\<not> realization_captures env elabEnv (DT_Name dt) target"
     "apply_realization (DT_Name dt) target env elabEnv m = (env', elabEnv', m')"
     "is_complete_type target"
+    "realization_alloc_ok env (DT_Name dt) target"
   | (NewAbstract)
     "\<not> DT_Extern dt"
     "DT_Name dt |\<notin>| TE_TypeVars env"
@@ -8194,12 +8199,84 @@ lemma elab_typedef_decl_Inr_elim:
     "elabEnv' = elabEnv \<lparr> EE_Typedefs := fmupd (DT_Name dt) (DT_TyArgs dt, target)
                                            (EE_Typedefs elabEnv) \<rparr>"
     "m' = m"
+  | (ExternRealize)
+    "DT_Extern dt"
+    "DT_Ghost dt \<noteq> Ghost"
+    "DT_TyArgs dt = []"
+    "DT_Name dt |\<in>| TE_TypeVars env"
+    "DT_Name dt |\<in>| ownAbstract"
+    "realization_alloc_ok env (DT_Name dt)
+       (CoreTy_Extern (DT_Name dt) (alloc_level_to_core (DT_AllocLevel dt)))"
+    "\<not> realization_captures env elabEnv (DT_Name dt)
+       (CoreTy_Extern (DT_Name dt) (alloc_level_to_core (DT_AllocLevel dt)))"
+    "apply_realization (DT_Name dt)
+       (CoreTy_Extern (DT_Name dt) (alloc_level_to_core (DT_AllocLevel dt)))
+       env elabEnv m = (env', elabEnv', m')"
+  | (ExternNew)
+    "DT_Extern dt"
+    "DT_Ghost dt \<noteq> Ghost"
+    "DT_TyArgs dt = []"
+    "DT_Name dt |\<notin>| TE_TypeVars env"
+    "\<not> type_name_in_scope env elabEnv (DT_Name dt)"
+    "env' = env"
+    "elabEnv' = elabEnv \<lparr> EE_Typedefs := fmupd (DT_Name dt)
+                            ([], CoreTy_Extern (DT_Name dt) (alloc_level_to_core (DT_AllocLevel dt)))
+                            (EE_Typedefs elabEnv) \<rparr>"
+    "m' = m"
 proof -
   \<comment> \<open>Peel the guards one at a time - a single auto with the full split set
       does not terminate on this definition.\<close>
-  have g1: "\<not> DT_Extern dt"
-    using ok unfolding elab_typedef_decl_def Let_def
-    by (cases "DT_Extern dt") auto
+  show thesis
+  proof (cases "DT_Extern dt")
+    case True
+    note ext = True
+    let ?target = "CoreTy_Extern (DT_Name dt) (alloc_level_to_core (DT_AllocLevel dt))"
+    have ng: "DT_Ghost dt \<noteq> Ghost"
+      using ok unfolding elab_typedef_decl_def Let_def
+      by (cases "DT_Ghost dt = Ghost") (auto simp: ext)
+    have noargs: "DT_TyArgs dt = []"
+      using ok unfolding elab_typedef_decl_def Let_def
+      by (cases "DT_TyArgs dt = []") (auto simp: ext ng)
+    show thesis
+    proof (cases "DT_Name dt |\<in>| TE_TypeVars env")
+      case True
+      \<comment> \<open>A realization of an abstract type in scope by the extern type.\<close>
+      have own: "DT_Name dt |\<in>| ownAbstract"
+        using ok unfolding elab_typedef_decl_def Let_def
+        by (cases "DT_Name dt |\<in>| ownAbstract") (auto simp: ext ng noargs True)
+      have aok: "realization_alloc_ok env (DT_Name dt) ?target"
+        using ok unfolding elab_typedef_decl_def Let_def
+        by (cases "realization_alloc_ok env (DT_Name dt) ?target")
+           (auto simp: ext ng noargs True own)
+      have nocap: "\<not> realization_captures env elabEnv (DT_Name dt) ?target"
+        using ok unfolding elab_typedef_decl_def Let_def
+        by (cases "realization_captures env elabEnv (DT_Name dt) ?target")
+           (auto simp: ext ng noargs True own aok)
+      have res: "apply_realization (DT_Name dt) ?target env elabEnv m
+                   = (env', elabEnv', m')"
+        using ok unfolding elab_typedef_decl_def Let_def
+        by (auto simp: ext ng noargs True own aok nocap)
+      show thesis
+        by (rule ExternRealize[OF ext ng noargs True own aok nocap res])
+    next
+      case False
+      \<comment> \<open>A new extern type.\<close>
+      have notin: "\<not> type_name_in_scope env elabEnv (DT_Name dt)"
+        using ok unfolding elab_typedef_decl_def Let_def
+        by (cases "type_name_in_scope env elabEnv (DT_Name dt)")
+           (auto simp: ext ng noargs False)
+      have eq1: "env' = env"
+       and eq2: "elabEnv' = elabEnv \<lparr> EE_Typedefs := fmupd (DT_Name dt)
+                    ([], ?target) (EE_Typedefs elabEnv) \<rparr>"
+       and eq3: "m' = m"
+        using ok unfolding elab_typedef_decl_def Let_def
+        by (auto simp: ext ng noargs False notin)
+      show thesis
+        by (rule ExternNew[OF ext ng noargs False notin eq1 eq2 eq3])
+    qed
+  next
+    case False
+    note g1 = False
   show thesis
   proof (cases "DT_Name dt |\<in>| TE_TypeVars env")
     case True
@@ -8231,18 +8308,22 @@ proof -
       using ok unfolding elab_typedef_decl_def Let_def
       by (cases "is_complete_type target")
          (auto simp: g1 True own dtdef noargs et noself rt_ok')
+    have aok: "realization_alloc_ok env (DT_Name dt) target"
+      using ok unfolding elab_typedef_decl_def Let_def
+      by (cases "realization_alloc_ok env (DT_Name dt) target")
+         (auto simp: g1 True own dtdef noargs et noself rt_ok' cp)
     have nocap: "\<not> realization_captures env elabEnv (DT_Name dt) target"
       using ok unfolding elab_typedef_decl_def Let_def
       by (cases "realization_captures env elabEnv (DT_Name dt) target")
-         (auto simp: g1 True own dtdef noargs et noself rt_ok' cp)
+         (auto simp: g1 True own dtdef noargs et noself rt_ok' cp aok)
     have res: "apply_realization (DT_Name dt) target env elabEnv m
                  = (env', elabEnv', m')"
       using ok unfolding elab_typedef_decl_def Let_def
-      by (auto simp: g1 True own dtdef noargs et noself rt_ok' cp nocap)
+      by (auto simp: g1 True own dtdef noargs et noself rt_ok' cp aok nocap)
     have rt_ok: "DT_Name dt |\<in>| TE_RuntimeTypeVars env \<longrightarrow> is_runtime_type env target"
       using rt_ok' by blast
     show thesis
-      by (rule Realize[OF g1 True own dtdef noargs et noself rt_ok nocap res cp])
+      by (rule Realize[OF g1 True own dtdef noargs et noself rt_ok nocap res cp aok])
   next
     case False
     have notin: "\<not> type_name_in_scope env elabEnv (DT_Name dt)"
@@ -8299,6 +8380,7 @@ proof -
       show thesis
         by (rule Transparent[OF g1 False notin Some dup nocap et eq1 eq2 eq3])
     qed
+  qed
   qed
 qed
 
@@ -8359,6 +8441,35 @@ next
     show ?thesis
       unfolding res
       by (rule elab_decls_invariant_add_typedef[OF inv dist nocap wk])
+next
+  case ExternRealize
+  \<comment> \<open>A realization by an extern type: the target is ground, well-kinded,
+     runtime and complete in every env, so only the site's own guards are
+     needed.\<close>
+  note own = ExternRealize(5) and nocap = ExternRealize(7) and res = ExternRealize(8)
+  let ?target = "CoreTy_Extern (DT_Name dt) (alloc_level_to_core (DT_AllocLevel dt))"
+  have wk: "is_well_kinded env ?target" by simp
+  have noself: "DT_Name dt \<notin> type_tyvars ?target" by simp
+  have rt_ok: "DT_Name dt |\<in>| TE_RuntimeTypeVars env \<longrightarrow> is_runtime_type env ?target"
+    by simp
+  have cp: "is_complete_type ?target" by simp
+  show ?thesis
+    by (rule apply_realization_invariant
+               [OF inv own ExternRealize(4) wk noself rt_ok nocap res cp])
+next
+  case ExternNew
+  \<comment> \<open>A new extern type is a parameterless typedef whose target is well-kinded
+     in every env.\<close>
+  let ?target = "CoreTy_Extern (DT_Name dt) (alloc_level_to_core (DT_AllocLevel dt))"
+  have dist: "distinct ([] :: string list)" by simp
+  have nocap: "\<not> binder_captures env m []"
+    unfolding binder_captures_def by simp
+  have wk: "is_well_kinded (env \<lparr> TE_TypeVars := TE_TypeVars env
+                                   |\<union>| fset_of_list [] \<rparr>) ?target"
+    by simp
+  show ?thesis
+    unfolding ExternNew(6) ExternNew(7) ExternNew(8)
+    by (rule elab_decls_invariant_add_typedef[OF inv dist nocap wk])
 qed
 
 (* ---- The dispatcher ---- *)
@@ -8716,6 +8827,30 @@ next
   case (Transparent ty target)
   \<comment> \<open>A transparent typedef changes neither the env nor the module.\<close>
   show ?thesis using rtok unfolding Transparent(8) Transparent(10) .
+next
+  case ExternRealize
+  \<comment> \<open>A realization by an extern type: as the Realize case, with the
+     target's properties immediate.\<close>
+  note res = ExternRealize(8)
+  let ?target = "CoreTy_Extern (DT_Name dt) (alloc_level_to_core (DT_AllocLevel dt))"
+  have env_eq: "env = module_context_env env0 m"
+    using inv unfolding elab_decls_invariant_def by blast
+  have tv_disj: "TE_TypeVars env |\<inter>| fmdom (CM_TypeSubst m) = {||}"
+    using module_context_env_subst_disjoint(1)[of env0 m] env_eq by simp
+  have ndom: "DT_Name dt |\<notin>| fmdom (CM_TypeSubst m)"
+    using ExternRealize(4) tv_disj by (metis fempty_iff finter_iff)
+  have bridge: "DT_Name dt |\<in>| TE_RuntimeTypeVars env0
+                  \<longrightarrow> DT_Name dt |\<in>| TE_RuntimeTypeVars env"
+    unfolding env_eq module_context_env_tyvar_fields(2) using ndom by auto
+  have rt_ok: "DT_Name dt |\<in>| TE_RuntimeTypeVars env \<longrightarrow> is_runtime_type env ?target"
+    by simp
+  have noself: "DT_Name dt \<notin> type_tyvars ?target" by simp
+  show ?thesis
+    by (rule apply_realization_subst_runtime[OF rtok bridge rt_ok noself res])
+next
+  case ExternNew
+  \<comment> \<open>A new extern type changes neither the env nor the module.\<close>
+  show ?thesis using rtok unfolding ExternNew(6) ExternNew(8) .
 qed
 
 (* ---- The dispatcher, the list, and the top-level fold ---- *)
@@ -8787,9 +8922,546 @@ next
     using Cons.IH[OF rest inv1 rtok1 fds] .
 qed
 
+(* ========================================================================== *)
+(* The alloc-level check of the realizations, carried through the fold        *)
+(* ========================================================================== *)
+
+(* The alloc-level analogue of subst_runtime_ok: every recorded realization
+   n := ty of an abstract type whose declared level (in the context env env0)
+   is l has, in the state env, a level compatible with l. The elaborator checks
+   this at the realization site, in the state env of that moment; later
+   realizations substitute into both the env's payloads and the recorded
+   targets, which can only lower levels (alloc_level_of_type_singleton_subst_le),
+   and later datatypes are fresh names the targets do not reach
+   (alloc_level_of_type_local), so the fact survives to the end of the fold.
+   There it is the link-time check link_alloc_ok of the implementation link
+   (ElabModuleCorrect.thy). *)
+definition subst_alloc_ok :: "CoreTyEnv \<Rightarrow> CoreTyEnv \<Rightarrow> CoreModule \<Rightarrow> bool" where
+  "subst_alloc_ok env0 env m =
+    (\<forall>n ty l. fmlookup (CM_TypeSubst m) n = Some ty \<longrightarrow>
+              fmlookup (TE_AbstractAllocLevels env0) n = Some l \<longrightarrow>
+              alloc_level_compatible env l ty)"
+
+(* Steps that touch neither the substitution nor the four env fields the
+   level computation reads (constants, functions, transparent typedefs). *)
+lemma subst_alloc_ok_env_cong:
+  assumes aok: "subst_alloc_ok env0 env m"
+      and subst_eq: "CM_TypeSubst m' = CM_TypeSubst m"
+      and fields: "alloc_fields_eq env env'"
+  shows "subst_alloc_ok env0 env' m'"
+  using aok alloc_level_compatible_cong_env[OF fields]
+  unfolding subst_alloc_ok_def subst_eq by blast
+
+(* The declared level of one of the module's own, still abstract, types is
+   read from the context env: the state env's level map is the context's plus
+   the module's own (disjoint from ownAbstract), minus the realized names. *)
+lemma elab_decls_invariant_declared_level:
+  assumes inv: "elab_decls_invariant env0 ownAbstract ctxGlobals env elabEnv m"
+      and own: "name |\<in>| ownAbstract"
+      and tv: "name |\<in>| TE_TypeVars env"
+  shows "fmlookup (TE_AbstractAllocLevels env) name = fmlookup (TE_AbstractAllocLevels env0) name"
+proof -
+  have env_eq: "env = module_context_env env0 m"
+   and minv: "core_module_invariant m"
+   and disj: "ownAbstract |\<inter>| TE_TypeVars (CM_TyEnv m) = {||}"
+    using inv unfolding elab_decls_invariant_def by blast+
+  have abs_m: "TE_AbstractTypes (CM_TyEnv m) = TE_TypeVars (CM_TyEnv m)"
+    using minv unfolding core_module_invariant_def tyenv_module_scope_def by blast
+  have n_m: "name |\<notin>| fmdom (TE_AbstractAllocLevels (CM_TyEnv m))"
+    using own disj abs_m by (metis fempty_iff finter_iff)
+  have n_s: "name |\<notin>| fmdom (CM_TypeSubst m)"
+    using tv module_context_env_subst_disjoint(1)[of env0 m] env_eq
+    by (metis fempty_iff finter_iff)
+  show ?thesis
+    unfolding env_eq module_context_env_tyvar_fields(4)
+    using n_s n_m[THEN fmdom_notD] by auto
+qed
+
+(* The elaborator's capture check gives the constructor-parameter freshness
+   the substitution theorem needs. *)
+lemma realization_captures_ctor_fresh:
+  assumes "\<not> realization_captures env elabEnv name target"
+  shows "realization_ctor_fresh env name target"
+  unfolding realization_ctor_fresh_def
+proof (intro allI impI)
+  fix c dt tyvars p assume lk: "fmlookup (TE_DataCtors env) c = Some (dt, tyvars, p)"
+  have sub: "fset_of_list tyvars |\<subseteq>| scope_bound_tyvars env elabEnv"
+    by (rule scope_bound_tyvars_ctor_entry[OF lk])
+  have disj: "finsert name (fset_of_list (type_tyvars_list target))
+                |\<inter>| scope_bound_tyvars env elabEnv = {||}"
+    using assms unfolding realization_captures_def by simp
+  have nb: "\<And>v. v |\<in>| fset_of_list tyvars
+              \<Longrightarrow> v |\<notin>| finsert name (fset_of_list (type_tyvars_list target))"
+    using sub disj by (metis fempty_iff finter_iff fsubsetD)
+  have "name \<notin> set tyvars"
+    using nb[of name] by (metis finsertI1 fset_of_list.rep_eq)
+  moreover have "type_tyvars target \<inter> set tyvars = {}"
+  proof -
+    have "\<And>v. v \<in> type_tyvars target \<Longrightarrow> v \<notin> set tyvars"
+      using nb unfolding set_type_tyvars_list[symmetric] by (meson finsertI2 fset_of_list_elem)
+    then show ?thesis by blast
+  qed
+  ultimately show "name \<notin> set tyvars \<and> type_tyvars target \<inter> set tyvars = {}" by blast
+qed
+
+(* A datatype with no type parameters adds constructors that bind nothing, so
+   constructor-parameter freshness is preserved. *)
+lemma realization_ctor_fresh_add_datatype:
+  assumes "realization_ctor_fresh env name target"
+  shows "realization_ctor_fresh (tyenv_add_datatype dtname [] ctors isGhost env) name target"
+  unfolding realization_ctor_fresh_def
+proof (intro allI impI)
+  fix c dt tyvars p
+  assume lk: "fmlookup (TE_DataCtors (tyenv_add_datatype dtname [] ctors isGhost env)) c
+                = Some (dt, tyvars, p)"
+  have lk': "fmlookup (fold (\<lambda>(cn, payload). fmupd cn (dtname, [], payload)) ctors
+                         (TE_DataCtors env)) c = Some (dt, tyvars, p)"
+    using lk unfolding tyenv_add_datatype_def by simp
+  have "(\<exists>payload. (c, payload) \<in> set ctors \<and> (dt, tyvars, p) = (dtname, [], payload))
+        \<or> fmlookup (TE_DataCtors env) c = Some (dt, tyvars, p)"
+    by (rule fold_ctor_upd_lookup_cases[OF lk'])
+  then show "name \<notin> set tyvars \<and> type_tyvars target \<inter> set tyvars = {}"
+    using assms unfolding realization_ctor_fresh_def by auto
+qed
+
+(* The names of the elaborated constructors are the declared names. *)
+lemma elab_data_ctors_names:
+  assumes "elab_data_ctors penv pee dcs = Inr ctorInfo"
+  shows "map fst ctorInfo = map (\<lambda>(_, n, _). n) dcs"
+  using assms
+proof (induction dcs arbitrary: ctorInfo)
+  case Nil
+  then show ?case by simp
+next
+  case (Cons dc rest)
+  obtain cloc cname payloadOpt where dc_eq: "dc = (cloc, cname, payloadOpt)"
+    by (cases dc) auto
+  from Cons.prems obtain payloadTy rest' where
+      "elab_data_ctors penv pee rest = Inr rest'"
+      and "ctorInfo = (cname, payloadTy, payloadOpt = None) # rest'"
+    unfolding dc_eq by (auto split: sum.splits option.splits)
+  then show ?case using Cons.IH dc_eq by simp
+qed
+
+(* Adding a fresh datatype (fresh name, fresh constructor names) changes no
+   existing type's level: the recorded targets are well-kinded in the old env,
+   so they reach only old datatypes, whose entries are unchanged. *)
+lemma subst_alloc_ok_add_datatype:
+  assumes aok: "subst_alloc_ok env0 env m"
+      and wf: "tyenv_well_formed env"
+      and tswk: "typesubst_well_kinded env (CM_TypeSubst m)"
+      and fresh_dt: "name |\<notin>| fmdom (TE_Datatypes env)"
+      and fresh_ctors: "\<And>cn. cn \<in> fst ` set ctors \<Longrightarrow> cn |\<notin>| fmdom (TE_DataCtors env)"
+      and env'_eq: "env' = tyenv_add_datatype name tyvars ctors isGhost env"
+      and subst_eq: "CM_TypeSubst m' = CM_TypeSubst m"
+  shows "subst_alloc_ok env0 env' m'"
+proof -
+  have pwk: "tyenv_payloads_well_kinded env"
+   and btc: "tyenv_ctors_by_type_consistent env"
+    using wf unfolding tyenv_well_formed_def by blast+
+  have agree: "env_local_agree env env'"
+    unfolding env_local_agree_def
+  proof (intro conjI allI impI)
+    fix dt assume dt_in: "dt |\<in>| fmdom (TE_Datatypes env)"
+    have ne: "dt \<noteq> name" using dt_in fresh_dt by blast
+    show "fmlookup (TE_Datatypes env') dt = fmlookup (TE_Datatypes env) dt"
+      unfolding env'_eq tyenv_add_datatype_def using ne by simp
+    show "fmlookup (TE_DataCtorsByType env') dt = fmlookup (TE_DataCtorsByType env) dt"
+      unfolding env'_eq tyenv_add_datatype_def using ne by simp
+  next
+    fix dt cs c
+    assume "dt |\<in>| fmdom (TE_Datatypes env)"
+       and cs: "fmlookup (TE_DataCtorsByType env) dt = Some cs" and c_in: "c \<in> set cs"
+    obtain tv p where "fmlookup (TE_DataCtors env) c = Some (dt, tv, p)"
+      using btc cs c_in unfolding tyenv_ctors_by_type_consistent_def by blast
+    then have "c |\<in>| fmdom (TE_DataCtors env)" by (rule fmdomI)
+    then have "c \<notin> fst ` set ctors" using fresh_ctors by blast
+    then show "fmlookup (TE_DataCtors env') c = fmlookup (TE_DataCtors env) c"
+      unfolding env'_eq tyenv_add_datatype_def by (simp add: fold_ctor_upd_lookup_fresh)
+  next
+    fix c dt tv p assume lk: "fmlookup (TE_DataCtors env) c = Some (dt, tv, p)"
+    have pwk_p: "is_well_kinded (env \<lparr> TE_TypeVars := TE_AbstractTypes env |\<union>| fset_of_list tv \<rparr>) p"
+      using pwk lk unfolding tyenv_payloads_well_kinded_def by blast
+    show "type_datatypes p \<subseteq> fset (fmdom (TE_Datatypes env))"
+      using is_well_kinded_type_datatypes_subset[OF pwk_p] by simp
+  next
+    fix c dt tv p assume "fmlookup (TE_DataCtors env) c = Some (dt, tv, p)"
+    show "\<forall>v \<in> type_tyvars p. v \<notin> set tv \<longrightarrow>
+            fmlookup (TE_AbstractAllocLevels env') v = fmlookup (TE_AbstractAllocLevels env) v"
+      unfolding env'_eq tyenv_add_datatype_def by simp
+  qed
+  show ?thesis
+    unfolding subst_alloc_ok_def subst_eq
+  proof (intro allI impI)
+    fix n ty l
+    assume lk: "fmlookup (CM_TypeSubst m) n = Some ty"
+       and ll: "fmlookup (TE_AbstractAllocLevels env0) n = Some l"
+    have c0: "alloc_level_compatible env l ty"
+      using aok lk ll unfolding subst_alloc_ok_def by blast
+    have wk: "is_well_kinded env ty"
+      using tswk lk unfolding typesubst_well_kinded_def by blast
+    have "alloc_level_of_type env' ty = alloc_level_of_type env ty"
+    proof (rule alloc_level_of_type_local[OF agree])
+      show "type_datatypes ty \<subseteq> fset (fmdom (TE_Datatypes env))"
+        by (rule is_well_kinded_type_datatypes_subset[OF wk])
+    next
+      fix v
+      show "fmlookup (TE_AbstractAllocLevels env') v = fmlookup (TE_AbstractAllocLevels env) v"
+        unfolding env'_eq tyenv_add_datatype_def by simp
+    qed
+    then show "alloc_level_compatible env' l ty"
+      using c0 unfolding alloc_level_compatible_def by simp
+  qed
+qed
+
+(* The realization step: the new entry is the site check itself (with the
+   declared level read from the context env), and every entry, old and new,
+   is transported through the substitution by the monotonicity theorem. *)
+lemma apply_realization_subst_alloc:
+  assumes aok: "subst_alloc_ok env0 env m"
+      and lvl: "fmlookup (TE_AbstractAllocLevels env) name
+                  = fmlookup (TE_AbstractAllocLevels env0) name"
+      and tgt: "realization_alloc_ok env name target"
+      and noself: "name \<notin> type_tyvars target"
+      and fresh: "realization_ctor_fresh env name target"
+      and res: "apply_realization name target env elabEnv m = (env', elabEnv', m')"
+  shows "subst_alloc_ok env0 env' m'"
+proof -
+  let ?s = "fmupd name target fmempty"
+  have env'_eq: "env' = (apply_subst_to_tyenv ?s env)
+           \<lparr> TE_TypeVars := TE_TypeVars env |-| {|name|},
+             TE_RuntimeTypeVars := TE_RuntimeTypeVars env |-| {|name|},
+             TE_AbstractAllocLevels := fmdrop name (TE_AbstractAllocLevels env) \<rparr>"
+   and m'_eq: "m' = m \<lparr> CM_TypeSubst := fmupd name target
+                          (fmmap (apply_subst ?s) (CM_TypeSubst m)) \<rparr>"
+    using res unfolding apply_realization_def Let_def by auto
+  have rel: "subst_env_rel name target env env'"
+    unfolding subst_env_rel_def env'_eq by simp
+  have tgt': "alloc_level_le (alloc_level_of_type env target) (declared_alloc_level env name)"
+    using tgt unfolding realization_alloc_ok_def alloc_level_compatible_def .
+  note mono = alloc_level_of_type_singleton_subst_le[OF rel tgt' noself fresh]
+  have id: "apply_subst ?s target = target"
+    by (rule apply_subst_disjoint_id) (use noself in auto)
+  show ?thesis
+    unfolding subst_alloc_ok_def
+  proof (intro allI impI)
+    fix n ty l
+    assume lk: "fmlookup (CM_TypeSubst m') n = Some ty"
+       and ll: "fmlookup (TE_AbstractAllocLevels env0) n = Some l"
+    show "alloc_level_compatible env' l ty"
+    proof (cases "n = name")
+      case True
+      then have ty_eq: "ty = target" using lk unfolding m'_eq by simp
+      have decl: "declared_alloc_level env name = l"
+        using ll lvl True unfolding declared_alloc_level_def by simp
+      have "alloc_level_le (alloc_level_of_type env' target) (alloc_level_of_type env target)"
+        using mono[of target] id by simp
+      then show ?thesis
+        using tgt' unfolding ty_eq alloc_level_compatible_def decl
+        by (rule alloc_level_le_trans)
+    next
+      case False
+      then have "fmlookup (fmmap (apply_subst ?s) (CM_TypeSubst m)) n = Some ty"
+        using lk unfolding m'_eq by simp
+      then obtain ty0 where lk0: "fmlookup (CM_TypeSubst m) n = Some ty0"
+                        and ty_eq: "ty = apply_subst ?s ty0"
+        by auto
+      have c0: "alloc_level_le (alloc_level_of_type env ty0) l"
+        using aok lk0 ll unfolding subst_alloc_ok_def alloc_level_compatible_def by blast
+      show ?thesis
+        unfolding ty_eq alloc_level_compatible_def
+        by (rule alloc_level_le_trans[OF mono c0])
+    qed
+  qed
+qed
+
+(* ---- The four declaration kinds ---- *)
+
+lemma elab_const_decl_subst_alloc:
+  assumes aok: "subst_alloc_ok env0 env m"
+      and e: "elab_const_decl env elabEnv ctxGlobals m dc = Inr (env', elabEnv', m')"
+  shows "subst_alloc_ok env0 env' m'"
+proof -
+  have "CM_TypeSubst m' = CM_TypeSubst m \<and> alloc_fields_eq env env'"
+  proof (cases "DC_Ghost dc")
+    case Ghost
+    from e Ghost show ?thesis
+      by (cases rule: elab_const_decl_ghost_Inr_elim)
+         (simp_all add: tyenv_add_function_def alloc_fields_eq_def)
+  next
+    case NotGhost
+    from e NotGhost show ?thesis
+      by (cases rule: elab_const_decl_Inr_elim)
+         (simp_all add: tyenv_add_global_def alloc_fields_eq_def)
+  qed
+  then show ?thesis
+    using subst_alloc_ok_env_cong[OF aok] by blast
+qed
+
+lemma elab_function_decl_subst_alloc:
+  assumes aok: "subst_alloc_ok env0 env m"
+      and e: "elab_function_decl env elabEnv m df = Inr (env', elabEnv', m')"
+  shows "subst_alloc_ok env0 env' m'"
+proof -
+  have "CM_TypeSubst m' = CM_TypeSubst m \<and> alloc_fields_eq env env'"
+    using e unfolding elab_function_decl_def tyenv_add_function_def Let_def alloc_fields_eq_def
+    by (auto split: option.splits sum.splits if_splits)
+  then show ?thesis
+    using subst_alloc_ok_env_cong[OF aok] by blast
+qed
+
+lemma elab_datatype_decl_subst_alloc:
+  assumes inv: "elab_decls_invariant env0 ownAbstract ctxGlobals env elabEnv m"
+      and aok: "subst_alloc_ok env0 env m"
+      and e: "elab_datatype_decl env elabEnv ownAbstract m dd = Inr (env', elabEnv', m')"
+  shows "subst_alloc_ok env0 env' m'"
+proof -
+  let ?name = "DD_Name dd"
+  have tswk: "typesubst_well_kinded env (CM_TypeSubst m)"
+   and wf: "tyenv_well_formed env"
+    using inv unfolding elab_decls_invariant_def by blast+
+  \<comment> \<open>The elaborated constructor names are the declared names, which the
+     duplicate check keeps out of the term namespace.\<close>
+  have fresh_ctors: "\<And>cn. cn \<in> fst ` set (map (\<lambda>(cn, pay, _). (cn, pay)) ctorInfo)
+                       \<Longrightarrow> cn |\<notin>| fmdom (TE_DataCtors env)"
+    if ec: "elab_data_ctors penv pee (DD_Ctors dd) = Inr ctorInfo"
+       and find_ck: "find (\<lambda>(_, n, _). term_name_in_scope env n) (DD_Ctors dd) = None"
+    for penv pee ctorInfo
+  proof -
+    fix cn assume "cn \<in> fst ` set (map (\<lambda>(cn, pay, _). (cn, pay)) ctorInfo)"
+    then have "cn \<in> set (map fst ctorInfo)"
+      by (force simp: case_prod_beta)
+    then have "cn \<in> set (map (\<lambda>(_, n, _). n) (DD_Ctors dd))"
+      using elab_data_ctors_names[OF ec] by simp
+    then obtain x where x_in: "x \<in> set (DD_Ctors dd)" and cn_eq: "cn = (\<lambda>(_, n, _). n) x"
+      by auto
+    obtain xl xn xp where x_eq: "x = (xl, xn, xp)" by (cases x) auto
+    have "\<not> (\<lambda>(_, n, _). term_name_in_scope env n) x"
+      using find_ck x_in unfolding find_None_iff by blast
+    then have "\<not> term_name_in_scope env cn"
+      using cn_eq x_eq by simp
+    then show "cn |\<notin>| fmdom (TE_DataCtors env)"
+      unfolding term_name_in_scope_def by blast
+  qed
+  from e show ?thesis
+  proof (cases rule: elab_datatype_decl_Inr_elim)
+    case (Plain ctorInfo isGhost)
+    have fresh_dt: "?name |\<notin>| fmdom (TE_Datatypes env)"
+      using Plain(2) unfolding type_name_in_scope_def by blast
+    have ms: "CM_TypeSubst m' = CM_TypeSubst m"
+      unfolding Plain(12) by simp
+    \<comment> \<open>The instantiated @{text fresh_ctors} leaves a trivial side goal
+       @{text "cn \<in> S \<Longrightarrow> cn \<in> S"}, discharged by @{text simp}.\<close>
+    show ?thesis
+      by (rule subst_alloc_ok_add_datatype[OF aok wf tswk fresh_dt fresh_ctors[OF Plain(8) Plain(7)]
+                Plain(10) ms]) simp
+  next
+    case (Realize ctorInfo isGhost)
+    note r = Realize(1) and own = Realize(2) and noargs = Realize(3)
+     and fresh_dt = Realize(4) and nocap = Realize(13) and res = Realize(14)
+     and aokR = Realize(15)
+    let ?ctors1 = "map (\<lambda>(cn, pay, _). (cn, pay)) ctorInfo"
+    let ?env1 = "tyenv_add_datatype ?name (DD_TyArgs dd) ?ctors1 isGhost env"
+    let ?m1 = "m \<lparr> CM_TyEnv := tyenv_add_datatype ?name (DD_TyArgs dd) ?ctors1 isGhost
+                                 (CM_TyEnv m) \<rparr>"
+    have aok1: "subst_alloc_ok env0 ?env1 ?m1"
+      by (rule subst_alloc_ok_add_datatype[OF aok wf tswk fresh_dt
+                fresh_ctors[OF Realize(10) Realize(9)] refl]) simp_all
+    have lvl0: "fmlookup (TE_AbstractAllocLevels env) ?name
+                  = fmlookup (TE_AbstractAllocLevels env0) ?name"
+      by (rule elab_decls_invariant_declared_level[OF inv own r])
+    have lvl1: "fmlookup (TE_AbstractAllocLevels ?env1) ?name
+                  = fmlookup (TE_AbstractAllocLevels env0) ?name"
+      using lvl0 unfolding tyenv_add_datatype_def by simp
+    have fresh0: "realization_ctor_fresh env ?name (CoreTy_Datatype ?name [])"
+      by (rule realization_captures_ctor_fresh[OF nocap])
+    have fresh1: "realization_ctor_fresh ?env1 ?name (CoreTy_Datatype ?name [])"
+      using realization_ctor_fresh_add_datatype[OF fresh0] noargs by simp
+    have noself: "?name \<notin> type_tyvars (CoreTy_Datatype ?name [])"
+      by simp
+    show ?thesis
+      by (rule apply_realization_subst_alloc[OF aok1 lvl1 aokR noself fresh1 res])
+  qed
+qed
+
+lemma elab_typedef_decl_subst_alloc:
+  assumes inv: "elab_decls_invariant env0 ownAbstract ctxGlobals env elabEnv m"
+      and aok: "subst_alloc_ok env0 env m"
+      and e: "elab_typedef_decl env elabEnv ownAbstract m dt = Inr (env', elabEnv', m')"
+  shows "subst_alloc_ok env0 env' m'"
+  using e
+proof (cases rule: elab_typedef_decl_Inr_elim)
+  case (Realize ty target)
+  have lvl: "fmlookup (TE_AbstractAllocLevels env) (DT_Name dt)
+               = fmlookup (TE_AbstractAllocLevels env0) (DT_Name dt)"
+    by (rule elab_decls_invariant_declared_level[OF inv Realize(3) Realize(2)])
+  have fresh: "realization_ctor_fresh env (DT_Name dt) target"
+    by (rule realization_captures_ctor_fresh[OF Realize(9)])
+  show ?thesis
+    by (rule apply_realization_subst_alloc[OF aok lvl Realize(12) Realize(7) fresh Realize(10)])
+next
+  case NewAbstract
+  \<comment> \<open>A new abstract type: a fresh name gets a level entry; nothing recorded
+     so far mentions it, so no level changes.\<close>
+  have wf: "tyenv_well_formed env"
+   and tswk: "typesubst_well_kinded env (CM_TypeSubst m)"
+    using inv unfolding elab_decls_invariant_def by blast+
+  have notin: "DT_Name dt |\<notin>| TE_TypeVars env"
+    using NewAbstract(3) unfolding type_name_in_scope_def by blast
+  have pwk: "tyenv_payloads_well_kinded env"
+   and abs_sub: "TE_AbstractTypes env |\<subseteq>| TE_TypeVars env"
+    using wf unfolding tyenv_well_formed_def tyenv_abstract_types_subset_def by blast+
+  have lv_other: "fmlookup (TE_AbstractAllocLevels env') v = fmlookup (TE_AbstractAllocLevels env) v"
+    if "v \<noteq> DT_Name dt" for v
+    using that unfolding NewAbstract(6) tyenv_add_abstract_type_def by simp
+  have agree: "env_local_agree env env'"
+    unfolding env_local_agree_def
+  proof (intro conjI allI impI)
+    fix d assume "d |\<in>| fmdom (TE_Datatypes env)"
+    show "fmlookup (TE_Datatypes env') d = fmlookup (TE_Datatypes env) d"
+      unfolding NewAbstract(6) tyenv_add_abstract_type_def by simp
+    show "fmlookup (TE_DataCtorsByType env') d = fmlookup (TE_DataCtorsByType env) d"
+      unfolding NewAbstract(6) tyenv_add_abstract_type_def by simp
+  next
+    fix d cs c
+    assume "d |\<in>| fmdom (TE_Datatypes env)" "fmlookup (TE_DataCtorsByType env) d = Some cs" "c \<in> set cs"
+    show "fmlookup (TE_DataCtors env') c = fmlookup (TE_DataCtors env) c"
+      unfolding NewAbstract(6) tyenv_add_abstract_type_def by simp
+  next
+    fix c d tv p assume lk: "fmlookup (TE_DataCtors env) c = Some (d, tv, p)"
+    have pwk_p: "is_well_kinded (env \<lparr> TE_TypeVars := TE_AbstractTypes env |\<union>| fset_of_list tv \<rparr>) p"
+      using pwk lk unfolding tyenv_payloads_well_kinded_def by blast
+    show "type_datatypes p \<subseteq> fset (fmdom (TE_Datatypes env))"
+      using is_well_kinded_type_datatypes_subset[OF pwk_p] by simp
+  next
+    fix c d tv p assume lk: "fmlookup (TE_DataCtors env) c = Some (d, tv, p)"
+    have wk: "is_well_kinded (env \<lparr> TE_TypeVars := TE_AbstractTypes env |\<union>| fset_of_list tv \<rparr>) p"
+      using pwk lk unfolding tyenv_payloads_well_kinded_def by blast
+    have "\<And>v. v \<in> type_tyvars p \<Longrightarrow> v \<notin> set tv \<Longrightarrow> v |\<in>| TE_AbstractTypes env"
+      using is_well_kinded_type_tyvars_subset[OF wk] by (auto simp: fset_of_list_elem)
+    then have "\<And>v. v \<in> type_tyvars p \<Longrightarrow> v \<notin> set tv \<Longrightarrow> v \<noteq> DT_Name dt"
+      using abs_sub notin by (metis fsubsetD)
+    then show "\<forall>v \<in> type_tyvars p. v \<notin> set tv \<longrightarrow>
+                 fmlookup (TE_AbstractAllocLevels env') v = fmlookup (TE_AbstractAllocLevels env) v"
+      using lv_other by blast
+  qed
+  show ?thesis
+    unfolding subst_alloc_ok_def
+  proof (intro allI impI)
+    fix n ty l
+    assume lk: "fmlookup (CM_TypeSubst m') n = Some ty"
+       and ll: "fmlookup (TE_AbstractAllocLevels env0) n = Some l"
+    have lk0: "fmlookup (CM_TypeSubst m) n = Some ty"
+      using lk unfolding NewAbstract(8) by simp
+    have c0: "alloc_level_compatible env l ty"
+      using aok lk0 ll unfolding subst_alloc_ok_def by blast
+    have wk: "is_well_kinded env ty"
+      using tswk lk0 unfolding typesubst_well_kinded_def by blast
+    have "alloc_level_of_type env' ty = alloc_level_of_type env ty"
+    proof (rule alloc_level_of_type_local[OF agree])
+      show "type_datatypes ty \<subseteq> fset (fmdom (TE_Datatypes env))"
+        by (rule is_well_kinded_type_datatypes_subset[OF wk])
+    next
+      fix v assume "v \<in> type_tyvars ty"
+      then have "v |\<in>| TE_TypeVars env"
+        using is_well_kinded_type_tyvars_subset[OF wk] by auto
+      then have "v \<noteq> DT_Name dt" using notin by blast
+      then show "fmlookup (TE_AbstractAllocLevels env') v = fmlookup (TE_AbstractAllocLevels env) v"
+        by (rule lv_other)
+    qed
+    then show "alloc_level_compatible env' l ty"
+      using c0 unfolding alloc_level_compatible_def by simp
+  qed
+next
+  case (Transparent ty target)
+  show ?thesis using aok unfolding Transparent(8) Transparent(10) .
+next
+  case ExternRealize
+  let ?target = "CoreTy_Extern (DT_Name dt) (alloc_level_to_core (DT_AllocLevel dt))"
+  have lvl: "fmlookup (TE_AbstractAllocLevels env) (DT_Name dt)
+               = fmlookup (TE_AbstractAllocLevels env0) (DT_Name dt)"
+    by (rule elab_decls_invariant_declared_level[OF inv ExternRealize(5) ExternRealize(4)])
+  have fresh: "realization_ctor_fresh env (DT_Name dt) ?target"
+    by (rule realization_captures_ctor_fresh[OF ExternRealize(7)])
+  have noself: "DT_Name dt \<notin> type_tyvars ?target" by simp
+  show ?thesis
+    by (rule apply_realization_subst_alloc[OF aok lvl ExternRealize(6) noself fresh ExternRealize(8)])
+next
+  case ExternNew
+  show ?thesis using aok unfolding ExternNew(6) ExternNew(8) .
+qed
+
+(* ---- The dispatcher, the list, and the top-level fold ---- *)
+
+lemma elab_declaration_dispatch_subst_alloc:
+  assumes inv: "elab_decls_invariant env0 ownAbstract ctxGlobals env elabEnv m"
+      and aok: "subst_alloc_ok env0 env m"
+      and elab: "elab_declaration_dispatch env elabEnv ownAbstract ctxGlobals m d = Inr (env', elabEnv', m')"
+  shows "subst_alloc_ok env0 env' m'"
+proof (cases d)
+  case (BabDecl_Const dc)
+  then have e: "elab_const_decl env elabEnv ctxGlobals m dc = Inr (env', elabEnv', m')"
+    using elab by simp
+  show ?thesis by (rule elab_const_decl_subst_alloc[OF aok e])
+next
+  case (BabDecl_Function df)
+  then have e: "elab_function_decl env elabEnv m df = Inr (env', elabEnv', m')"
+    using elab by simp
+  show ?thesis by (rule elab_function_decl_subst_alloc[OF aok e])
+next
+  case (BabDecl_Datatype dd)
+  then have e: "elab_datatype_decl env elabEnv ownAbstract m dd = Inr (env', elabEnv', m')"
+    using elab by simp
+  show ?thesis by (rule elab_datatype_decl_subst_alloc[OF inv aok e])
+next
+  case (BabDecl_Typedef dt)
+  then have e: "elab_typedef_decl env elabEnv ownAbstract m dt = Inr (env', elabEnv', m')"
+    using elab by simp
+  show ?thesis by (rule elab_typedef_decl_subst_alloc[OF inv aok e])
+qed
+
+lemma elab_declaration_subst_alloc:
+  assumes inv: "elab_decls_invariant env0 ownAbstract ctxGlobals env elabEnv m"
+      and aok: "subst_alloc_ok env0 env m"
+      and elab: "elab_declaration env elabEnv ownAbstract ctxGlobals m d = Inr (env', elabEnv', m')"
+  shows "subst_alloc_ok env0 env' m'"
+proof -
+  from elab obtain d' where
+    disp: "elab_declaration_dispatch env elabEnv ownAbstract ctxGlobals m d'
+             = Inr (env', elabEnv', m')"
+    by (rule elab_declaration_Inr_elim)
+  show ?thesis by (rule elab_declaration_dispatch_subst_alloc[OF inv aok disp])
+qed
+
+lemma elab_declaration_list_subst_alloc:
+  assumes "elab_declaration_list env elabEnv ownAbstract ctxGlobals m ds = Inr (env', elabEnv', m')"
+      and "elab_decls_invariant env0 ownAbstract ctxGlobals env elabEnv m"
+      and "subst_alloc_ok env0 env m"
+      and "list_all decl_tyvars_fresh_ok ds"
+  shows "subst_alloc_ok env0 env' m'"
+  using assms
+proof (induction ds arbitrary: env elabEnv m)
+  case Nil
+  then show ?case by simp
+next
+  case (Cons d ds)
+  from Cons.prems(1) obtain env1 elabEnv1 m1 where
+    step: "elab_declaration env elabEnv ownAbstract ctxGlobals m d = Inr (env1, elabEnv1, m1)" and
+    rest: "elab_declaration_list env1 elabEnv1 ownAbstract ctxGlobals m1 ds = Inr (env', elabEnv', m')"
+    by (auto split: sum.splits prod.splits)
+  have fd: "decl_tyvars_fresh_ok d" and fds: "list_all decl_tyvars_fresh_ok ds"
+    using Cons.prems(4) by simp_all
+  have inv1: "elab_decls_invariant env0 ownAbstract ctxGlobals env1 elabEnv1 m1"
+    using elab_declaration_invariant[OF Cons.prems(2) fd step] .
+  have aok1: "subst_alloc_ok env0 env1 m1"
+    using elab_declaration_subst_alloc[OF Cons.prems(2) Cons.prems(3) step] .
+  show ?case
+    using Cons.IH[OF rest inv1 aok1 fds] .
+qed
+
 (* Companion of elab_declarations_invariant (ElabModuleCorrect.thy): the same
-   final state env additionally satisfies the runtime-soundness of the
-   recorded substitution. *)
+   final state env additionally satisfies the runtime-soundness and the
+   alloc-level soundness of the recorded substitution. *)
 lemma elab_declarations_subst_runtime:
   assumes ctx: "elab_context_ok env0 ownAbstract"
       and ee: "elabenv_well_formed env0 elabEnv0"
@@ -8797,6 +9469,7 @@ lemma elab_declarations_subst_runtime:
       and elab: "elab_declarations env0 elabEnv0 ownAbstract ctxGlobals decls = Inr (M, elabEnv')"
   obtains envF where "elab_decls_invariant env0 ownAbstract ctxGlobals envF elabEnv' M"
                  and "subst_runtime_ok env0 envF M"
+                 and "subst_alloc_ok env0 envF M"
 proof -
   have fresh: "list_all decl_tyvars_fresh_ok decls"
     using elab_declarations_decls_fresh[OF elab] .
@@ -8804,6 +9477,8 @@ proof -
     using elab_decls_invariant_init[OF ctx ee gv] .
   have init_rt: "subst_runtime_ok env0 env0 empty_core_module"
     unfolding subst_runtime_ok_def empty_core_module_def by simp
+  have init_al: "subst_alloc_ok env0 env0 empty_core_module"
+    unfolding subst_alloc_ok_def empty_core_module_def by simp
   from elab obtain envF where
     run: "elab_declaration_list env0 elabEnv0 ownAbstract ctxGlobals empty_core_module decls
             = Inr (envF, elabEnv', M)"
@@ -8813,6 +9488,8 @@ proof -
     using elab_declaration_list_invariant[OF run init fresh] .
   moreover have "subst_runtime_ok env0 envF M"
     using elab_declaration_list_subst_runtime[OF run init init_rt fresh] .
+  moreover have "subst_alloc_ok env0 envF M"
+    using elab_declaration_list_subst_alloc[OF run init init_al fresh] .
   ultimately show thesis by (rule that)
 qed
 
@@ -8822,7 +9499,8 @@ qed
 (* ========================================================================== *)
 
 (* The abstract types a declaration list can introduce: the names of its
-   definition-less typedefs. This is what connects the produced module's
+   definition-less, non-extern typedefs (an extern type is a concrete type,
+   recorded in EE_Typedefs only). This is what connects the produced module's
    TE_TypeVars to the syntax - the whole-program composition (step 8) needs
    "every abstract type of a module's interface is realized by its own
    implementation", and check_completeness speaks about abstract typedef
@@ -8830,7 +9508,7 @@ qed
    lemma below is the bridge. *)
 fun decl_abstract_names :: "BabDeclaration \<Rightarrow> string fset" where
   "decl_abstract_names (BabDecl_Typedef dt) =
-     (if DT_Definition dt = None then {|DT_Name dt|} else {||})"
+     (if DT_Definition dt = None \<and> \<not> DT_Extern dt then {|DT_Name dt|} else {||})"
 | "decl_abstract_names _ = {||}"
 
 definition decls_abstract_names :: "BabDeclaration list \<Rightarrow> string fset" where

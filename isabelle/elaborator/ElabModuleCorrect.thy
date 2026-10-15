@@ -481,6 +481,10 @@ lemma funion_list_map_snoc:
   "funion_list (map f (xs @ [x])) = funion_list (map f xs) |\<union>| f x"
   by (rule fset_eqI) (auto simp: funion_list_member)
 
+lemma fmlist_union_map_snoc:
+  "fmlist_union (map f (xs @ [x])) = fmlist_union (map f xs) ++\<^sub>f f x"
+  by (simp add: fmlist_union_append)
+
 lemma funion_list_map_empty:
   assumes "\<forall>x \<in> set xs. f x = {||}"
   shows "funion_list (map f xs) = {||}"
@@ -508,6 +512,7 @@ proof
     unfolding decls_abstract_names_def by (auto simp: funion_list_member)
   from n_d obtain dt where d_eq: "d = BabDecl_Typedef dt"
       and abs: "DT_Definition dt = None"
+      and nex: "\<not> DT_Extern dt"
       and n_eq: "n = DT_Name dt"
     by (cases d) (auto split: if_splits)
   have all_nil: "\<forall>d \<in> set intf.
@@ -529,13 +534,13 @@ proof
            else [])
       | BabDecl_Datatype dd \<Rightarrow> []
       | BabDecl_Typedef dt \<Rightarrow>
-          (if DT_Definition dt = None
+          (if DT_Definition dt = None \<and> \<not> DT_Extern dt
               \<and> DT_Name dt |\<notin>| fmdom (CM_TypeSubst implMod)
            then [TyErr_AbstractTypeNotRealized (DT_Location dt) (DT_Name dt)]
            else [])) = []"
     using ok unfolding check_completeness_def by simp
   from bspec[OF all_nil d_in] show "n |\<in>| fmdom (CM_TypeSubst implMod)"
-    unfolding d_eq using abs n_eq by (auto split: if_splits)
+    unfolding d_eq using abs nex n_eq by (auto split: if_splits)
 qed
 
 
@@ -633,9 +638,10 @@ lemma elab_module_Inr_elim:
    elaborator's own realization-site checks, carried through the fold by
    subst_runtime_ok. It is conditional on merge success alone, which the
    pipeline inherits from the whole-program link via merge_all_substs_sublist.
-   The corresponding conclusion for the alloc-level gate is still to be
-   added (the pipeline currently assumes it; see EXTERN.md): it should follow
-   from the elaborator's realization-time alloc-level check in the same way.
+   (x) is the corresponding conclusion for the alloc-level gate
+   (link_alloc_ok), discharged from the elaborator's realization-time
+   alloc-level check in the same way, carried through the fold by
+   subst_alloc_ok.
 
    Conclusions (vii)-(ix) feed the OTHER sublink obligation of step 8: the
    growing prefixes of the whole-program link go through
@@ -684,6 +690,10 @@ theorem elab_module_well_typed:
     and "subst_range_tyvars (CM_TypeSubst implMod)
            \<subseteq> fset (funion_list (map (\<lambda>x. TE_TypeVars (CM_TyEnv x))
                       (map fst intDeps @ map fst implDeps @ [intMod])))"      \<comment> \<open>(ix)\<close>
+    and "merge_all_substs (map CM_TypeSubst
+           (map fst intDeps @ map fst implDeps @ [intMod, implMod])) = Inr \<sigma>
+           \<Longrightarrow> link_alloc_ok
+                 (map fst intDeps @ map fst implDeps @ [intMod, implMod]) \<sigma>"    \<comment> \<open>(x)\<close>
 proof -
   \<comment> \<open>Unpack the orchestration.\<close>
   obtain a b sortedInt intFoldEnv sortedImpl implFoldEnv where
@@ -909,6 +919,7 @@ proof -
                              (TE_TypeVars (CM_TyEnv intMod)) (CM_GlobalVars b)
                              envG implFoldEnv implMod"
                 and rtokG: "subst_runtime_ok (CM_TyEnv b) envG implMod"
+                and aokG: "subst_alloc_ok (CM_TyEnv b) envG implMod"
     using ctxB eb_wf gvB elabImpl
     by (rule elab_declarations_subst_runtime)
   have concl_v: "core_module_invariant implMod
@@ -1108,6 +1119,78 @@ proof -
     qed
   qed
 
+  \<comment> \<open>Conclusion (x): the alloc-level gate of the derived implementation link.
+     As for (vi), the merged substitution is CM_TypeSubst implMod, and the four
+     env fields the level computation reads agree between the normalized
+     link_result of the list and the fold's final state env (the same union
+     over b's inputs plus implMod, with the same substitution applied). The
+     declarer of a resolved name is one of b's inputs (implMod declares no
+     abstract types), so the declared level is the one the fold-level fact
+     subst_alloc_ok was keyed on.\<close>
+  have concl_x: "link_alloc_ok
+                   (map fst intDeps @ map fst implDeps @ [intMod, implMod]) \<sigma>"
+    if merge: "merge_all_substs (map CM_TypeSubst
+                 (map fst intDeps @ map fst implDeps @ [intMod, implMod])) = Inr \<sigma>"
+    for \<sigma>
+  proof -
+    let ?Bs = "map fst intDeps @ map fst implDeps @ [intMod]"
+    let ?Ps = "map fst intDeps @ map fst implDeps @ [intMod, implMod]"
+    have implMod_inv: "core_module_invariant implMod"
+      using concl_v by blast
+    have idemI: "idempotent_subst (CM_TypeSubst implMod)"
+      using implMod_inv unfolding core_module_invariant_def by blast
+    have merge': "merge_all_substs (map CM_TypeSubst (?Bs @ [implMod])) = Inr \<sigma>"
+      using merge by simp
+    have \<sigma>_eq: "\<sigma> = CM_TypeSubst implMod"
+      using merge_substs_empties_snoc[OF merge' b_inputs_subst idemI] .
+    have dt_b: "TE_Datatypes (CM_TyEnv b)
+                  = fmlist_union (map (\<lambda>x. TE_Datatypes (CM_TyEnv x)) ?Bs)"
+      using bF(13) .
+    have dc_b: "TE_DataCtors (CM_TyEnv b)
+                  = fmlist_union (map (\<lambda>x. TE_DataCtors (CM_TyEnv x)) ?Bs)"
+      using bF(14) .
+    have bt_b: "TE_DataCtorsByType (CM_TyEnv b)
+                  = fmlist_union (map (\<lambda>x. TE_DataCtorsByType (CM_TyEnv x)) ?Bs)"
+      using bF(15) .
+    have lv_b: "TE_AbstractAllocLevels (CM_TyEnv b)
+                  = fmlist_union (map (\<lambda>x. TE_AbstractAllocLevels (CM_TyEnv x)) ?Bs)"
+      using bF(20) unfolding b_subst by simp
+    let ?L = "link_result ?Ps \<sigma>"
+    \<comment> \<open>Both sides normalize to the same left-nested union of the inputs'
+       tables (fmlist_union_append / fmlist_union_Cons split the input lists;
+       fmadd_assoc then gives a common normal form).\<close>
+    have fields: "alloc_fields_eq (CM_TyEnv (normalize_module ?L)) envG"
+      unfolding alloc_fields_eq_def envG_eq module_context_env_def
+                apply_subst_to_tyenv_def link_result_def normalize_module_def
+      by (simp add: fmlist_union_append fmlist_union_Cons dt_b dc_b bt_b lv_b \<sigma>_eq)
+    show ?thesis
+      unfolding link_alloc_ok_def
+    proof (intro allI impI)
+      fix n ty l
+      assume lk: "fmlookup \<sigma> n = Some ty"
+         and ll: "fmlookup (fmlist_union (map (\<lambda>x. TE_AbstractAllocLevels (CM_TyEnv x)) ?Ps)) n
+                    = Some l"
+      have lkI: "fmlookup (CM_TypeSubst implMod) n = Some ty"
+        using lk unfolding \<sigma>_eq .
+      \<comment> \<open>implMod declares no abstract types, so n's declarer is one of b's inputs.\<close>
+      have n_impl: "n |\<notin>| TE_AbstractTypes (CM_TyEnv implMod)"
+      proof -
+        have "TE_AbstractTypes (CM_TyEnv implMod) = TE_TypeVars (CM_TyEnv implMod)"
+          using implMod_inv unfolding core_module_invariant_def tyenv_module_scope_def by blast
+        then show ?thesis using concl_viii by simp
+      qed
+      \<comment> \<open>The lookup in the full list first tests implMod's table (rightmost,
+         highest priority); n is not there, so it falls through to b's union.\<close>
+      have ll_b: "fmlookup (TE_AbstractAllocLevels (CM_TyEnv b)) n = Some l"
+        using ll n_impl unfolding lv_b
+        by (simp add: fmlist_union_append fmlist_union_Cons split: if_splits)
+      have "alloc_level_compatible envG l ty"
+        using aokG lkI ll_b unfolding subst_alloc_ok_def by blast
+      then show "alloc_level_compatible (CM_TyEnv (normalize_module ?L)) l ty"
+        using alloc_level_compatible_cong_env[OF fields] by simp
+    qed
+  qed
+
   \<comment> \<open>Discharge the conclusions.\<close>
   show "link_modules (map fst intDeps @ [intMod]) = Inr L \<Longrightarrow> core_module_well_typed L"
     by (rule concl_i)
@@ -1135,6 +1218,11 @@ proof -
           \<subseteq> fset (funion_list (map (\<lambda>x. TE_TypeVars (CM_TyEnv x))
                      (map fst intDeps @ map fst implDeps @ [intMod])))"
     using concl_ix .
+  show "merge_all_substs (map CM_TypeSubst
+          (map fst intDeps @ map fst implDeps @ [intMod, implMod])) = Inr \<sigma>
+          \<Longrightarrow> link_alloc_ok
+                (map fst intDeps @ map fst implDeps @ [intMod, implMod]) \<sigma>"
+    by (rule concl_x)
 qed
 
 
@@ -1174,7 +1262,7 @@ proof -
            else [])
       | BabDecl_Datatype dd \<Rightarrow> []
       | BabDecl_Typedef dt \<Rightarrow>
-          (if DT_Definition dt = None
+          (if DT_Definition dt = None \<and> \<not> DT_Extern dt
               \<and> DT_Name dt |\<notin>| fmdom (CM_TypeSubst implMod)
            then [TyErr_AbstractTypeNotRealized (DT_Location dt) (DT_Name dt)]
            else [])) = []"

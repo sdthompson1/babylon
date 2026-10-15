@@ -422,8 +422,13 @@ definition type_error_to_string :: "TypeError \<Rightarrow> string" where
     | TyErr_TypeVarCapture loc name \<Rightarrow>
         loc_prefix loc @ ''type parameter '' @ quote name
           @ '' collides with a type of the same name''
-    | TyErr_ExternTypeNotImplemented loc \<Rightarrow>
-        loc_prefix loc @ quote ''extern type'' @ '' is not currently supported''
+    | TyErr_GhostTypeMustBeAbstract loc \<Rightarrow>
+        loc_prefix loc @ quote ''ghost type''
+          @ '' can only be used for abstract type declarations (''
+          @ quote ''ghost type T;'' @ '')''
+    | TyErr_IncompatibleAllocLevel loc name \<Rightarrow>
+        loc_prefix loc @ ''type '' @ quote name
+          @ '' might be allocated, but this was not declared in the interface''
     | TyErr_DeclarationOnlyInImplementation loc name \<Rightarrow>
         loc_prefix loc @ quote name
           @ '' is declared without a definition; this is only allowed in an interface''

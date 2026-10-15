@@ -35,6 +35,7 @@ session Babylon = "HOL-Library" +
     "bab_passes/BabStringHoist"
 
     (* core *)
+    "core/AllocLevelSubst"
     "core/ContractNames"
     "core/CoreAllocLevel"
     "core/CoreContractTypecheck"

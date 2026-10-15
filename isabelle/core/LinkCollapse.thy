@@ -1,5 +1,5 @@
 theory LinkCollapse
-  imports LinkModules SubstAbsorption
+  imports LinkModules SubstAbsorption AllocLevelSubst LinkPreservesWellTyped
 begin
 
 (* The **collapse lemma**:
@@ -1134,14 +1134,427 @@ proof -
   qed
 qed
 
+(* ========================================================================== *)
+(* Discharging the alloc-level check for realization-closed sub-lists         *)
+(* ========================================================================== *)
+
+(* What a well-typed link says about its inputs' constructor payloads and
+   about its substitution's ranges, in the form the locality theorem
+   (AllocLevelSubst.thy) consumes: a payload mentions only datatypes of the
+   link and only type variables that are its constructor's own parameters,
+   abstract types of the link, or resolved by the link; a range mentions only
+   datatypes and abstract types of the link; and every constructor a
+   constructor list names is in the link's constructor table. *)
+lemma well_typed_link_entry_facts:
+  assumes ok: "link_modules ms = Inr L"
+      and wt: "core_module_well_typed L"
+  shows "\<And>x c dt tyvars p. x \<in> set ms \<Longrightarrow>
+           fmlookup (TE_DataCtors (CM_TyEnv x)) c = Some (dt, tyvars, p) \<Longrightarrow>
+           type_datatypes p \<subseteq> fset (fmdom (TE_Datatypes (CM_TyEnv L)))
+           \<and> type_tyvars p \<subseteq> set tyvars \<union> fset (TE_TypeVars (CM_TyEnv L))
+                               \<union> fset (fmdom (CM_TypeSubst L))"
+    and "\<And>n ty. fmlookup (CM_TypeSubst L) n = Some ty \<Longrightarrow>
+           type_datatypes ty \<subseteq> fset (fmdom (TE_Datatypes (CM_TyEnv L)))
+           \<and> type_tyvars ty \<subseteq> fset (TE_TypeVars (CM_TyEnv L))"
+    and "\<And>x dt cs c. x \<in> set ms \<Longrightarrow>
+           fmlookup (TE_DataCtorsByType (CM_TyEnv x)) dt = Some cs \<Longrightarrow> c \<in> set cs \<Longrightarrow>
+           c |\<in>| fmdom (TE_DataCtors (CM_TyEnv L))"
+    and "\<And>x dt a. x \<in> set ms \<Longrightarrow>
+           fmlookup (TE_Datatypes (CM_TyEnv x)) dt = Some a \<Longrightarrow>
+           dt |\<in>| fmdom (TE_DataCtorsByType (CM_TyEnv L))"
+proof -
+  have disj: "link_fields_disjoint ms"
+    using ok link_modules_Inr_iff[of ms L] by blast
+  note fL = link_modules_result_fields[OF ok]
+  have d3: "fmdisjoint_list (map (\<lambda>x. TE_Datatypes (CM_TyEnv x)) ms)"
+   and d4: "fmdisjoint_list (map (\<lambda>x. TE_DataCtors (CM_TyEnv x)) ms)"
+   and d5: "fmdisjoint_list (map (\<lambda>x. TE_DataCtorsByType (CM_TyEnv x)) ms)"
+    using disj unfolding link_fields_disjoint_def by blast+
+  let ?N = "normalize_module L"
+  have nwt: "normalized_module_well_typed ?N"
+   and tswk: "typesubst_well_kinded (CM_TyEnv L) (CM_TypeSubst L)"
+    using wt unfolding core_module_well_typed_def by blast+
+  have wf: "tyenv_well_formed (CM_TyEnv ?N)"
+    using nwt unfolding normalized_module_well_typed_def by blast
+  have pwk: "tyenv_payloads_well_kinded (CM_TyEnv ?N)"
+   and abs_sub: "tyenv_abstract_types_subset (CM_TyEnv ?N)"
+   and bt_cons: "tyenv_ctors_by_type_consistent (CM_TyEnv ?N)"
+   and dt_ne: "tyenv_datatypes_nonempty (CM_TyEnv ?N)"
+    using wf unfolding tyenv_well_formed_def by blast+
+  have abs_tv: "TE_AbstractTypes (CM_TyEnv L) |\<subseteq>| TE_TypeVars (CM_TyEnv L)"
+    using abs_sub unfolding tyenv_abstract_types_subset_def by simp
+  show "\<And>x c dt tyvars p. x \<in> set ms \<Longrightarrow>
+          fmlookup (TE_DataCtors (CM_TyEnv x)) c = Some (dt, tyvars, p) \<Longrightarrow>
+          type_datatypes p \<subseteq> fset (fmdom (TE_Datatypes (CM_TyEnv L)))
+          \<and> type_tyvars p \<subseteq> set tyvars \<union> fset (TE_TypeVars (CM_TyEnv L))
+                              \<union> fset (fmdom (CM_TypeSubst L))"
+  proof -
+    fix x c dt tyvars p
+    assume x_in: "x \<in> set ms" and lk: "fmlookup (TE_DataCtors (CM_TyEnv x)) c = Some (dt, tyvars, p)"
+    have lkL: "fmlookup (TE_DataCtors (CM_TyEnv L)) c = Some (dt, tyvars, p)"
+      unfolding fL(14) using fmlist_union_lookup[OF d4] x_in lk by force
+    have lkN: "fmlookup (TE_DataCtors (CM_TyEnv ?N)) c
+                 = Some (dt, tyvars, apply_subst (CM_TypeSubst L) p)"
+      using lkL by (simp add: apply_subst_to_datactor_def)
+    have wk: "is_well_kinded (CM_TyEnv ?N \<lparr> TE_TypeVars := TE_AbstractTypes (CM_TyEnv ?N)
+                                            |\<union>| fset_of_list tyvars \<rparr>)
+                             (apply_subst (CM_TypeSubst L) p)"
+      using pwk lkN unfolding tyenv_payloads_well_kinded_def by blast
+    have d1: "type_datatypes (apply_subst (CM_TypeSubst L) p)
+                \<subseteq> fset (fmdom (TE_Datatypes (CM_TyEnv L)))"
+      using is_well_kinded_type_datatypes_subset[OF wk] by simp
+    have t1: "\<And>v. v \<in> type_tyvars (apply_subst (CM_TypeSubst L) p)
+                \<Longrightarrow> v |\<in>| TE_AbstractTypes (CM_TyEnv L) \<or> v \<in> set tyvars"
+      using is_well_kinded_type_tyvars_subset[OF wk] by (auto simp: fset_of_list_elem)
+    have "type_datatypes p \<subseteq> fset (fmdom (TE_Datatypes (CM_TyEnv L)))"
+      using type_datatypes_subset_apply_subst d1 by blast
+    moreover have "type_tyvars p \<subseteq> set tyvars \<union> fset (TE_TypeVars (CM_TyEnv L))
+                                   \<union> fset (fmdom (CM_TypeSubst L))"
+    proof
+      fix v assume "v \<in> type_tyvars p"
+      then have "v \<in> type_tyvars (apply_subst (CM_TypeSubst L) p) \<or> v |\<in>| fmdom (CM_TypeSubst L)"
+        using type_tyvars_subset_apply_subst[of p "CM_TypeSubst L"] by auto
+      then show "v \<in> set tyvars \<union> fset (TE_TypeVars (CM_TyEnv L)) \<union> fset (fmdom (CM_TypeSubst L))"
+        using t1 abs_tv by (auto dest: fsubsetD)
+    qed
+    ultimately show "type_datatypes p \<subseteq> fset (fmdom (TE_Datatypes (CM_TyEnv L)))
+          \<and> type_tyvars p \<subseteq> set tyvars \<union> fset (TE_TypeVars (CM_TyEnv L))
+                              \<union> fset (fmdom (CM_TypeSubst L))"
+      by blast
+  qed
+  show "\<And>n ty. fmlookup (CM_TypeSubst L) n = Some ty \<Longrightarrow>
+          type_datatypes ty \<subseteq> fset (fmdom (TE_Datatypes (CM_TyEnv L)))
+          \<and> type_tyvars ty \<subseteq> fset (TE_TypeVars (CM_TyEnv L))"
+  proof -
+    fix n ty assume lk: "fmlookup (CM_TypeSubst L) n = Some ty"
+    have wk: "is_well_kinded (CM_TyEnv L) ty"
+      using tswk lk unfolding typesubst_well_kinded_def by blast
+    show "type_datatypes ty \<subseteq> fset (fmdom (TE_Datatypes (CM_TyEnv L)))
+          \<and> type_tyvars ty \<subseteq> fset (TE_TypeVars (CM_TyEnv L))"
+      using is_well_kinded_type_datatypes_subset[OF wk] is_well_kinded_type_tyvars_subset[OF wk]
+      by blast
+  qed
+  show "\<And>x dt cs c. x \<in> set ms \<Longrightarrow>
+          fmlookup (TE_DataCtorsByType (CM_TyEnv x)) dt = Some cs \<Longrightarrow> c \<in> set cs \<Longrightarrow>
+          c |\<in>| fmdom (TE_DataCtors (CM_TyEnv L))"
+  proof -
+    fix x dt cs c
+    assume x_in: "x \<in> set ms" and lk: "fmlookup (TE_DataCtorsByType (CM_TyEnv x)) dt = Some cs"
+       and c_in: "c \<in> set cs"
+    have lkL: "fmlookup (TE_DataCtorsByType (CM_TyEnv ?N)) dt = Some cs"
+      unfolding normalize_module_simps apply_subst_to_tyenv_simps fL(15)
+      using fmlist_union_lookup[OF d5] x_in lk by force
+    obtain tyvars p where "fmlookup (TE_DataCtors (CM_TyEnv ?N)) c = Some (dt, tyvars, p)"
+      using bt_cons lkL c_in unfolding tyenv_ctors_by_type_consistent_def by blast
+    then show "c |\<in>| fmdom (TE_DataCtors (CM_TyEnv L))"
+      by (auto simp: fmlookup_dom_iff)
+  qed
+  show "\<And>x dt a. x \<in> set ms \<Longrightarrow>
+          fmlookup (TE_Datatypes (CM_TyEnv x)) dt = Some a \<Longrightarrow>
+          dt |\<in>| fmdom (TE_DataCtorsByType (CM_TyEnv L))"
+  proof -
+    fix x dt a
+    assume x_in: "x \<in> set ms" and lk: "fmlookup (TE_Datatypes (CM_TyEnv x)) dt = Some a"
+    have "fmlookup (TE_Datatypes (CM_TyEnv L)) dt = Some a"
+      unfolding fL(13) using fmlist_union_lookup[OF d3] x_in lk by force
+    then have "dt |\<in>| fmdom (TE_Datatypes (CM_TyEnv L))"
+      by (rule fmdomI)
+    then have "dt |\<in>| fmdom (TE_Datatypes (CM_TyEnv ?N))"
+      by simp
+    then have "dt |\<in>| fmdom (TE_DataCtorsByType (CM_TyEnv ?N))"
+      using dt_ne unfolding tyenv_datatypes_nonempty_def by (auto dest: fsubsetD)
+    then show "dt |\<in>| fmdom (TE_DataCtorsByType (CM_TyEnv L))"
+      by simp
+  qed
+qed
+
+(* The alloc-level check holds on a realization-closed sub-multiset of a
+   successful link, given that the sub-list's payloads and merged ranges stay
+   within the sub-list (which a well-typed link containing each input supplies
+   through well_typed_link_entry_facts). Every checked entry is ground and
+   agrees with the full closure's, the full link's check bounds its level in
+   the full normalized env, and the locality theorem moves that level to the
+   sub-list's normalized env: the sub-list's datatypes have the same entries
+   in both (their payloads are substituted identically, because every payload
+   variable is either a bound parameter, which no link substitutes, or resolved
+   within the sub-list, where the two closures agree). *)
+lemma link_alloc_ok_sublist_ground:
+  assumes ok: "link_modules ms = Inr m"
+      and sub: "mset as \<subseteq># mset ms"
+      and merge_as: "merge_all_substs (map CM_TypeSubst as) = Inr \<sigma>a"
+      and closed: "subst_range_tyvars (fmlist_union (map CM_TypeSubst as))
+                     \<subseteq> fset (fmdom (fmlist_union (map CM_TypeSubst as)))"
+      and rng: "\<And>n ty. fmlookup \<sigma>a n = Some ty \<Longrightarrow>
+                  type_datatypes ty
+                    \<subseteq> fset (fmdom (fmlist_union (map (\<lambda>x. TE_Datatypes (CM_TyEnv x)) as)))"
+      and pay: "\<And>x c dt tyvars p. x \<in> set as \<Longrightarrow>
+                  fmlookup (TE_DataCtors (CM_TyEnv x)) c = Some (dt, tyvars, p) \<Longrightarrow>
+                  type_datatypes p
+                    \<subseteq> fset (fmdom (fmlist_union (map (\<lambda>x. TE_Datatypes (CM_TyEnv x)) as)))
+                  \<and> type_tyvars p \<subseteq> set tyvars \<union> fset (fmdom \<sigma>a)"
+      and cov: "\<And>x dt cs c. x \<in> set as \<Longrightarrow>
+                  fmlookup (TE_DataCtorsByType (CM_TyEnv x)) dt = Some cs \<Longrightarrow> c \<in> set cs \<Longrightarrow>
+                  c |\<in>| fmdom (fmlist_union (map (\<lambda>x. TE_DataCtors (CM_TyEnv x)) as))"
+      and nonempty: "\<And>x dt a. x \<in> set as \<Longrightarrow>
+                  fmlookup (TE_Datatypes (CM_TyEnv x)) dt = Some a \<Longrightarrow>
+                  dt |\<in>| fmdom (fmlist_union (map (\<lambda>x. TE_DataCtorsByType (CM_TyEnv x)) as))"
+  shows "link_alloc_ok as \<sigma>a"
+proof -
+  have msub: "mset (map f as) \<subseteq># mset (map f ms)" for f :: "CoreModule \<Rightarrow> 'b"
+    using sub by (metis image_mset_subseteq_mono mset_map)
+  have set_sub: "set as \<subseteq> set ms"
+    using sub by (metis set_mset_mono set_mset_mset)
+  have set_sub_substs: "set (map CM_TypeSubst as) \<subseteq> set (map CM_TypeSubst ms)"
+    using set_sub by auto
+  obtain \<sigma> where merge_ms: "merge_all_substs (map CM_TypeSubst ms) = Inr \<sigma>"
+      and aok_ms: "link_alloc_ok ms \<sigma>"
+      and disj_ms: "link_fields_disjoint ms"
+      and cap_ms: "link_capture_ok ms"
+    using ok link_modules_Inr_iff[of ms m] by blast
+  have sdisj_ms: "fmdisjoint_list (map CM_TypeSubst ms)"
+    using merge_ms merge_all_substs_Inr_iff[of "map CM_TypeSubst ms" \<sigma>] by blast
+  have lk_sub: "\<And>k v. fmlookup (fmlist_union (map CM_TypeSubst as)) k = Some v
+                  \<Longrightarrow> fmlookup (fmlist_union (map CM_TypeSubst ms)) k = Some v"
+    using fmlist_union_sublist_lookup[OF sdisj_ms set_sub_substs] .
+  have disj_as: "link_fields_disjoint as"
+    using disj_ms unfolding link_fields_disjoint_def
+    by (metis fmdisjoint_list_submset msub)
+  have d3: "fmdisjoint_list (map (\<lambda>x. TE_Datatypes (CM_TyEnv x)) ms)"
+   and d4: "fmdisjoint_list (map (\<lambda>x. TE_DataCtors (CM_TyEnv x)) ms)"
+   and d5: "fmdisjoint_list (map (\<lambda>x. TE_DataCtorsByType (CM_TyEnv x)) ms)"
+   and d8: "fmdisjoint_list (map (\<lambda>x. TE_AbstractAllocLevels (CM_TyEnv x)) ms)"
+    using disj_ms unfolding link_fields_disjoint_def by blast+
+  have d4a: "fmdisjoint_list (map (\<lambda>x. TE_DataCtors (CM_TyEnv x)) as)"
+   and d5a: "fmdisjoint_list (map (\<lambda>x. TE_DataCtorsByType (CM_TyEnv x)) as)"
+    using disj_as unfolding link_fields_disjoint_def by blast+
+  have sub3: "set (map (\<lambda>x. TE_Datatypes (CM_TyEnv x)) as)
+                \<subseteq> set (map (\<lambda>x. TE_Datatypes (CM_TyEnv x)) ms)"
+   and sub4: "set (map (\<lambda>x. TE_DataCtors (CM_TyEnv x)) as)
+                \<subseteq> set (map (\<lambda>x. TE_DataCtors (CM_TyEnv x)) ms)"
+   and sub5: "set (map (\<lambda>x. TE_DataCtorsByType (CM_TyEnv x)) as)
+                \<subseteq> set (map (\<lambda>x. TE_DataCtorsByType (CM_TyEnv x)) ms)"
+   and sub8: "set (map (\<lambda>x. TE_AbstractAllocLevels (CM_TyEnv x)) as)
+                \<subseteq> set (map (\<lambda>x. TE_AbstractAllocLevels (CM_TyEnv x)) ms)"
+    using set_sub by auto
+
+  \<comment> \<open>The two closures.\<close>
+  have ground: "\<And>n ty. fmlookup \<sigma>a n = Some ty \<Longrightarrow> type_tyvars ty = {}"
+    using merge_all_substs_ground_entries[OF merge_as closed] .
+  have agree: "fmlookup \<sigma> n = fmlookup \<sigma>a n" if n_dom: "n |\<in>| fmdom \<sigma>a" for n
+  proof -
+    obtain ty where lk: "fmlookup \<sigma>a n = Some ty"
+      using n_dom by (metis fmlookup_dom_iff)
+    have "type_tyvars (the (fmlookup \<sigma>a n)) = {}"
+      using ground[OF lk] lk by simp
+    then show ?thesis
+      using sub_closure_ground_entry_agrees[OF merge_ms merge_as lk_sub n_dom] by simp
+  qed
+  have dom_sub: "fmdom \<sigma>a |\<subseteq>| fmdom \<sigma>"
+  proof
+    fix n assume "n |\<in>| fmdom \<sigma>a"
+    then show "n |\<in>| fmdom \<sigma>"
+      using agree[of n] by (metis fmlookup_dom_iff)
+  qed
+  \<comment> \<open>No bound constructor parameter of an input is resolved by the full link.\<close>
+  have cap: "v |\<notin>| fmdom \<sigma>"
+    if x_in: "x \<in> set as" and lk: "fmlookup (TE_DataCtors (CM_TyEnv x)) c = Some (dt, tyvars, p)"
+       and v_in: "v \<in> set tyvars"
+    for x c dt tyvars p v
+  proof
+    assume v_dom: "v |\<in>| fmdom \<sigma>"
+    have "fmdom \<sigma> = fmdom (fmlist_union (map CM_TypeSubst ms))"
+      using merge_ms merge_all_substs_Inr_iff[of "map CM_TypeSubst ms" \<sigma>]
+      unfolding is_subst_closure_def by blast
+    then have "v |\<in>| funion_list (map (\<lambda>x. fmdom (CM_TypeSubst x)) ms)"
+      using v_dom unfolding fmdom_fmlist_union by (simp add: comp_def)
+    then obtain y where y_in: "y \<in> set ms" and "v |\<in>| fmdom (CM_TypeSubst y)"
+      by (auto simp: funion_list_member)
+    then have "v |\<in>| subst_names (CM_TypeSubst y)"
+      by (simp add: subst_names_member)
+    then have names: "v |\<in>| funion_list (map (\<lambda>x. subst_names (CM_TypeSubst x)) ms)"
+      using y_in by (auto simp: funion_list_member)
+    have "v |\<in>| module_bound_tyvars x"
+      using module_bound_tyvars_ctor[OF lk v_in] .
+    then have bound: "v |\<in>| funion_list (map module_bound_tyvars ms)"
+      using x_in set_sub by (auto simp: funion_list_member)
+    show False
+      using cap_ms names bound unfolding link_capture_ok_def by blast
+  qed
+  \<comment> \<open>So the two closures substitute every payload identically.\<close>
+  have pay_eq: "apply_subst \<sigma> p = apply_subst \<sigma>a p"
+    if x_in: "x \<in> set as" and lk: "fmlookup (TE_DataCtors (CM_TyEnv x)) c = Some (dt, tyvars, p)"
+    for x c dt tyvars p
+  proof (rule apply_subst_cong_on_tyvars)
+    fix v assume v_in: "v \<in> type_tyvars p"
+    have "v \<in> set tyvars \<or> v |\<in>| fmdom \<sigma>a"
+      using pay[OF x_in lk] v_in by auto
+    then show "fmlookup \<sigma> v = fmlookup \<sigma>a v"
+    proof
+      assume "v \<in> set tyvars"
+      then have "v |\<notin>| fmdom \<sigma>" using cap[OF x_in lk] by blast
+      then have "v |\<notin>| fmdom \<sigma>a" using dom_sub by blast
+      with \<open>v |\<notin>| fmdom \<sigma>\<close> show ?thesis by (simp add: fmdom_notD)
+    next
+      assume "v |\<in>| fmdom \<sigma>a"
+      then show ?thesis by (rule agree)
+    qed
+  qed
+
+  \<comment> \<open>The two normalized envs.\<close>
+  let ?P1 = "CM_TyEnv (normalize_module (link_result as \<sigma>a))"
+  let ?P2 = "CM_TyEnv (normalize_module (link_result ms \<sigma>))"
+  let ?DT1 = "fmlist_union (map (\<lambda>x. TE_Datatypes (CM_TyEnv x)) as)"
+  let ?DC1 = "fmlist_union (map (\<lambda>x. TE_DataCtors (CM_TyEnv x)) as)"
+  let ?DC2 = "fmlist_union (map (\<lambda>x. TE_DataCtors (CM_TyEnv x)) ms)"
+  have dt1: "TE_Datatypes ?P1 = ?DT1"
+   and bt1: "TE_DataCtorsByType ?P1 = fmlist_union (map (\<lambda>x. TE_DataCtorsByType (CM_TyEnv x)) as)"
+   and dc1: "TE_DataCtors ?P1 = fmmap (apply_subst_to_datactor \<sigma>a) ?DC1"
+   and dt2: "TE_Datatypes ?P2 = fmlist_union (map (\<lambda>x. TE_Datatypes (CM_TyEnv x)) ms)"
+   and bt2: "TE_DataCtorsByType ?P2 = fmlist_union (map (\<lambda>x. TE_DataCtorsByType (CM_TyEnv x)) ms)"
+   and dc2: "TE_DataCtors ?P2 = fmmap (apply_subst_to_datactor \<sigma>) ?DC2"
+    unfolding link_result_def by simp_all
+
+  \<comment> \<open>A constructor entry of the sub-list's normalized env is some input's
+     entry, substituted.\<close>
+  have dc1_entry: "\<exists>x \<in> set as. \<exists>p. fmlookup (TE_DataCtors (CM_TyEnv x)) c = Some (dt, tyvars, p)
+                                   \<and> p1 = apply_subst \<sigma>a p"
+    if lk1: "fmlookup (TE_DataCtors ?P1) c = Some (dt, tyvars, p1)" for c dt tyvars p1
+  proof -
+    obtain e where lkU: "fmlookup ?DC1 c = Some e" and e_eq: "apply_subst_to_datactor \<sigma>a e = (dt, tyvars, p1)"
+      using lk1 unfolding dc1 by auto
+    obtain d0 tv0 p0 where e: "e = (d0, tv0, p0)"
+      using prod_cases3 by blast
+    have "d0 = dt" "tv0 = tyvars" "p1 = apply_subst \<sigma>a p0"
+      using e_eq unfolding e apply_subst_to_datactor_def by simp_all
+    moreover obtain x where "x \<in> set as" and "fmlookup (TE_DataCtors (CM_TyEnv x)) c = Some e"
+      using fmlist_union_lookup[OF d4a] lkU by auto
+    ultimately show ?thesis unfolding e by blast
+  qed
+
+  have agreeP: "env_local_agree ?P1 ?P2"
+    unfolding env_local_agree_def
+  proof (intro conjI allI impI)
+    fix dt assume dt_in: "dt |\<in>| fmdom (TE_Datatypes ?P1)"
+    show "fmlookup (TE_Datatypes ?P2) dt = fmlookup (TE_Datatypes ?P1) dt"
+      using dt_in unfolding dt1 dt2
+      by (metis fmlookup_dom_iff fmlist_union_sublist_lookup[OF d3 sub3])
+    show "fmlookup (TE_DataCtorsByType ?P2) dt = fmlookup (TE_DataCtorsByType ?P1) dt"
+    proof -
+      obtain a where "fmlookup ?DT1 dt = Some a"
+        using dt_in unfolding dt1 by (metis fmlookup_dom_iff)
+      then obtain x where x_in: "x \<in> set as"
+          and x_dt: "fmlookup (TE_Datatypes (CM_TyEnv x)) dt = Some a"
+        using fmlist_union_lookup[OF fmdisjoint_list_submset[OF msub d3]] by auto
+      have "dt |\<in>| fmdom (TE_DataCtorsByType ?P1)"
+        unfolding bt1 by (rule nonempty[OF x_in x_dt])
+      then obtain cs where "fmlookup (TE_DataCtorsByType ?P1) dt = Some cs"
+        by (metis fmlookup_dom_iff)
+      then show ?thesis
+        unfolding bt1 bt2
+        by (metis fmlist_union_sublist_lookup[OF d5 sub5])
+    qed
+  next
+    fix dt cs c
+    assume dt_in: "dt |\<in>| fmdom (TE_Datatypes ?P1)"
+       and cs: "fmlookup (TE_DataCtorsByType ?P1) dt = Some cs" and c_in: "c \<in> set cs"
+    obtain x where x_in: "x \<in> set as" and x_cs: "fmlookup (TE_DataCtorsByType (CM_TyEnv x)) dt = Some cs"
+      using cs[unfolded bt1] fmlist_union_lookup[OF d5a] by auto
+    have "c |\<in>| fmdom ?DC1" by (rule cov[OF x_in x_cs c_in])
+    then obtain e where lkU: "fmlookup ?DC1 c = Some e"
+      by (metis fmlookup_dom_iff)
+    obtain y where y_in: "y \<in> set as" and y_lk: "fmlookup (TE_DataCtors (CM_TyEnv y)) c = Some e"
+      using fmlist_union_lookup[OF d4a] lkU by auto
+    have lkU2: "fmlookup ?DC2 c = Some e"
+      using fmlist_union_sublist_lookup[OF d4 sub4 lkU] .
+    obtain d0 tv0 p0 where e: "e = (d0, tv0, p0)"
+      using prod_cases3 by blast
+    have "apply_subst \<sigma> p0 = apply_subst \<sigma>a p0"
+      using pay_eq[OF y_in] y_lk unfolding e by blast
+    then show "fmlookup (TE_DataCtors ?P2) c = fmlookup (TE_DataCtors ?P1) c"
+      unfolding dc1 dc2 using lkU lkU2 by (simp add: e apply_subst_to_datactor_def)
+  next
+    fix c dt tyvars p1
+    assume lk1: "fmlookup (TE_DataCtors ?P1) c = Some (dt, tyvars, p1)"
+    obtain x p where x_in: "x \<in> set as"
+        and lk: "fmlookup (TE_DataCtors (CM_TyEnv x)) c = Some (dt, tyvars, p)"
+        and p1_eq: "p1 = apply_subst \<sigma>a p"
+      using dc1_entry[OF lk1] by blast
+    have pd: "type_datatypes p \<subseteq> fset (fmdom ?DT1)"
+      using pay[OF x_in lk] by blast
+    show "type_datatypes p1 \<subseteq> fset (fmdom (TE_Datatypes ?P1))"
+    proof
+      fix d assume "d \<in> type_datatypes p1"
+      then have "d \<in> type_datatypes p
+                 \<or> (\<exists>v \<in> type_tyvars p. d \<in> type_datatypes (apply_subst \<sigma>a (CoreTy_Var v)))"
+        unfolding p1_eq using type_datatypes_apply_subst_bound[of \<sigma>a p] by blast
+      then show "d \<in> fset (fmdom (TE_Datatypes ?P1))"
+      proof
+        assume "d \<in> type_datatypes p"
+        then show ?thesis using pd unfolding dt1 by blast
+      next
+        assume "\<exists>v \<in> type_tyvars p. d \<in> type_datatypes (apply_subst \<sigma>a (CoreTy_Var v))"
+        then obtain v where "d \<in> type_datatypes (apply_subst \<sigma>a (CoreTy_Var v))" by blast
+        then show ?thesis
+          unfolding dt1 by (cases "fmlookup \<sigma>a v") (auto dest: rng)
+      qed
+    qed
+  next
+    fix c dt tyvars p1
+    assume lk1: "fmlookup (TE_DataCtors ?P1) c = Some (dt, tyvars, p1)"
+    obtain x p where x_in: "x \<in> set as"
+        and lk: "fmlookup (TE_DataCtors (CM_TyEnv x)) c = Some (dt, tyvars, p)"
+        and p1_eq: "p1 = apply_subst \<sigma>a p"
+      using dc1_entry[OF lk1] by blast
+    have ptv: "type_tyvars p \<subseteq> set tyvars \<union> fset (fmdom \<sigma>a)"
+      using pay[OF x_in lk] by blast
+    show "\<forall>v \<in> type_tyvars p1. v \<notin> set tyvars \<longrightarrow>
+            fmlookup (TE_AbstractAllocLevels ?P2) v = fmlookup (TE_AbstractAllocLevels ?P1) v"
+    proof (intro ballI impI)
+      fix v assume v_in: "v \<in> type_tyvars p1" and v_nb: "v \<notin> set tyvars"
+      have "subst_range_tyvars \<sigma>a = {}"
+        using ground unfolding subst_range_tyvars_def by (auto simp: fmlookup_ran'_iff)
+      then have "v \<in> type_tyvars p - fset (fmdom \<sigma>a)"
+        using apply_subst_tyvars_result[of \<sigma>a p] v_in unfolding p1_eq by blast
+      then have False using ptv v_nb by blast
+      then show "fmlookup (TE_AbstractAllocLevels ?P2) v = fmlookup (TE_AbstractAllocLevels ?P1) v" ..
+    qed
+  qed
+
+  show ?thesis
+    unfolding link_alloc_ok_def
+  proof (intro allI impI)
+    fix n ty l
+    assume lk_a: "fmlookup \<sigma>a n = Some ty"
+       and ll_a: "fmlookup (fmlist_union (map (\<lambda>x. TE_AbstractAllocLevels (CM_TyEnv x)) as)) n = Some l"
+    have n_dom: "n |\<in>| fmdom \<sigma>a" using lk_a by (rule fmdomI)
+    have lk_m: "fmlookup \<sigma> n = Some ty"
+      using agree[OF n_dom] lk_a by simp
+    have ll_m: "fmlookup (fmlist_union (map (\<lambda>x. TE_AbstractAllocLevels (CM_TyEnv x)) ms)) n = Some l"
+      using fmlist_union_sublist_lookup[OF d8 sub8 ll_a] .
+    have full: "alloc_level_compatible ?P2 l ty"
+      using aok_ms lk_m ll_m unfolding link_alloc_ok_def by blast
+    have "alloc_level_of_type ?P2 ty = alloc_level_of_type ?P1 ty"
+    proof (rule alloc_level_of_type_local[OF agreeP])
+      show "type_datatypes ty \<subseteq> fset (fmdom (TE_Datatypes ?P1))"
+        unfolding dt1 by (rule rng[OF lk_a])
+    next
+      fix v assume "v \<in> type_tyvars ty"
+      then show "fmlookup (TE_AbstractAllocLevels ?P2) v = fmlookup (TE_AbstractAllocLevels ?P1) v"
+        using ground[OF lk_a] by simp
+    qed
+    then show "alloc_level_compatible ?P1 l ty"
+      using full unfolding alloc_level_compatible_def by simp
+  qed
+qed
+
 (* The packaged form: a realization-closed sub-multiset of a successful link
    links successfully, given the alloc-level check on its merged
    substitution. This is the workhorse for the whole-program composition's
    prefix links (step 8b); the empty-substs form above remains the right tool
    for interface-only sub-links. The alloc-level check is the caller's
-   hypothesis for now: its transfer from the full link to a realization-closed
-   sub-list (the analogue of link_runtime_ok_sublist_ground) is still to be
-   proved; see EXTERN.md. *)
+   hypothesis: the whole-program composition discharges it with
+   link_alloc_ok_sublist_ground, whose payload hypotheses it assembles from
+   the well-typed links it already has. *)
 lemma link_modules_sublink_ground:
   assumes ok: "link_modules ms = Inr m"
       and sub: "mset as \<subseteq># mset ms"
