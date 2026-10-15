@@ -516,7 +516,7 @@ struct Item * add_tyvar_to_env(struct VContext *context, const char *name, bool 
     //  - ALLOC_NEVER: no value is allocated, so $allocated is defined as false.
     //  - ALLOC_IF_NOT_DEFAULT: the default value is not allocated (but a
     //    non-default value may or may not be allocated).
-    //  - ALLOC_ALWAYS, ALLOC_UNKNOWN: nothing is known.
+    //  - ALLOC_UNKNOWN: nothing is known.
     if (alloc_level == ALLOC_NEVER) {
         // (define-fun $allocated-%^name (($x %^name)) Bool false)
         item->fol_decl = make_list5_sexpr(

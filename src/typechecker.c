@@ -450,9 +450,6 @@ static enum AllocLevel get_alloc_level(struct TypecheckContext *tc_context, stru
             enum AllocLevel level = ALLOC_NEVER;
             for (struct NameTypeList *field = type->record_data.fields; field; field = field->next) {
                 enum AllocLevel new_level = get_alloc_level(tc_context, field->type);
-                if (new_level == ALLOC_UNKNOWN) {
-                    return ALLOC_UNKNOWN;
-                }
                 if (new_level > level) {
                     level = new_level;
                 }
@@ -467,13 +464,10 @@ static enum AllocLevel get_alloc_level(struct TypecheckContext *tc_context, stru
         enum AllocLevel level = ALLOC_NEVER;
         for (struct NameTypeList *variant = type->variant_data.variants; variant; variant = variant->next) {
             enum AllocLevel new_level = get_alloc_level(tc_context, variant->type);
-            if (variant != type->variant_data.variants && new_level == ALLOC_ALWAYS) {
+            if (variant != type->variant_data.variants && new_level == ALLOC_UNKNOWN) {
                 // "non-first" variants only come into play if the
                 // variant type is not equal to its default...
                 new_level = ALLOC_IF_NOT_DEFAULT;
-            }
-            if (new_level == ALLOC_UNKNOWN) {
-                return ALLOC_UNKNOWN;
             }
             if (new_level > level) {
                 level = new_level;
@@ -4142,9 +4136,6 @@ static bool replace_abstract_type_with_concrete(struct TypecheckContext *tc_cont
 
             // The alloc level must be compatible with the previously declared.
             enum AllocLevel new_alloc_level = get_alloc_level(tc_context, new_type);
-            if (new_alloc_level == ALLOC_UNKNOWN || prev_entry->alloc_level == ALLOC_UNKNOWN) {
-                fatal_error("not expecting alloc_level to be unknown");
-            }
             if (new_alloc_level > prev_entry->alloc_level) {
                 report_incompatible_alloc_level(decl->location);
                 ++tc_context->num_errors;
@@ -4158,9 +4149,6 @@ static bool replace_abstract_type_with_concrete(struct TypecheckContext *tc_cont
             // Special case -- no substitution in env needed, but we
             // must still check the alloc levels.
             enum AllocLevel new_alloc_level = decl->typedef_data.alloc_level;
-            if (new_alloc_level == ALLOC_UNKNOWN || prev_entry->alloc_level == ALLOC_UNKNOWN) {
-                fatal_error("not expecting alloc_level to be unknown");
-            }
             if (new_alloc_level > prev_entry->alloc_level) {
                 report_incompatible_alloc_level(decl->location);
                 ++tc_context->num_errors;

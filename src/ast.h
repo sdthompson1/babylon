@@ -656,11 +656,12 @@ struct DeclData_Datatype {
     struct DataCtor *ctors;
 };
 
+// Alloc levels are ordered: ALLOC_NEVER < ALLOC_IF_NOT_DEFAULT < ALLOC_UNKNOWN,
+// where lower levels provide more facts about allocated(x).
 enum AllocLevel {
-    ALLOC_UNKNOWN,  // e.g. type variables
-    ALLOC_NEVER,
-    ALLOC_IF_NOT_DEFAULT,
-    ALLOC_ALWAYS
+    ALLOC_NEVER,           // allocated(x) is always false
+    ALLOC_IF_NOT_DEFAULT,  // allocated(default) is false
+    ALLOC_UNKNOWN          // nothing is known (e.g. type variables, "allocated_always" types)
 };
 
 struct DeclData_Typedef {
