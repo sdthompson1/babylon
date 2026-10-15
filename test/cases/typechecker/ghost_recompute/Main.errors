@@ -1,0 +1,1 @@
+src/Main.b:18:12: Type 'test-binary:Foo.T' is 'ghost' and cannot be used in executable code
