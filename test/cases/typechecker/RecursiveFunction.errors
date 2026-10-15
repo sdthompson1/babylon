@@ -1,0 +1,1 @@
+src/RecursiveFunction.b:9:1: Illegal recursive definition of 'test-binary:RecursiveFunction.sum_upto'
