@@ -1,2 +1,2 @@
-src/AllocatedAbstract.b:11:9: Can't assign, right-hand-side might be allocated
-src/AllocatedAbstract.b:11:9: 'x' might still be allocated when it goes out of scope
+src/AllocatedAbstract.b:18:5: Can't assign, right-hand-side might be allocated
+src/AllocatedAbstract.b:18:5: 'y' might still be allocated when it goes out of scope

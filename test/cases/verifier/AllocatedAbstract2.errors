@@ -1,0 +1,2 @@
+src/AllocatedAbstract2.b:7:9: Can't assign, right-hand-side might be allocated
+src/AllocatedAbstract2.b:7:9: 'x' might still be allocated when it goes out of scope
