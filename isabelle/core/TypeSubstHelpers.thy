@@ -230,9 +230,16 @@ lemma apply_subst_to_callee_env_TE_DataCtorsByType [simp]:
      = TE_DataCtorsByType calleeEnv"
   by (simp add: apply_subst_to_callee_env_def)
 
-lemma apply_subst_to_callee_env_TE_GhostDatatypes [simp]:
-  "TE_GhostDatatypes (apply_subst_to_callee_env subst callerEnv calleeEnv)
-     = TE_GhostDatatypes calleeEnv"
+lemma apply_subst_to_callee_env_TE_AbstractAllocLevels [simp]:
+  "TE_AbstractAllocLevels (apply_subst_to_callee_env subst callerEnv calleeEnv)
+     = TE_AbstractAllocLevels calleeEnv"
+  by (simp add: apply_subst_to_callee_env_def)
+
+(* The ghost set (for given runtime abstract types) is computed from the
+   datatype tables, which are inherited from calleeEnv. *)
+lemma apply_subst_to_callee_env_ghost_datatypes_r [simp]:
+  "ghost_datatypes_r (apply_subst_to_callee_env subst callerEnv calleeEnv) R
+     = ghost_datatypes_r calleeEnv R"
   by (simp add: apply_subst_to_callee_env_def)
 
 lemma apply_subst_to_callee_env_TE_ProofGoal [simp]:
@@ -305,7 +312,10 @@ definition callee_env_subst_ok ::
     TE_Datatypes callerEnv = TE_Datatypes calleeEnv \<and>
     TE_DataCtors callerEnv = TE_DataCtors calleeEnv \<and>
     TE_DataCtorsByType callerEnv = TE_DataCtorsByType calleeEnv \<and>
-    TE_GhostDatatypes callerEnv = TE_GhostDatatypes calleeEnv \<and>
+    TE_AbstractAllocLevels callerEnv = TE_AbstractAllocLevels calleeEnv \<and>
+    \<comment> \<open>The caller's ghost datatypes are among the callee's: a realization made
+        between the two can only make datatypes runtime, never ghost. \<close>
+    ghost_datatypes callerEnv \<subseteq> ghost_datatypes calleeEnv \<and>
     \<comment> \<open>Every callee type variable is either mapped to a well-kinded type in callerEnv
         or remains in callerEnv's TE_TypeVars. \<close>
     (\<forall>n. n |\<in>| TE_TypeVars calleeEnv \<longrightarrow>
@@ -329,6 +339,31 @@ definition callee_env_subst_runtime_ok ::
             Some ty' \<Rightarrow> is_runtime_type callerEnv ty'
           | None \<Rightarrow> n |\<in>| TE_RuntimeTypeVars callerEnv)"
 
+
+(* The substituted callee env has the caller's ghost set: its tables and
+   abstract types are the callee's, which agree with the caller's, and its
+   runtime type variables are the caller's. *)
+lemma callee_env_subst_ok_ghost_datatypes:
+  assumes "callee_env_subst_ok subst callerEnv calleeEnv"
+  shows "ghost_datatypes (apply_subst_to_callee_env subst callerEnv calleeEnv)
+           = ghost_datatypes callerEnv"
+proof -
+  from assms have tables:
+    "TE_Datatypes callerEnv = TE_Datatypes calleeEnv"
+    "TE_DataCtors callerEnv = TE_DataCtors calleeEnv"
+    "TE_DataCtorsByType callerEnv = TE_DataCtorsByType calleeEnv"
+    and aal: "TE_AbstractAllocLevels callerEnv = TE_AbstractAllocLevels calleeEnv"
+    unfolding callee_env_subst_ok_def by simp_all
+  show ?thesis
+    by (simp add: aal ghost_datatypes_r_cong[OF tables])
+qed
+
+lemma callee_env_subst_ok_ghost_subset:
+  assumes "callee_env_subst_ok subst callerEnv calleeEnv"
+  shows "ghost_datatypes (apply_subst_to_callee_env subst callerEnv calleeEnv)
+           \<subseteq> ghost_datatypes calleeEnv"
+  unfolding callee_env_subst_ok_ghost_datatypes[OF assms]
+  using assms unfolding callee_env_subst_ok_def by blast
 
 (* Lifting facts: under callee_env_subst_ok, apply_subst preserves well-kindedness
    from calleeEnv to ?be, and runtime-ness similarly. These are direct corollaries
@@ -360,18 +395,19 @@ lemma apply_subst_preserves_runtime_callee:
   shows "is_runtime_type (apply_subst_to_callee_env subst callerEnv calleeEnv)
                          (apply_subst subst ty)"
 proof (rule apply_subst_preserves_runtime[OF assms(1)])
-  show "TE_GhostDatatypes (apply_subst_to_callee_env subst callerEnv calleeEnv)
-          = TE_GhostDatatypes calleeEnv"
-    by simp
+  show "ghost_datatypes (apply_subst_to_callee_env subst callerEnv calleeEnv)
+          \<subseteq> ghost_datatypes calleeEnv"
+    by (rule callee_env_subst_ok_ghost_subset[OF assms(2)])
 next
-  \<comment> \<open>is_runtime_type only depends on TE_GhostDatatypes and TE_RuntimeTypeVars; on
+  \<comment> \<open>is_runtime_type only depends on the ghost set and TE_RuntimeTypeVars; on
       ?be both agree with callerEnv (the former by callee_env_subst_ok, the
       latter by definition), so runtime-ness in callerEnv transfers to ?be. \<close>
+  have gd_eq: "ghost_datatypes callerEnv
+                 = ghost_datatypes (apply_subst_to_callee_env subst callerEnv calleeEnv)"
+    by (rule callee_env_subst_ok_ghost_datatypes[OF assms(2), symmetric])
   have rt_cong: "\<And>ty'. is_runtime_type callerEnv ty'
                        = is_runtime_type (apply_subst_to_callee_env subst callerEnv calleeEnv) ty'"
-    using assms(2)
-    by (intro is_runtime_type_cong_env)
-       (simp_all add: callee_env_subst_ok_def)
+    by (rule is_runtime_type_cong_env[OF gd_eq]) simp
   fix n assume n_in: "n |\<in>| TE_RuntimeTypeVars calleeEnv"
   show
     "case fmlookup subst n of
@@ -923,7 +959,7 @@ next
       callee_env_subst_ok. \<close>
   have ok_ext: "callee_env_subst_ok subst callerEnv ?env_ext"
     using CoreTm_Let.prems(3)
-    unfolding callee_env_subst_ok_def by simp
+    unfolding callee_env_subst_ok_def by auto
 
   have ok_rt_ext: "ghost = NotGhost \<longrightarrow> callee_env_subst_runtime_ok subst callerEnv ?env_ext"
     using CoreTm_Let.prems(6)
@@ -985,7 +1021,7 @@ next
         TE_ConstLocals changed, which callee_env_subst_ok doesn't reference. \<close>
     have ok_ext: "callee_env_subst_ok subst callerEnv ?env_ext"
       using CoreTm_Quantifier.prems(3)
-      unfolding callee_env_subst_ok_def by simp
+      unfolding callee_env_subst_ok_def by auto
 
     \<comment> \<open>Substituted varTy is well-kinded in the substituted env. \<close>
     have varTy_wk_subst:
@@ -1159,7 +1195,7 @@ next
     tyArgs_wk: "list_all (is_well_kinded calleeEnv) tyArgs" and
     tyArgs_cp: "list_all is_complete_type tyArgs" and
     ng_constraint: "ghost = NotGhost \<longrightarrow> list_all (is_runtime_type calleeEnv) tyArgs
-                                          \<and> dtName |\<notin>| TE_GhostDatatypes calleeEnv" and
+                                          \<and> dtName \<notin> ghost_datatypes calleeEnv" and
     payload_typed: "core_term_type calleeEnv ghost payload
                       = Some (apply_subst (fmap_of_list (zip tyvars tyArgs)) payloadTy)" and
     ty_eq: "ty = CoreTy_Datatype dtName tyArgs"
@@ -1197,11 +1233,11 @@ next
          (auto intro: apply_subst_preserves_runtime_callee[OF _ CoreTm_VariantCtor.prems(3) ok_rt])
   qed
 
-  \<comment> \<open>The datatype is non-ghost (when ghost = NotGhost); ?be inherits TE_GhostDatatypes
-      from calleeEnv so the same. \<close>
+  \<comment> \<open>The datatype is non-ghost (when ghost = NotGhost); the ghost set of ?be is
+      the caller's, which is among the callee's. \<close>
   have ng_dt_subst:
-    "ghost = NotGhost \<longrightarrow> dtName |\<notin>| TE_GhostDatatypes ?be"
-    using ng_constraint by simp
+    "ghost = NotGhost \<longrightarrow> dtName \<notin> ghost_datatypes ?be"
+    using ng_constraint callee_env_subst_ok_ghost_subset[OF CoreTm_VariantCtor.prems(3)] by blast
 
   \<comment> \<open>Payload IH gives the substituted payload typechecks to substituted result. \<close>
   from CoreTm_VariantCtor.IH[OF payload_typed CoreTm_VariantCtor.prems(2,3,4,5,6,7)]

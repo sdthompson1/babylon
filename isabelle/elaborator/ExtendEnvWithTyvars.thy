@@ -113,6 +113,86 @@ next
     unfolding extend_env_with_tyvars_def by simp
 qed
 
+(* The extension leaves the datatype tables alone, so in the _r normal form
+   the ghost set is unchanged. *)
+lemma ghost_datatypes_r_extend_env_with_tyvars [simp]:
+  "ghost_datatypes_r (extend_env_with_tyvars env ghost lo hi) R = ghost_datatypes_r env R"
+  unfolding extend_env_with_tyvars_def by simp
+
+(* The block only ever adds runtime type variables, so the ghost set can only
+   shrink ... *)
+lemma ghost_datatypes_extend_env_with_tyvars_subset:
+  "ghost_datatypes (extend_env_with_tyvars env ghost lo hi) \<subseteq> ghost_datatypes env"
+proof (cases "ghost = NotGhost")
+  case True
+  have "ghost_datatypes_r env (TE_AbstractTypes env |\<inter>| (TE_RuntimeTypeVars env |\<union>| mv_fset lo hi))
+          \<subseteq> ghost_datatypes env"
+    by (rule ghost_datatypes_r_antitone) auto
+  then show ?thesis using True unfolding extend_env_with_tyvars_def by simp
+next
+  case False
+  then show ?thesis unfolding extend_env_with_tyvars_def by simp
+qed
+
+(* ... and widening the interval can only shrink it further. *)
+lemma ghost_datatypes_extend_env_with_tyvars_mono:
+  assumes "lo' \<le> lo" and "hi \<le> hi'"
+  shows "ghost_datatypes (extend_env_with_tyvars env ghost lo' hi')
+           \<subseteq> ghost_datatypes (extend_env_with_tyvars env ghost lo hi)"
+proof (cases "ghost = NotGhost")
+  case True
+  have "mv_fset lo hi |\<subseteq>| mv_fset lo' hi'" using assms by (rule mv_fset_mono)
+  then have "ghost_datatypes_r env (TE_AbstractTypes env |\<inter>| (TE_RuntimeTypeVars env |\<union>| mv_fset lo' hi'))
+               \<subseteq> ghost_datatypes_r env (TE_AbstractTypes env |\<inter>| (TE_RuntimeTypeVars env |\<union>| mv_fset lo hi))"
+    by (intro ghost_datatypes_r_antitone) (auto simp: fsubset_iff)
+  then show ?thesis using True unfolding extend_env_with_tyvars_def by simp
+next
+  case False
+  then show ?thesis unfolding extend_env_with_tyvars_def by simp
+qed
+
+(* The ghost set is unchanged when the block contains no abstract type: then
+   the runtime abstract types are the same in both envs. *)
+lemma ghost_datatypes_extend_env_with_tyvars_eq:
+  assumes "TE_AbstractTypes env |\<inter>| mv_fset lo hi = {||}"
+  shows "ghost_datatypes (extend_env_with_tyvars env ghost lo hi) = ghost_datatypes env"
+proof (cases "ghost = NotGhost")
+  case True
+  have sub: "TE_AbstractTypes env |\<inter>| mv_fset lo hi |\<subseteq>| TE_RuntimeTypeVars env"
+    using assms by simp
+  show ?thesis using True unfolding extend_env_with_tyvars_def
+    by (simp add: ghost_datatypes_r_extend_eq[OF sub])
+next
+  case False
+  then show ?thesis unfolding extend_env_with_tyvars_def by simp
+qed
+
+(* Under the elaborator's freshness invariant (every type variable in scope is
+   fresh-ok at lo) no abstract type lies in the block [lo, hi): the abstract
+   types are among the type variables in scope. *)
+lemma abstract_types_notin_mv_fset:
+  assumes bound: "\<forall>n. n |\<in>| TE_TypeVars env \<longrightarrow> tyvar_fresh_ok n lo"
+      and wf: "tyenv_well_formed env"
+  shows "TE_AbstractTypes env |\<inter>| mv_fset lo hi = {||}"
+proof -
+  have abs_sub: "TE_AbstractTypes env |\<subseteq>| TE_TypeVars env"
+    using wf unfolding tyenv_well_formed_def tyenv_abstract_types_subset_def by blast
+  show ?thesis
+  proof (rule ccontr)
+    assume "TE_AbstractTypes env |\<inter>| mv_fset lo hi \<noteq> {||}"
+    then obtain n where n_in: "n |\<in>| TE_AbstractTypes env |\<inter>| mv_fset lo hi"
+      by (meson all_not_fin_conv)
+    then have "tyvar_fresh_ok n lo" using abs_sub bound by (auto simp: fsubset_iff)
+    then show False using tyvar_fresh_ok_notin_mv_fset n_in by auto
+  qed
+qed
+
+lemma ghost_datatypes_extend_env_with_tyvars_fresh:
+  assumes bound: "\<forall>n. n |\<in>| TE_TypeVars env \<longrightarrow> tyvar_fresh_ok n lo"
+      and wf: "tyenv_well_formed env"
+  shows "ghost_datatypes (extend_env_with_tyvars env ghost lo hi) = ghost_datatypes env"
+  using ghost_datatypes_extend_env_with_tyvars_eq[OF abstract_types_notin_mv_fset[OF bound wf]] .
+
 (* Well-formedness is preserved under extend_env_with_tyvars. *)
 lemma tyenv_well_formed_extend_env_with_tyvars:
   assumes "tyenv_well_formed env"

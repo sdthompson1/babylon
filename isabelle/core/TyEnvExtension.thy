@@ -18,15 +18,14 @@ begin
 (* (core_term_type_irrelevant_tyvar etc.): TE_TypeVars / TE_RuntimeTypeVars   *)
 (* are pinned EQUAL here, and the linking proof composes the two axes.        *)
 (*                                                                            *)
-(* The ghost markers need care: the typechecker consults them negatively      *)
-(* (a NotGhost read of variable x requires x NOT ghost; a NotGhost use of     *)
-(* datatype d requires d NOT ghost), so blanket growth would be unsound.      *)
-(* Instead we require the ghost status of every name in the OLD maps to be    *)
-(* unchanged; new names may have either status. A successful lookup only      *)
-(* ever interrogates old names, so this suffices.                             *)
-(*                                                                            *)
-(* TE_AbstractTypes is left unconstrained: no typechecking function reads it  *)
-(* (it feeds tyenv_well_formed only).                                         *)
+(* The ghost datatypes need care: the typechecker consults them negatively    *)
+(* (a NotGhost use of datatype d requires d NOT ghost), so blanket growth     *)
+(* would be unsound. Instead we require every OLD datatype that is not ghost  *)
+(* in env to stay non-ghost in env'; new datatypes may have either status. A  *)
+(* successful typecheck only ever interrogates old names, so this suffices.   *)
+(* The ghost set is computed from the datatype tables and the runtime         *)
+(* abstract types, so this clause is also the only constraint placed on       *)
+(* TE_AbstractAllocLevels.                                                    *)
 (* ========================================================================== *)
 
 definition tyenv_extends :: "CoreTyEnv \<Rightarrow> CoreTyEnv \<Rightarrow> bool" where
@@ -53,9 +52,9 @@ definition tyenv_extends :: "CoreTyEnv \<Rightarrow> CoreTyEnv \<Rightarrow> boo
         fmlookup (TE_DataCtors env') name = Some entry)
    \<and> (\<forall>name ctors. fmlookup (TE_DataCtorsByType env) name = Some ctors \<longrightarrow>
         fmlookup (TE_DataCtorsByType env') name = Some ctors)
-     \<comment> \<open>Ghost markers: unchanged on the old domains.\<close>
+     \<comment> \<open>Ghost datatypes: an old datatype that is not ghost stays non-ghost.\<close>
    \<and> (\<forall>name. name |\<in>| fmdom (TE_Datatypes env) \<longrightarrow>
-        (name |\<in>| TE_GhostDatatypes env' \<longleftrightarrow> name |\<in>| TE_GhostDatatypes env)))"
+        name \<notin> ghost_datatypes env \<longrightarrow> name \<notin> ghost_datatypes env'))"
 
 lemma tyenv_extends_refl [simp]:
   "tyenv_extends env env"
@@ -165,12 +164,12 @@ proof (induction ty)
     args_wk: "list_all (is_well_kinded env) argTypes"
     by (auto split: option.splits)
   from CoreTy_Datatype.prems(2) have
-    ng: "name |\<notin>| TE_GhostDatatypes env" and
+    ng: "name \<notin> ghost_datatypes env" and
     args_rt: "list_all (is_runtime_type env) argTypes"
     by auto
   have dom: "name |\<in>| fmdom (TE_Datatypes env)"
     using dt by (simp add: fmdomI)
-  have ng': "name |\<notin>| TE_GhostDatatypes env'"
+  have ng': "name \<notin> ghost_datatypes env'"
     using ext dom ng unfolding tyenv_extends_def by blast
   have args_rt': "list_all (is_runtime_type env') argTypes"
     using CoreTy_Datatype.IH args_wk args_rt by (simp add: list_all_iff)
@@ -397,7 +396,7 @@ next
                                               else fminus (TE_GhostLocals env') {|var|}),
                           TE_ConstLocals := finsert var (TE_ConstLocals env') \<rparr>"
   have ext_body: "tyenv_extends ?bodyEnv ?bodyEnv'"
-    using ext unfolding tyenv_extends_def by simp
+    using ext unfolding tyenv_extends_def by auto
   have cons_body: "tyenv_ctors_consistent ?bodyEnv"
     using cons unfolding tyenv_ctors_consistent_def by simp
   have body_ty': "core_term_type ?bodyEnv' ghost body = Some ty"
@@ -431,7 +430,7 @@ next
                             TE_GhostLocals := finsert var (TE_GhostLocals env'),
                             TE_ConstLocals := finsert var (TE_ConstLocals env') \<rparr>"
     have ext_body: "tyenv_extends ?bodyEnv ?bodyEnv'"
-      using ext unfolding tyenv_extends_def by simp
+      using ext unfolding tyenv_extends_def by auto
     have cons_body: "tyenv_ctors_consistent ?bodyEnv"
       using cons unfolding tyenv_ctors_consistent_def by simp
     have body_ty': "core_term_type ?bodyEnv' Ghost body = Some bodyTy"
@@ -479,7 +478,7 @@ next
     wk_args: "list_all (is_well_kinded env) tyArgs" and
     cp_args: "list_all is_complete_type tyArgs" and
     ng_rt: "ghost = NotGhost \<longrightarrow> list_all (is_runtime_type env) tyArgs" and
-    ng_dt: "ghost = NotGhost \<longrightarrow> dtName |\<notin>| TE_GhostDatatypes env" and
+    ng_dt: "ghost = NotGhost \<longrightarrow> dtName \<notin> ghost_datatypes env" and
     payload_ty: "core_term_type env ghost payload
                    = Some (apply_subst (fmap_of_list (zip tyvars tyArgs)) payloadTy)" and
     ty_eq: "ty = CoreTy_Datatype dtName tyArgs"
@@ -492,10 +491,10 @@ next
       so its ghost marker is unchanged.\<close>
   have dom_dt: "dtName |\<in>| fmdom (TE_Datatypes env)"
     using cons ctor_lk unfolding tyenv_ctors_consistent_def by (metis fmdomI)
-  have ng_dt': "ghost = NotGhost \<longrightarrow> dtName |\<notin>| TE_GhostDatatypes env'"
+  have ng_dt': "ghost = NotGhost \<longrightarrow> dtName \<notin> ghost_datatypes env'"
     using ng_dt ext dom_dt unfolding tyenv_extends_def by blast
   have ng_fail': "\<not> (ghost = NotGhost \<and> (\<not> list_all (is_runtime_type env') tyArgs
-                       \<or> dtName |\<in>| TE_GhostDatatypes env'))"
+                       \<or> dtName \<in> ghost_datatypes env'))"
     using rt_args' ng_dt' by auto
   have payload_ty': "core_term_type env' ghost payload
                        = Some (apply_subst (fmap_of_list (zip tyvars tyArgs)) payloadTy)"
@@ -942,7 +941,7 @@ proof (induction env ghost stmt and env ghost stmts
                = Some ?out2"
     using gh wk2 rt2 cp init2 by simp
   have ext_out: "tyenv_extends envOut ?out2"
-    using ext unfolding out_eq tyenv_extends_def by simp
+    using ext unfolding out_eq tyenv_extends_def by auto
   from res ext_out show ?case by blast
 next
   \<comment> \<open>VarDeclCall: adds a local of the (optionally cast) call return type.\<close>
@@ -980,7 +979,7 @@ next
                = Some ?out2"
     using gh wk2 rt2 cp ct2 cast2 by simp
   have ext_out: "tyenv_extends envOut ?out2"
-    using ext unfolding out_eq tyenv_extends_def by simp
+    using ext unfolding out_eq tyenv_extends_def by auto
   from res ext_out show ?case by blast
 next
   \<comment> \<open>VarDecl (Ref): the writability of the initializer (which decides the new
@@ -1024,7 +1023,7 @@ next
                = Some ?out2"
     using gh wk2 rt2 lv glv2 init2 by simp
   have ext_out: "tyenv_extends envOut ?out2"
-    using ext unfolding out_eq tyenv_extends_def by (simp add: wl_eq)
+    using ext unfolding out_eq tyenv_extends_def by (auto simp: wl_eq)
   from res ext_out show ?case by blast
 next
   \<comment> \<open>Assign: env unchanged.\<close>
@@ -1203,7 +1202,7 @@ next
     using pats by simp
   have ext_f: "tyenv_extends (env \<lparr> TE_ProofTopLevel := False \<rparr>)
                              (env2 \<lparr> TE_ProofTopLevel := False \<rparr>)"
-    using ext unfolding tyenv_extends_def by simp
+    using ext unfolding tyenv_extends_def by auto
   have cons_f: "tyenv_ctors_consistent (env \<lparr> TE_ProofTopLevel := False \<rparr>)"
     using cons unfolding tyenv_ctors_consistent_def by simp
   have bodies2: "list_all (\<lambda>body. core_statement_list_type (env2 \<lparr> TE_ProofTopLevel := False \<rparr>)
@@ -1249,7 +1248,7 @@ next
     using has_valid_decreases_type_tyenv_extends[OF ext cons decr] .
   have ext_f: "tyenv_extends (env \<lparr> TE_ProofTopLevel := False \<rparr>)
                              (env2 \<lparr> TE_ProofTopLevel := False \<rparr>)"
-    using ext unfolding tyenv_extends_def by simp
+    using ext unfolding tyenv_extends_def by auto
   have cons_f: "tyenv_ctors_consistent (env \<lparr> TE_ProofTopLevel := False \<rparr>)"
     using cons unfolding tyenv_ctors_consistent_def by simp
   from "12.IH"[OF gh cond refl invs decr body ext_f cons_f] obtain bodyEnv2 where
@@ -1277,7 +1276,7 @@ next
   have wk2: "is_well_kinded env2 varTy"
     using is_well_kinded_tyenv_extends[OF ext wk] .
   have ext_X: "tyenv_extends (?envX env) (?envX env2)"
-    using ext unfolding tyenv_extends_def by simp
+    using ext unfolding tyenv_extends_def by auto
   have cons_X: "tyenv_ctors_consistent (?envX env)"
     using cons unfolding tyenv_ctors_consistent_def by simp
   have cond2: "core_term_type (?envX env2) Ghost condTm = Some CoreTy_Bool"
@@ -1313,7 +1312,7 @@ next
   have res: "core_statement_type env2 ghost (CoreStmt_Fix varName varTy) = Some ?out2"
     using goal2 gh wk2 topLevel tl_eq by simp
   have ext_out: "tyenv_extends envOut ?out2"
-    using ext unfolding out_eq tyenv_extends_def by simp
+    using ext unfolding out_eq tyenv_extends_def by auto
   from res ext_out show ?case by blast
 next
   \<comment> \<open>Use: needs a Quant_Exists goal; updates the goal only.\<close>
@@ -1337,7 +1336,7 @@ next
   have res: "core_statement_type env2 ghost (CoreStmt_Use witnessTm) = Some ?out2"
     using goal2 gh wit2 topLevel tl_eq by simp
   have ext_out: "tyenv_extends envOut ?out2"
-    using ext unfolding out_eq tyenv_extends_def by simp
+    using ext unfolding out_eq tyenv_extends_def by auto
   from res ext_out show ?case by blast
 next
   \<comment> \<open>Block: env unchanged; body checked under TE_ProofTopLevel := False.\<close>
@@ -1350,7 +1349,7 @@ next
     by (auto split: option.splits)
   have ext_f: "tyenv_extends (env \<lparr> TE_ProofTopLevel := False \<rparr>)
                              (env2 \<lparr> TE_ProofTopLevel := False \<rparr>)"
-    using ext unfolding tyenv_extends_def by simp
+    using ext unfolding tyenv_extends_def by auto
   have cons_f: "tyenv_ctors_consistent (env \<lparr> TE_ProofTopLevel := False \<rparr>)"
     using cons unfolding tyenv_ctors_consistent_def by simp
   from "16.IH"[OF body ext_f cons_f] obtain bodyEnv2 where

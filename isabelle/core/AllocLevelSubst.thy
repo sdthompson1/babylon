@@ -24,19 +24,8 @@ begin
 
 
 (* ========================================================================== *)
-(* Datatypes mentioned by a type                                              *)
+(* Theorems about type_datatypes (RuntimeType.thy) *)
 (* ========================================================================== *)
-
-fun type_datatypes :: "CoreType \<Rightarrow> string set" where
-  "type_datatypes (CoreTy_Datatype dt args) = insert dt (\<Union>(set (map type_datatypes args)))"
-| "type_datatypes CoreTy_Bool = {}"
-| "type_datatypes (CoreTy_FiniteInt _ _) = {}"
-| "type_datatypes CoreTy_MathInt = {}"
-| "type_datatypes CoreTy_MathReal = {}"
-| "type_datatypes (CoreTy_Record flds) = \<Union>(set (map (type_datatypes \<circ> snd) flds))"
-| "type_datatypes (CoreTy_Array elemTy dims) = type_datatypes elemTy"
-| "type_datatypes (CoreTy_Var n) = {}"
-| "type_datatypes (CoreTy_Extern _ _) = {}"
 
 (* A well-kinded type mentions only declared datatypes. *)
 lemma is_well_kinded_type_datatypes_subset:

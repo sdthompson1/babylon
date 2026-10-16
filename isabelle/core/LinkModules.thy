@@ -24,10 +24,6 @@ begin
      fmlist_union, util/FmapDisjointUnion.thy), failing with LinkConflict on
      a shared key.
 
-   - The ghost datatype fset (TE_GhostDatatypes) is combined by plain union:
-     it is a subset of its parent map's keys (TE_Datatypes) in a well-formed
-     env, so its disjointness is implied by the parent check.
-
    - The type-variable fields (TE_TypeVars, TE_RuntimeTypeVars,
      TE_AbstractAllocLevels) are combined by union, minus the domain of the
      merged substitution: an abstract type that has been given a definition is
@@ -78,9 +74,10 @@ begin
    (and link_modules_Inr_iff_closure, the same statement with merge_all_substs
    replaced by its own declarative characterization). We also prove:
 
-    - link_modules_idempotent_subst, link_modules_capture_avoiding: a successful
-      link's result satisfies the CoreModule invariants: idempotent CM_TypeSubst
-      and capture_avoiding).
+    - link_modules_idempotent_subst, link_modules_capture_avoiding,
+      link_modules_tyvars_fresh: a successful link's result satisfies the
+      CoreModule invariants: idempotent CM_TypeSubst, capture_avoiding and
+      module_tyvars_fresh).
 
     - link_modules_perm: the result is insensitive to the order of the input list
       (both orderings succeed with the same module, or both fail) - permutation-
@@ -180,11 +177,8 @@ lemma funion_list_map_cong:
    of the module itself. A name in two inputs' domains is a multiple-definition
    error, decided on names alone.
 
-   (The ghost fset TE_GhostDatatypes is not checked: it is a subset of the
-   keys of its parent map, in any module satisfying core_module_invariant, so its
-   disjointness is implied by the parent's. Similarly, the disjointness of
-   TE_TypeVars and TE_RuntimeTypeVars is implied by the disjointness-check for
-   TE_AbstractAllocLevels.) *)
+   (No disjointness-checks are needed for TE_TypeVars and TE_RuntimeTypeVars: their
+   disjointness is implied by the disjointness of TE_AbstractAllocLevels.) *)
 definition link_fields_disjoint :: "CoreModule list \<Rightarrow> bool" where
   "link_fields_disjoint ms \<equiv>
        fmdisjoint_list (map (\<lambda>x. TE_GlobalVars (CM_TyEnv x)) ms)
@@ -329,19 +323,22 @@ proof -
 qed
 
 (* The check: no name TOUCHED by any input's substitution (resolved by it, or
-   occurring in one of its resolutions - subst_names, TypeSubst.thy) is a
-   bound type parameter of any input. Phrased over the unions, so it depends
-   only on the set of inputs. *)
+   occurring in one of its resolutions - subst_names, TypeSubst.thy), nor any
+   abstract type of any input, is a bound type parameter of any input. Phrased
+   over the unions, so it depends only on the set of inputs. *)
 definition link_capture_ok :: "CoreModule list \<Rightarrow> bool" where
   "link_capture_ok ms =
      (funion_list (map (\<lambda>x. subst_names (CM_TypeSubst x)) ms)
-      |\<inter>| funion_list (map module_bound_tyvars ms) = {||})"
+      |\<inter>| funion_list (map module_bound_tyvars ms) = {||}
+      \<and> funion_list (map (\<lambda>x. TE_AbstractTypes (CM_TyEnv x)) ms)
+        |\<inter>| funion_list (map module_bound_tyvars ms) = {||})"
 
 (* The colliding names, for the LinkCapture payload. Purely diagnostic. *)
 definition link_capture_names :: "CoreModule list \<Rightarrow> string list" where
   "link_capture_names ms =
      sorted_list_of_fset
-       (funion_list (map (\<lambda>x. subst_names (CM_TypeSubst x)) ms)
+       ((funion_list (map (\<lambda>x. subst_names (CM_TypeSubst x)) ms)
+         |\<union>| funion_list (map (\<lambda>x. TE_AbstractTypes (CM_TyEnv x)) ms))
         |\<inter>| funion_list (map module_bound_tyvars ms))"
 
 (* The check depends only on the multiset of inputs. *)
@@ -350,6 +347,23 @@ lemma link_capture_ok_mset_cong:
   shows "link_capture_ok ms = link_capture_ok ms'"
   unfolding link_capture_ok_def
   by (simp add: funion_list_map_cong[OF m])
+
+(* The abstract type part of link_capture_ok, read at one input's binders against the
+   union of the inputs' abstract types. *)
+lemma link_capture_ok_bound_fresh:
+  assumes cap: "link_capture_ok ms"
+      and x_in: "x \<in> set ms"
+      and nb: "n |\<in>| module_bound_tyvars x"
+  shows "n |\<notin>| funion_list (map (\<lambda>y. TE_AbstractTypes (CM_TyEnv y)) ms)"
+proof
+  assume "n |\<in>| funion_list (map (\<lambda>y. TE_AbstractTypes (CM_TyEnv y)) ms)"
+  moreover have "n |\<in>| funion_list (map module_bound_tyvars ms)"
+    using x_in nb funion_list_member by fastforce
+  ultimately have "n |\<in>| funion_list (map (\<lambda>y. TE_AbstractTypes (CM_TyEnv y)) ms)
+                        |\<inter>| funion_list (map module_bound_tyvars ms)"
+    by simp
+  then show False using cap unfolding link_capture_ok_def by auto
+qed
 
 
 (* ========================================================================== *)
@@ -360,7 +374,7 @@ lemma link_capture_ok_mset_cong:
    \<sigma> (the result of merge_all_substs on the inputs' CM_TypeSubsts):
 
    - every declaration/definition map is the (disjoint) union across the
-     inputs, and the ghost fsets are plain unions;
+     inputs;
    - the three type-variable fields lose the abstract types the merged
      substitution resolves (fmdom \<sigma> is the union of the inputs' CM_TypeSubst
      domains, by is_subst_closure);
@@ -389,7 +403,6 @@ definition link_result :: "CoreModule list \<Rightarrow> TypeSubst \<Rightarrow>
            TE_Datatypes = fmlist_union (map (\<lambda>x. TE_Datatypes (CM_TyEnv x)) ms),
            TE_DataCtors = fmlist_union (map (\<lambda>x. TE_DataCtors (CM_TyEnv x)) ms),
            TE_DataCtorsByType = fmlist_union (map (\<lambda>x. TE_DataCtorsByType (CM_TyEnv x)) ms),
-           TE_GhostDatatypes = funion_list (map (\<lambda>x. TE_GhostDatatypes (CM_TyEnv x)) ms),
            TE_AbstractAllocLevels =
              fmdrop_fset (fmdom \<sigma>)
                (fmlist_union (map (\<lambda>x. TE_AbstractAllocLevels (CM_TyEnv x)) ms)) \<rparr>,
@@ -438,12 +451,11 @@ definition link_runtime_ok :: "CoreModule list \<Rightarrow> TypeSubst \<Rightar
   "link_runtime_ok ms \<sigma> =
      (\<forall>n. n |\<in>| fmdom \<sigma>
              |\<inter>| funion_list (map (\<lambda>x. TE_RuntimeTypeVars (CM_TyEnv x)) ms)
-          \<comment> \<open>Note: unlike link_alloc_ok, there is no need to call normalize_module here.
-             \<sigma> n does not contain resolved type variables (that would be in the domain of \<sigma>)
-             because it is an idempotent substitution; and is_runtime_type only looks at
-             TE_RuntimeTypeVars and TE_GhostDatatypes, which are unaffected by normalization
-             anyway.\<close>
-          \<longrightarrow> is_runtime_type (CM_TyEnv (link_result ms \<sigma>)) (the (fmlookup \<sigma> n)))"
+          \<comment> \<open>Note: The is_runtime_type check must be made in the normalized env, because
+             runtime-ness depends on the data constructor payloads, which are not substituted
+             until normalize_module is called.\<close>
+          \<longrightarrow> is_runtime_type (CM_TyEnv (normalize_module (link_result ms \<sigma>)))
+                              (the (fmlookup \<sigma> n)))"
 
 (* Executable form of the above (needed for code generation: the definition
    quantifies over all strings, which the code generator cannot handle, so we
@@ -451,7 +463,8 @@ definition link_runtime_ok :: "CoreModule list \<Rightarrow> TypeSubst \<Rightar
 lemma link_runtime_ok_code [code]:
   "link_runtime_ok ms \<sigma> =
      fBall (fmdom \<sigma> |\<inter>| funion_list (map (\<lambda>x. TE_RuntimeTypeVars (CM_TyEnv x)) ms))
-           (\<lambda>n. is_runtime_type (CM_TyEnv (link_result ms \<sigma>)) (the (fmlookup \<sigma> n)))"
+           (\<lambda>n. is_runtime_type (CM_TyEnv (normalize_module (link_result ms \<sigma>)))
+                                (the (fmlookup \<sigma> n)))"
   unfolding link_runtime_ok_def by auto
 
 (* The offending names, for the LinkGhostResolution payload. Purely
@@ -459,7 +472,8 @@ lemma link_runtime_ok_code [code]:
 definition link_ghost_resolution_names :: "CoreModule list \<Rightarrow> TypeSubst \<Rightarrow> string list" where
   "link_ghost_resolution_names ms \<sigma> =
      sorted_list_of_fset
-       (ffilter (\<lambda>n. \<not> is_runtime_type (CM_TyEnv (link_result ms \<sigma>)) (the (fmlookup \<sigma> n)))
+       (ffilter (\<lambda>n. \<not> is_runtime_type (CM_TyEnv (normalize_module (link_result ms \<sigma>)))
+                                       (the (fmlookup \<sigma> n)))
           (fmdom \<sigma>
            |\<inter>| funion_list (map (\<lambda>x. TE_RuntimeTypeVars (CM_TyEnv x)) ms)))"
 
@@ -926,10 +940,46 @@ proof -
   have disj: "link_fields_disjoint [m]"
     unfolding link_fields_disjoint_def by simp
 
-  \<comment> \<open>The capture check on a single module is exactly its own capture-avoidance.\<close>
+  \<comment> \<open>The capture check on a single module is exactly its own capture-avoidance
+     and binder freshness.\<close>
   have cap_ok: "link_capture_ok [m]"
   proof -
-    have "subst_names (CM_TypeSubst m) |\<inter>| module_bound_tyvars m = {||}"
+    have fresh: "module_tyvars_fresh m"
+      using inv unfolding core_module_invariant_def by blast
+    have "TE_AbstractTypes (CM_TyEnv m) |\<inter>| module_bound_tyvars m = {||}"
+    proof (rule fset_eqI)
+      fix n
+      show "n |\<in>| TE_AbstractTypes (CM_TyEnv m) |\<inter>| module_bound_tyvars m \<longleftrightarrow> n |\<in>| {||}"
+      proof
+        assume "n |\<in>| TE_AbstractTypes (CM_TyEnv m) |\<inter>| module_bound_tyvars m"
+        then have na: "n |\<in>| TE_AbstractTypes (CM_TyEnv m)"
+              and nb: "n |\<in>| module_bound_tyvars m" by auto
+        from module_bound_tyvars_E[OF nb] show "n |\<in>| {||}"
+        proof
+          assume "\<exists>name info. fmlookup (TE_Functions (CM_TyEnv m)) name = Some info
+                              \<and> n \<in> set (FI_TyArgs info)"
+          then obtain name info where
+            lk: "fmlookup (TE_Functions (CM_TyEnv m)) name = Some info" and
+            n_in: "n \<in> set (FI_TyArgs info)" by blast
+          have "fset_of_list (FI_TyArgs info) |\<inter>| TE_AbstractTypes (CM_TyEnv m) = {||}"
+            using fresh lk unfolding module_tyvars_fresh_def tyenv_fun_tyvars_fresh_def by blast
+          then show "n |\<in>| {||}"
+            using na n_in by (auto simp: fset_of_list_elem)
+        next
+          assume "\<exists>ctorName dtName tyVars payload.
+                    fmlookup (TE_DataCtors (CM_TyEnv m)) ctorName
+                      = Some (dtName, tyVars, payload) \<and> n \<in> set tyVars"
+          then obtain ctorName dtName tyVars payload where
+            lk: "fmlookup (TE_DataCtors (CM_TyEnv m)) ctorName = Some (dtName, tyVars, payload)" and
+            n_in: "n \<in> set tyVars" by blast
+          have "fset_of_list tyVars |\<inter>| TE_AbstractTypes (CM_TyEnv m) = {||}"
+            using fresh lk unfolding module_tyvars_fresh_def tyenv_ctor_tyvars_fresh_def by blast
+          then show "n |\<in>| {||}"
+            using na n_in by (auto simp: fset_of_list_elem)
+        qed
+      qed simp
+    qed
+    moreover have "subst_names (CM_TypeSubst m) |\<inter>| module_bound_tyvars m = {||}"
     proof (rule fset_eqI)
       fix n
       show "n |\<in>| subst_names (CM_TypeSubst m) |\<inter>| module_bound_tyvars m \<longleftrightarrow> n |\<in>| {||}"
@@ -962,7 +1012,7 @@ proof -
         qed
       qed simp
     qed
-    then show ?thesis unfolding link_capture_ok_def by simp
+    ultimately show ?thesis unfolding link_capture_ok_def by simp
   qed
 
   \<comment> \<open>The runtime-resolution check is vacuous on a single module: the
@@ -981,7 +1031,8 @@ proof -
     with nd have "n |\<in>| fmdom (CM_TypeSubst m) |\<inter>| TE_TypeVars (CM_TyEnv m)" by simp
     with tv have False by simp
     then show
-      "is_runtime_type (CM_TyEnv (link_result [m] (CM_TypeSubst m))) (the (fmlookup (CM_TypeSubst m) n))"
+      "is_runtime_type (CM_TyEnv (normalize_module (link_result [m] (CM_TypeSubst m))))
+                       (the (fmlookup (CM_TypeSubst m) n))"
       by simp
   qed
 
@@ -1162,6 +1213,103 @@ proof -
             using module_bound_tyvars_ctor[OF x_lk n_in] .
           then show "n |\<in>| {||}"
             using nocap[OF x_in _ nd] by blast
+        qed simp
+      qed
+    qed
+  qed
+qed
+
+(* Likewise the binder freshness of a successful link's result: every binder
+   of the result is a binder of some input, and the result's abstract types
+   are among the inputs' (minus the resolved ones), so the second conjunct
+   of the capture check gives both freshness clauses. *)
+theorem link_modules_tyvars_fresh:
+  assumes ok: "link_modules ms = Inr m"
+  shows "module_tyvars_fresh m"
+proof -
+  obtain \<sigma> where
+    disj: "link_fields_disjoint ms" and
+    cap: "link_capture_ok ms" and
+    meq: "m = link_result ms \<sigma>"
+    using ok link_modules_Inr_iff by blast
+  have djF: "fmdisjoint_list (map (\<lambda>x. TE_Functions (CM_TyEnv x)) ms)"
+    and djC: "fmdisjoint_list (map (\<lambda>x. TE_DataCtors (CM_TyEnv x)) ms)"
+    using disj unfolding link_fields_disjoint_def by blast+
+  have abs_sub: "TE_AbstractTypes (CM_TyEnv m)
+                   |\<subseteq>| funion_list (map (\<lambda>y. TE_AbstractTypes (CM_TyEnv y)) ms)"
+  proof
+    fix n assume "n |\<in>| TE_AbstractTypes (CM_TyEnv m)"
+    then have "n |\<in>| fmdom (fmlist_union (map (\<lambda>x. TE_AbstractAllocLevels (CM_TyEnv x)) ms))"
+      using meq by (simp add: link_result_def)
+    then show "n |\<in>| funion_list (map (\<lambda>y. TE_AbstractTypes (CM_TyEnv y)) ms)"
+      unfolding fmdom_fmlist_union by (simp add: comp_def)
+  qed
+  have fresh_n: "\<And>x n. x \<in> set ms \<Longrightarrow> n |\<in>| module_bound_tyvars x
+                   \<Longrightarrow> n |\<notin>| TE_AbstractTypes (CM_TyEnv m)"
+    using link_capture_ok_bound_fresh[OF cap] abs_sub by (blast dest: fsubsetD)
+  show ?thesis
+    unfolding module_tyvars_fresh_def
+  proof (rule conjI)
+    show "tyenv_ctor_tyvars_fresh (CM_TyEnv m)"
+      unfolding tyenv_ctor_tyvars_fresh_def
+    proof (intro allI impI)
+      fix ctorName dtName tyVars payload
+      assume lk: "fmlookup (TE_DataCtors (CM_TyEnv m)) ctorName
+                    = Some (dtName, tyVars, payload)"
+      have "TE_DataCtors (CM_TyEnv m)
+              = fmlist_union (map (\<lambda>x. TE_DataCtors (CM_TyEnv x)) ms)"
+        using meq by (simp add: link_result_def)
+      with lk have "\<exists>f \<in> set (map (\<lambda>x. TE_DataCtors (CM_TyEnv x)) ms).
+                      fmlookup f ctorName = Some (dtName, tyVars, payload)"
+        using fmlist_union_lookup[OF djC] by simp
+      then obtain x where x_in: "x \<in> set ms"
+          and x_lk: "fmlookup (TE_DataCtors (CM_TyEnv x)) ctorName
+                       = Some (dtName, tyVars, payload)"
+        by auto
+      show "fset_of_list tyVars |\<inter>| TE_AbstractTypes (CM_TyEnv m) = {||}"
+      proof (rule fset_eqI)
+        fix n
+        show "n |\<in>| fset_of_list tyVars |\<inter>| TE_AbstractTypes (CM_TyEnv m) \<longleftrightarrow> n |\<in>| {||}"
+        proof
+          assume "n |\<in>| fset_of_list tyVars |\<inter>| TE_AbstractTypes (CM_TyEnv m)"
+          then have na: "n |\<in>| TE_AbstractTypes (CM_TyEnv m)" and n_in: "n \<in> set tyVars"
+            by (auto simp: fset_of_list_elem)
+          have "n |\<in>| module_bound_tyvars x"
+            using module_bound_tyvars_ctor[OF x_lk n_in] .
+          then show "n |\<in>| {||}"
+            using fresh_n[OF x_in] na by blast
+        qed simp
+      qed
+    qed
+  next
+    show "tyenv_fun_tyvars_fresh (CM_TyEnv m)"
+      unfolding tyenv_fun_tyvars_fresh_def
+    proof (intro allI impI)
+      fix funName info
+      assume lk: "fmlookup (TE_Functions (CM_TyEnv m)) funName = Some info"
+      have "TE_Functions (CM_TyEnv m)
+              = fmlist_union (map (\<lambda>x. TE_Functions (CM_TyEnv x)) ms)"
+        using meq by (simp add: link_result_def)
+      with lk have "\<exists>f \<in> set (map (\<lambda>x. TE_Functions (CM_TyEnv x)) ms).
+                      fmlookup f funName = Some info"
+        using fmlist_union_lookup[OF djF] by simp
+      then obtain x where x_in: "x \<in> set ms"
+          and x_lk: "fmlookup (TE_Functions (CM_TyEnv x)) funName = Some info"
+        by auto
+      show "fset_of_list (FI_TyArgs info) |\<inter>| TE_AbstractTypes (CM_TyEnv m) = {||}"
+      proof (rule fset_eqI)
+        fix n
+        show "n |\<in>| fset_of_list (FI_TyArgs info) |\<inter>| TE_AbstractTypes (CM_TyEnv m)
+                \<longleftrightarrow> n |\<in>| {||}"
+        proof
+          assume "n |\<in>| fset_of_list (FI_TyArgs info) |\<inter>| TE_AbstractTypes (CM_TyEnv m)"
+          then have na: "n |\<in>| TE_AbstractTypes (CM_TyEnv m)"
+                and n_in: "n \<in> set (FI_TyArgs info)"
+            by (auto simp: fset_of_list_elem)
+          have "n |\<in>| module_bound_tyvars x"
+            using module_bound_tyvars_fun[OF x_lk n_in] .
+          then show "n |\<in>| {||}"
+            using fresh_n[OF x_in] na by blast
         qed simp
       qed
     qed

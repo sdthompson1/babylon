@@ -92,7 +92,7 @@ lemma apply_subst_preserves_runtime_same_env:
   assumes ty_rt: "is_runtime_type env ty"
       and acc_rt: "\<forall>ty' \<in> fmran' subst. is_runtime_type env ty'"
   shows "is_runtime_type env (apply_subst subst ty)"
-proof (rule apply_subst_preserves_runtime[OF ty_rt refl])
+proof (rule apply_subst_preserves_runtime[OF ty_rt subset_refl])
   fix n assume n_in: "n |\<in>| TE_RuntimeTypeVars env"
   show "case fmlookup subst n of
           Some ty' \<Rightarrow> is_runtime_type env ty'
@@ -788,7 +788,7 @@ definition callee_info_valid_data_ctor ::
   "callee_info_valid_data_ctor env ghost ctorName dtName tyArgs expArgTypes =
     (\<exists>tyvars payloadTy.
        fmlookup (TE_DataCtors env) ctorName = Some (dtName, tyvars, payloadTy)
-     \<and> (ghost = NotGhost \<longrightarrow> dtName |\<notin>| TE_GhostDatatypes env)
+     \<and> (ghost = NotGhost \<longrightarrow> dtName \<notin> ghost_datatypes env)
      \<and> length tyArgs = length tyvars
      \<and> list_all (is_well_kinded env) tyArgs
      \<and> (ghost = NotGhost \<longrightarrow> list_all (is_runtime_type env) tyArgs)
@@ -843,7 +843,7 @@ next
   let ?env2 = "extend_env_with_tyvars env ghost lo' hi'"
   from assms(1) CI_DataCtor obtain tyvars payloadTy where props:
     "fmlookup (TE_DataCtors ?env1) ctorName = Some (dtName, tyvars, payloadTy)"
-    "ghost = NotGhost \<longrightarrow> dtName |\<notin>| TE_GhostDatatypes ?env1"
+    "ghost = NotGhost \<longrightarrow> dtName \<notin> ghost_datatypes ?env1"
     "length tyArgs = length tyvars"
     "list_all (is_well_kinded ?env1) tyArgs"
     "ghost = NotGhost \<longrightarrow> list_all (is_runtime_type ?env1) tyArgs"
@@ -852,8 +852,8 @@ next
     unfolding callee_info_valid_def callee_info_valid_data_ctor_def by auto
   have dc_eq: "fmlookup (TE_DataCtors ?env2) ctorName = Some (dtName, tyvars, payloadTy)"
     using props(1) by (simp add: extend_env_with_tyvars_def)
-  have ghost_eq: "ghost = NotGhost \<longrightarrow> dtName |\<notin>| TE_GhostDatatypes ?env2"
-    using props(2) by (simp add: extend_env_with_tyvars_def)
+  have ghost_eq: "ghost = NotGhost \<longrightarrow> dtName \<notin> ghost_datatypes ?env2"
+    using props(2) ghost_datatypes_extend_env_with_tyvars_mono[OF assms(2,3)] by blast
   have wk: "list_all (is_well_kinded ?env2) tyArgs"
     using props(4) by (auto simp: list_all_iff
             intro: is_well_kinded_extend_env_with_tyvars_mono[OF _ assms(2,3)])
@@ -1018,7 +1018,9 @@ proof -
     have "is_runtime_type (?env' \<lparr> TE_TypeVars := TE_AbstractTypes ?env' |\<union>| fset_of_list (FI_TyArgs funInfo),
                 TE_RuntimeTypeVars := (TE_AbstractTypes ?env' |\<inter>| TE_RuntimeTypeVars ?env')
                                        |\<union>| fset_of_list (FI_TyArgs funInfo) \<rparr>) t" by blast
-    then have "is_runtime_type ?env' (apply_subst (fmap_of_list (zip (FI_TyArgs funInfo) newTyArgs)) t)"
+    moreover have "fset_of_list (FI_TyArgs funInfo) |\<inter>| TE_AbstractTypes ?env' = {||}"
+      using wf' fn_lookup' unfolding tyenv_well_formed_def tyenv_fun_tyvars_fresh_def by blast
+    ultimately have "is_runtime_type ?env' (apply_subst (fmap_of_list (zip (FI_TyArgs funInfo) newTyArgs)) t)"
       using apply_subst_specializes_runtime[OF _ tyargs_rt len_tyargs[symmetric]] by simp
     moreover have "expArgTypes ! i = apply_subst (fmap_of_list (zip (FI_TyArgs funInfo) newTyArgs)) t"
       using expArg_eq i_lt' p_eq by simp
@@ -1056,7 +1058,7 @@ proof -
     by (auto simp: resolve_callee_data_ctor_def resolve_type_args_def Let_def
              split: option.splits if_splits sum.splits prod.splits)
   from assms(1) ctor_lookup have
-    ghost_ok: "ghost = NotGhost \<longrightarrow> dtName |\<notin>| TE_GhostDatatypes env"
+    ghost_ok: "ghost = NotGhost \<longrightarrow> dtName \<notin> ghost_datatypes env"
     by (auto simp: resolve_callee_data_ctor_def split: if_splits sum.splits prod.splits)
 
   from assms(1) ctor_lookup ghost_ok
@@ -1083,8 +1085,8 @@ proof -
   let ?env' = "extend_env_with_tyvars env ghost next_mv next_mv'"
   have ctor_lookup': "fmlookup (TE_DataCtors ?env') name = Some (dtName, tyvars, payloadTy)"
     using ctor_lookup by (simp add: extend_env_with_tyvars_def)
-  have ghost_ok': "ghost = NotGhost \<longrightarrow> dtName |\<notin>| TE_GhostDatatypes ?env'"
-    using ghost_ok by (simp add: extend_env_with_tyvars_def)
+  have ghost_ok': "ghost = NotGhost \<longrightarrow> dtName \<notin> ghost_datatypes ?env'"
+    using ghost_ok ghost_datatypes_extend_env_with_tyvars_subset by blast
 
   have civ: "callee_info_valid_data_ctor ?env' ghost name dtName newTyArgs expArgTypes"
     unfolding callee_info_valid_data_ctor_def
@@ -1112,17 +1114,13 @@ proof -
   proof
     assume ng: "ghost = NotGhost"
     have tyargs_rt: "list_all (is_runtime_type ?env') newTyArgs" using rta ng by simp
-    have "tyenv_nonghost_payloads_runtime ?env'"
-      using wf' tyenv_well_formed_def by blast
-    hence payload_rt_inner: "dtName |\<notin>| TE_GhostDatatypes ?env' \<Longrightarrow>
-            is_runtime_type (?env' \<lparr> TE_TypeVars := TE_AbstractTypes ?env' |\<union>| fset_of_list tyvars,
-                  TE_RuntimeTypeVars := (TE_AbstractTypes ?env' |\<inter>| TE_RuntimeTypeVars ?env')
-                                         |\<union>| fset_of_list tyvars \<rparr>) payloadTy"
-      using ctor_lookup' tyenv_nonghost_payloads_runtime_def by blast
-    have dt_not_ghost: "dtName |\<notin>| TE_GhostDatatypes ?env'" using ghost_ok' ng by simp
+    have dt_not_ghost: "dtName \<notin> ghost_datatypes ?env'" using ghost_ok' ng by simp
+    have fresh: "fset_of_list tyvars |\<inter>| TE_AbstractTypes ?env' = {||}"
+      using wf' ctor_lookup' unfolding tyenv_well_formed_def tyenv_ctor_tyvars_fresh_def by blast
     have payload_subst_rt: "is_runtime_type ?env' (apply_subst ?subst payloadTy)"
-      using apply_subst_specializes_runtime[OF payload_rt_inner[OF dt_not_ghost]
-              tyargs_rt len_tyargs[symmetric]] .
+      using apply_subst_specializes_runtime
+              [OF tyenv_nonghost_payloads_runtime[OF wf' ctor_lookup' dt_not_ghost]
+                  tyargs_rt len_tyargs[symmetric] fresh] .
     show "list_all (is_runtime_type ?env') expArgTypes"
       using expArg_eq payload_subst_rt by simp
   qed
@@ -1455,7 +1453,7 @@ next
   \<comment> \<open>Extract data ctor info from callee_info_valid\<close>
   from civ CI_DataCtor obtain tyvars payloadTy where
     ctor_lookup: "fmlookup (TE_DataCtors env') ctorName = Some (dtName, tyvars, payloadTy)" and
-    ghost_ok: "ghost = NotGhost \<longrightarrow> dtName |\<notin>| TE_GhostDatatypes env'" and
+    ghost_ok: "ghost = NotGhost \<longrightarrow> dtName \<notin> ghost_datatypes env'" and
     len_tyargs: "length tyArgs = length tyvars" and
     tyargs_wk: "list_all (is_well_kinded env') tyArgs" and
     tyargs_rt: "ghost = NotGhost \<longrightarrow> list_all (is_runtime_type env') tyArgs" and

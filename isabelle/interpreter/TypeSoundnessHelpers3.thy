@@ -2287,17 +2287,14 @@ proof -
           from fxeq1 have dt_eq_body_mid:
             "TE_DataCtors (body_env_for env (map fst (IF_Args f)) funInfo) = TE_DataCtors env_mid"
             "TE_Datatypes (body_env_for env (map fst (IF_Args f)) funInfo) = TE_Datatypes env_mid"
-            "TE_GhostDatatypes (body_env_for env (map fst (IF_Args f)) funInfo) = TE_GhostDatatypes env_mid"
             unfolding tyenv_fixed_eq_def by simp_all
           have dt_eq_env_body:
             "TE_DataCtors env = TE_DataCtors (body_env_for env (map fst (IF_Args f)) funInfo)"
             "TE_Datatypes env = TE_Datatypes (body_env_for env (map fst (IF_Args f)) funInfo)"
-            "TE_GhostDatatypes env = TE_GhostDatatypes (body_env_for env (map fst (IF_Args f)) funInfo)"
             by (simp_all add: body_env_for_def)
           have dt_eq:
             "TE_DataCtors env = TE_DataCtors env_mid"
             "TE_Datatypes env = TE_Datatypes env_mid"
-            "TE_GhostDatatypes env = TE_GhostDatatypes env_mid"
             using dt_eq_env_body dt_eq_body_mid by simp_all
 
           \<comment> \<open>Chain storeTyping_extends: storeTyping \<le> bodyStoreTyping \<le> postStoreTyping. \<close>

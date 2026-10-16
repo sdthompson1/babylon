@@ -38,24 +38,38 @@ lemma extend_env_one_var_TE_Datatypes [simp]:
   "TE_Datatypes (extend_env_one_var constOf ghost b env) = TE_Datatypes env"
   by (cases b) (simp add: extend_env_one_var_def)
 
-lemma extend_env_one_var_TE_GhostDatatypes [simp]:
-  "TE_GhostDatatypes (extend_env_one_var constOf ghost b env) = TE_GhostDatatypes env"
+lemma extend_env_one_var_TE_AbstractAllocLevels [simp]:
+  "TE_AbstractAllocLevels (extend_env_one_var constOf ghost b env) = TE_AbstractAllocLevels env"
+  by (cases b) (simp add: extend_env_one_var_def)
+
+(* The ghost set reads only the datatype tables, which the extension leaves
+   alone (stated in the _r normal form, so that simp can use it). *)
+lemma extend_env_one_var_ghost_datatypes_r [simp]:
+  "ghost_datatypes_r (extend_env_one_var constOf ghost b env) R = ghost_datatypes_r env R"
   by (cases b) (simp add: extend_env_one_var_def)
 
 lemma foldr_extend_env_one_var_TE_Datatypes [simp]:
   "TE_Datatypes (foldr (extend_env_one_var constOf ghost) bs env) = TE_Datatypes env"
   by (induction bs) simp_all
 
-lemma foldr_extend_env_one_var_TE_GhostDatatypes [simp]:
-  "TE_GhostDatatypes (foldr (extend_env_one_var constOf ghost) bs env) = TE_GhostDatatypes env"
+lemma foldr_extend_env_one_var_TE_AbstractAllocLevels [simp]:
+  "TE_AbstractAllocLevels (foldr (extend_env_one_var constOf ghost) bs env) = TE_AbstractAllocLevels env"
+  by (induction bs) simp_all
+
+lemma foldr_extend_env_one_var_ghost_datatypes_r [simp]:
+  "ghost_datatypes_r (foldr (extend_env_one_var constOf ghost) bs env) R = ghost_datatypes_r env R"
   by (induction bs) simp_all
 
 lemma extend_env_with_pattern_vars_TE_Datatypes [simp]:
   "TE_Datatypes (extend_env_with_pattern_vars env constOf ghost ps) = TE_Datatypes env"
   unfolding extend_env_with_pattern_vars_def by simp
 
-lemma extend_env_with_pattern_vars_TE_GhostDatatypes [simp]:
-  "TE_GhostDatatypes (extend_env_with_pattern_vars env constOf ghost ps) = TE_GhostDatatypes env"
+lemma extend_env_with_pattern_vars_TE_AbstractAllocLevels [simp]:
+  "TE_AbstractAllocLevels (extend_env_with_pattern_vars env constOf ghost ps) = TE_AbstractAllocLevels env"
+  unfolding extend_env_with_pattern_vars_def by simp
+
+lemma extend_env_with_pattern_vars_ghost_datatypes_r [simp]:
+  "ghost_datatypes_r (extend_env_with_pattern_vars env constOf ghost ps) R = ghost_datatypes_r env R"
   unfolding extend_env_with_pattern_vars_def by simp
 
 (* extend_env_one_var preserves TE_DataCtors. *)
@@ -332,7 +346,7 @@ lemma is_well_kinded_extend_env_with_pattern_vars [simp]:
   "is_well_kinded (extend_env_with_pattern_vars env constOf ghost ps) ty = is_well_kinded env ty"
   using is_well_kinded_cong_env[of "extend_env_with_pattern_vars env constOf ghost ps" env ty] by simp
 
-(* is_runtime_type only depends on TE_RuntimeTypeVars and TE_GhostDatatypes;
+(* is_runtime_type only depends on TE_RuntimeTypeVars and the ghost set;
    extend_env_with_pattern_vars doesn't touch either. *)
 lemma is_runtime_type_extend_env_with_pattern_vars [simp]:
   "is_runtime_type (extend_env_with_pattern_vars env constOf ghost ps) ty = is_runtime_type env ty"
@@ -399,8 +413,7 @@ next
   have dt_eq: "TE_Datatypes ?env_rest = TE_Datatypes env"
     by (induction rest) simp_all
   have rtv_eq: "TE_RuntimeTypeVars ?env_rest = TE_RuntimeTypeVars env" by simp
-  have gd_eq: "TE_GhostDatatypes ?env_rest = TE_GhostDatatypes env"
-    by (induction rest) simp_all
+  have gd_eq: "ghost_datatypes ?env_rest = ghost_datatypes env" by simp
   from Cons.prems(1) have b_wk: "is_well_kinded env (snd (snd b))" by simp
   have wk_lift: "is_well_kinded ?env_rest (snd (snd b))"
     using is_well_kinded_cong_env[OF tv_eq dt_eq] b_wk by simp
@@ -741,19 +754,22 @@ next
         \<comment> \<open>Runtime side: from is_runtime_type env (CoreTy_Datatype dtName tyArgs),
             dtName is non-ghost and tyArgs all runtime. Then by tyenv_nonghost_payloads_runtime,
             payloadTy is runtime in env extended with tyvars. Specialize with tyArgs. \<close>
-        have ng: "dtName |\<notin>| TE_GhostDatatypes env"
+        have ng: "dtName \<notin> ghost_datatypes env"
           using "5.prems"(2) CoreTy_Datatype ty_match by auto
         have tyArgs_rt: "list_all (is_runtime_type env) tyArgs"
           using "5.prems"(2) CoreTy_Datatype by auto
+        have lk: "fmlookup (TE_DataCtors env) ctorName = Some (dtName, tyvars, payloadTy)"
+          using \<open>fmlookup (TE_DataCtors env) ctorName = Some triple\<close> triple_eq by simp
+        have fresh: "fset_of_list tyvars |\<inter>| TE_AbstractTypes env = {||}"
+          using "5.prems"(4) lk unfolding tyenv_well_formed_def tyenv_ctor_tyvars_fresh_def by blast
         have payload_rt_at_tyvars:
           "is_runtime_type (env\<lparr>TE_TypeVars := TE_AbstractTypes env |\<union>| fset_of_list tyvars,
                                   TE_RuntimeTypeVars := (TE_AbstractTypes env |\<inter>| TE_RuntimeTypeVars env)
                                                          |\<union>| fset_of_list tyvars\<rparr>) payloadTy"
-          using "5.prems"(4) \<open>fmlookup (TE_DataCtors env) ctorName = Some triple\<close> triple_eq ng
-          unfolding tyenv_well_formed_def tyenv_nonghost_payloads_runtime_def by force
+          using tyenv_nonghost_payloads_runtime[OF "5.prems"(4) lk ng] .
         have substituted_payload_rt:
           "is_runtime_type env (apply_subst (fmap_of_list (zip tyvars tyArgs)) payloadTy)"
-          using apply_subst_specializes_runtime[OF payload_rt_at_tyvars tyArgs_rt len_args[symmetric]] .
+          using apply_subst_specializes_runtime[OF payload_rt_at_tyvars tyArgs_rt len_args[symmetric] fresh] .
         show ?thesis
           by (simp add: "5.IH" "5.prems"(4) CoreTy_Datatype Some
               \<open>fmlookup (TE_DataCtors env) ctorName = Some triple\<close> inner_compat substituted_payload_rt
@@ -1388,8 +1404,8 @@ proof -
     unfolding extend_env_with_tyvars_def by simp
   have dtE: "TE_Datatypes env = TE_Datatypes ?envE"
     unfolding extend_env_with_tyvars_def by simp
-  have gdE: "TE_GhostDatatypes env = TE_GhostDatatypes ?envE"
-    unfolding extend_env_with_tyvars_def by simp
+  have gdE: "ghost_datatypes env \<subseteq> ghost_datatypes ?envE"
+    by (rule equalityD2[OF ghost_datatypes_extend_env_with_tyvars_fresh[OF bound wf]])
 
   \<comment> \<open>In the extended env, the variable types are well-kinded / runtime because
       the pattern is compatible with the (well-kinded / runtime) scrutinee type. \<close>

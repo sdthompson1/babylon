@@ -73,6 +73,15 @@ definition tyenv_ctor_tyvars_distinct :: "CoreTyEnv \<Rightarrow> bool" where
       fmlookup (TE_DataCtors env) ctorName = Some (dtName, tyVars, payload) \<longrightarrow>
       distinct tyVars)"
 
+(* Data constructor type argument names are distinct from abstract type names.
+   (In the Babylon surface syntax, this condition is always met, because abstract
+   type names are dotted, but datatype type parameter names are undotted.) *)
+definition tyenv_ctor_tyvars_fresh :: "CoreTyEnv \<Rightarrow> bool" where
+  "tyenv_ctor_tyvars_fresh env =
+    (\<forall>ctorName dtName tyVars payload.
+      fmlookup (TE_DataCtors env) ctorName = Some (dtName, tyVars, payload) \<longrightarrow>
+      fset_of_list tyVars |\<inter>| TE_AbstractTypes env = {||})"
+
 (* TE_DataCtorsByType is consistent with TE_DataCtors:
    A constructor is in TE_DataCtorsByType[dtName] iff it maps to dtName in TE_DataCtors *)
 definition tyenv_ctors_by_type_consistent :: "CoreTyEnv \<Rightarrow> bool" where
@@ -96,6 +105,13 @@ definition tyenv_fun_tyvars_distinct :: "CoreTyEnv \<Rightarrow> bool" where
     (\<forall>funName info. fmlookup (TE_Functions env) funName = Some info \<longrightarrow>
       distinct (FI_TyArgs info))"
 
+(* Function type parameter names are distinct from abstract type names. (This is
+   the function equivalent of tyenv_ctor_tyvars_fresh.)  *)
+definition tyenv_fun_tyvars_fresh :: "CoreTyEnv \<Rightarrow> bool" where
+  "tyenv_fun_tyvars_fresh env =
+    (\<forall>funName info. fmlookup (TE_Functions env) funName = Some info \<longrightarrow>
+      fset_of_list (FI_TyArgs info) |\<inter>| TE_AbstractTypes env = {||})"
+
 (* For non-ghost functions, the return type and the non-ghost parameter types must
    be runtime types (for polymorphic functions, this only needs to hold when the
    type arguments themselves are runtime types). The ghost parameter types are
@@ -117,22 +133,6 @@ definition tyenv_fun_return_types_complete :: "CoreTyEnv \<Rightarrow> bool" whe
     (\<forall>funName info. fmlookup (TE_Functions env) funName = Some info \<and>
     (FI_Ghost info) = NotGhost \<longrightarrow>
       is_complete_type (FI_ReturnType info))"
-
-(* For non-ghost datatypes, all constructor payload types must be runtime.
-   This ensures variant types can be represented in memory (e.g. as tagged unions). *)
-definition tyenv_nonghost_payloads_runtime :: "CoreTyEnv \<Rightarrow> bool" where
-  "tyenv_nonghost_payloads_runtime env =
-    (\<forall>ctorName dtName tyVars payload.
-      fmlookup (TE_DataCtors env) ctorName = Some (dtName, tyVars, payload) \<longrightarrow>
-      dtName |\<notin>| TE_GhostDatatypes env \<longrightarrow>
-      is_runtime_type (env \<lparr> TE_TypeVars := TE_AbstractTypes env |\<union>| fset_of_list tyVars,
-                             TE_RuntimeTypeVars := (TE_AbstractTypes env |\<inter>| TE_RuntimeTypeVars env)
-                                                    |\<union>| fset_of_list tyVars \<rparr>) payload)"
-
-(* Ghost datatypes must be a subset of all datatypes *)
-definition tyenv_ghost_datatypes_subset :: "CoreTyEnv \<Rightarrow> bool" where
-  "tyenv_ghost_datatypes_subset env =
-    (TE_GhostDatatypes env |\<subseteq>| fmdom (TE_Datatypes env))"
 
 (* All datatypes are inhabited (have at least one data constructor). This
    comes in two parts:
@@ -159,7 +159,7 @@ definition tyenv_abstract_types_subset :: "CoreTyEnv \<Rightarrow> bool" where
   "tyenv_abstract_types_subset env =
     (TE_AbstractTypes env |\<subseteq>| TE_TypeVars env)"
 
-(* A type environment is well-formed if all the above conditions hold *)
+(* A type environment is well-formed if all the above conditions hold. *)
 definition tyenv_well_formed :: "CoreTyEnv \<Rightarrow> bool" where
   "tyenv_well_formed env =
     (tyenv_vars_well_kinded env \<and>
@@ -171,16 +171,55 @@ definition tyenv_well_formed :: "CoreTyEnv \<Rightarrow> bool" where
      tyenv_ctors_consistent env \<and>
      tyenv_payloads_well_kinded env \<and>
      tyenv_ctor_tyvars_distinct env \<and>
+     tyenv_ctor_tyvars_fresh env \<and>
      tyenv_ctors_by_type_consistent env \<and>
      tyenv_fun_types_well_kinded env \<and>
      tyenv_fun_tyvars_distinct env \<and>
+     tyenv_fun_tyvars_fresh env \<and>
      tyenv_fun_ghost_constraint env \<and>
      tyenv_fun_return_types_complete env \<and>
-     tyenv_nonghost_payloads_runtime env \<and>
-     tyenv_ghost_datatypes_subset env \<and>
      tyenv_runtime_tyvars_subset env \<and>
      tyenv_abstract_types_subset env \<and>
      tyenv_datatypes_nonempty env)"
+
+
+(* The two clauses the substitution engines (TypeSubstHelpers.thy,
+   TypeSubstModuleEnv.thy) need of an env: distinct binders in every
+   constructor and function signature. Stated separately so that the engines
+   can be applied to envs that are not well-formed in full (the linking proof
+   runs them on intermediate envs that mix two sub-links' declarations). *)
+definition tyenv_binders_distinct :: "CoreTyEnv \<Rightarrow> bool" where
+  "tyenv_binders_distinct env =
+    (tyenv_ctor_tyvars_distinct env \<and> tyenv_fun_tyvars_distinct env)"
+
+lemma tyenv_well_formed_binders_distinct:
+  "tyenv_well_formed env \<Longrightarrow> tyenv_binders_distinct env"
+  unfolding tyenv_well_formed_def tyenv_binders_distinct_def by blast
+
+(* The bundle reads only the two signature tables. *)
+lemma tyenv_binders_distinct_cong:
+  assumes "TE_DataCtors env' = TE_DataCtors env"
+      and "TE_Functions env' = TE_Functions env"
+  shows "tyenv_binders_distinct env' = tyenv_binders_distinct env"
+  unfolding tyenv_binders_distinct_def tyenv_ctor_tyvars_distinct_def
+            tyenv_fun_tyvars_distinct_def assms ..
+
+lemma tyenv_binders_distinct_simps [simp]:
+  "tyenv_binders_distinct (TE_LocalVars_update f1 env) = tyenv_binders_distinct env"
+  "tyenv_binders_distinct (TE_GlobalVars_update f2 env) = tyenv_binders_distinct env"
+  "tyenv_binders_distinct (TE_GhostLocals_update f3 env) = tyenv_binders_distinct env"
+  "tyenv_binders_distinct (TE_ConstLocals_update f4 env) = tyenv_binders_distinct env"
+  "tyenv_binders_distinct (TE_TypeVars_update f5 env) = tyenv_binders_distinct env"
+  "tyenv_binders_distinct (TE_RuntimeTypeVars_update f6 env) = tyenv_binders_distinct env"
+  "tyenv_binders_distinct (TE_ReturnType_update f7 env) = tyenv_binders_distinct env"
+  "tyenv_binders_distinct (TE_FunctionGhost_update f8 env) = tyenv_binders_distinct env"
+  "tyenv_binders_distinct (TE_FunctionImpure_update f9 env) = tyenv_binders_distinct env"
+  "tyenv_binders_distinct (TE_ProofGoal_update f10 env) = tyenv_binders_distinct env"
+  "tyenv_binders_distinct (TE_ProofTopLevel_update f11 env) = tyenv_binders_distinct env"
+  "tyenv_binders_distinct (TE_Datatypes_update f12 env) = tyenv_binders_distinct env"
+  "tyenv_binders_distinct (TE_DataCtorsByType_update f13 env) = tyenv_binders_distinct env"
+  "tyenv_binders_distinct (TE_AbstractAllocLevels_update f14 env) = tyenv_binders_distinct env"
+  by (rule tyenv_binders_distinct_cong; simp)+
 
 (* If a property P holds of every parameter type, then it holds of the NotGhost
    parameter types (in the shape that tyenv_fun_ghost_constraint needs). *)
@@ -229,6 +268,68 @@ proof -
   then show ?thesis using lk by (cases ctors) auto
 qed
 
+(* A constructor of a registered datatype appears in that datatype's entry
+   list (the three table-consistency clauses of tyenv_well_formed). *)
+lemma datatype_ctor_entries_member:
+  assumes cons: "tyenv_ctors_consistent env"
+      and btc: "tyenv_ctors_by_type_consistent env"
+      and dne: "tyenv_datatypes_nonempty env"
+      and lk: "fmlookup (TE_DataCtors env) ctorName = Some (dtName, tyVars, payload)"
+  shows "(tyVars, payload) \<in> set (datatype_ctor_entries env dtName)"
+proof -
+  have "fmlookup (TE_Datatypes env) dtName = Some (length tyVars)"
+    using cons lk unfolding tyenv_ctors_consistent_def by blast
+  then have "dtName |\<in>| fmdom (TE_Datatypes env)" by (rule fmdomI)
+  then have "dtName |\<in>| fmdom (TE_DataCtorsByType env)"
+    using dne unfolding tyenv_datatypes_nonempty_def by (auto dest: fsubsetD)
+  then obtain cns where bt: "fmlookup (TE_DataCtorsByType env) dtName = Some cns"
+    by (auto simp: fmlookup_dom_iff)
+  have "ctorName \<in> set cns"
+    using btc bt lk unfolding tyenv_ctors_by_type_consistent_def by blast
+  then show ?thesis
+    unfolding datatype_ctor_entries_def bt using lk by force
+qed
+
+(* For non-ghost datatypes, all constructor payload types are runtime, with
+   the datatype's own type parameters runtime and with respect to the ghost
+   set of env. This is one unfolding of the fixpoint that defines the ghost
+   set; it is what makes variant values representable in memory (e.g. as
+   tagged unions). *)
+lemma tyenv_nonghost_payloads_runtime_g:
+  assumes wf: "tyenv_well_formed env"
+      and lk: "fmlookup (TE_DataCtors env) ctorName = Some (dtName, tyVars, payload)"
+      and ng: "dtName \<notin> ghost_datatypes env"
+  shows "is_runtime_type_g (ghost_datatypes env)
+           ((TE_AbstractTypes env |\<inter>| TE_RuntimeTypeVars env) |\<union>| fset_of_list tyVars) payload"
+proof (rule ghost_datatypes_r_payload_runtime[OF _ ng])
+  from wf have cons: "tyenv_ctors_consistent env"
+    and btc: "tyenv_ctors_by_type_consistent env"
+    and dne: "tyenv_datatypes_nonempty env"
+    unfolding tyenv_well_formed_def by simp_all
+  show "dtName |\<in>| fmdom (TE_Datatypes env)"
+    using cons lk unfolding tyenv_ctors_consistent_def by (blast intro: fmdomI)
+  show "(tyVars, payload) \<in> set (datatype_ctor_entries env dtName)"
+    by (rule datatype_ctor_entries_member[OF cons btc dne lk])
+qed
+
+(* The same, judged in the payload's scope (the datatype's type parameters in
+   scope and runtime). The scope has the same ghost set as env because the
+   type parameters do not shadow abstract types (tyenv_ctor_tyvars_fresh). *)
+lemma tyenv_nonghost_payloads_runtime:
+  assumes wf: "tyenv_well_formed env"
+      and lk: "fmlookup (TE_DataCtors env) ctorName = Some (dtName, tyVars, payload)"
+      and ng: "dtName \<notin> ghost_datatypes env"
+  shows "is_runtime_type (env \<lparr> TE_TypeVars := TE_AbstractTypes env |\<union>| fset_of_list tyVars,
+                               TE_RuntimeTypeVars := (TE_AbstractTypes env |\<inter>| TE_RuntimeTypeVars env)
+                                                      |\<union>| fset_of_list tyVars \<rparr>) payload"
+proof -
+  have fresh: "fset_of_list tyVars |\<inter>| TE_AbstractTypes env = {||}"
+    using wf lk unfolding tyenv_well_formed_def tyenv_ctor_tyvars_fresh_def by blast
+  show ?thesis
+    unfolding is_runtime_type_def ghost_datatypes_scope_eq[OF fresh]
+    using tyenv_nonghost_payloads_runtime_g[OF wf lk ng] by simp
+qed
+
 (* Adding a well-kinded, runtime, non-ghost local variable preserves tyenv_well_formed. *)
 lemma tyenv_well_formed_add_var:
   assumes wf: "tyenv_well_formed env"
@@ -248,12 +349,12 @@ proof -
     and rest: "tyenv_ctors_consistent env"
               "tyenv_payloads_well_kinded env"
               "tyenv_ctor_tyvars_distinct env"
+              "tyenv_ctor_tyvars_fresh env"
               "tyenv_ctors_by_type_consistent env"
               "tyenv_fun_types_well_kinded env"
               "tyenv_fun_tyvars_distinct env"
+              "tyenv_fun_tyvars_fresh env"
               "tyenv_fun_ghost_constraint env"
-              "tyenv_nonghost_payloads_runtime env"
-              "tyenv_ghost_datatypes_subset env"
               "tyenv_runtime_tyvars_subset env"
               "tyenv_abstract_types_subset env"
               "tyenv_datatypes_nonempty env"
@@ -273,8 +374,8 @@ proof -
   have wk_scope_eq: "\<And>tvs t. is_well_kinded (?env' \<lparr> TE_TypeVars := tvs \<rparr>) t =
                                is_well_kinded (env \<lparr> TE_TypeVars := tvs \<rparr>) t"
     by (rule is_well_kinded_cong_env) simp_all
-  \<comment> \<open>is_runtime_type only depends on TE_GhostDatatypes and TE_RuntimeTypeVars\<close>
-  have gds_eq: "TE_GhostDatatypes ?env' = TE_GhostDatatypes env" by simp
+  \<comment> \<open>is_runtime_type only depends on the ghost set and TE_RuntimeTypeVars\<close>
+  have gds_eq: "ghost_datatypes ?env' = ghost_datatypes env" by simp
   have rtv_eq: "TE_RuntimeTypeVars ?env' = TE_RuntimeTypeVars env" by simp
   have rt_preserved: "\<And>ty'. is_runtime_type ?env' ty' = is_runtime_type env ty'"
     using is_runtime_type_cong_env[OF gds_eq rtv_eq] by simp
@@ -306,23 +407,22 @@ proof -
     by (simp add: wk_scope_eq abs_eq)
   moreover have "tyenv_ctor_tyvars_distinct ?env'" using rest(3)
     unfolding tyenv_ctor_tyvars_distinct_def by simp
-  moreover have "tyenv_ctors_by_type_consistent ?env'" using rest(4)
+  moreover have "tyenv_ctor_tyvars_fresh ?env'" using rest(4)
+    unfolding tyenv_ctor_tyvars_fresh_def by simp
+  moreover have "tyenv_ctors_by_type_consistent ?env'" using rest(5)
     unfolding tyenv_ctors_by_type_consistent_def by simp
   moreover have "tyenv_fun_types_well_kinded ?env'"
-    using rest(5) unfolding tyenv_fun_types_well_kinded_def
+    using rest(6) unfolding tyenv_fun_types_well_kinded_def
     by (simp add: wk_scope_eq abs_eq)
-  moreover have "tyenv_fun_tyvars_distinct ?env'" using rest(6)
+  moreover have "tyenv_fun_tyvars_distinct ?env'" using rest(7)
     unfolding tyenv_fun_tyvars_distinct_def by simp
+  moreover have "tyenv_fun_tyvars_fresh ?env'" using rest(8)
+    unfolding tyenv_fun_tyvars_fresh_def by simp
   moreover have "tyenv_fun_ghost_constraint ?env'"
-    using rest(7) unfolding tyenv_fun_ghost_constraint_def Let_def
+    using rest(9) unfolding tyenv_fun_ghost_constraint_def Let_def
     by (simp add: rt_scope_eq abs_eq rtv_eq)
   moreover have "tyenv_fun_return_types_complete ?env'"
     using fun_ret_cp unfolding tyenv_fun_return_types_complete_def by simp
-  moreover have "tyenv_nonghost_payloads_runtime ?env'"
-    using rest(8) unfolding tyenv_nonghost_payloads_runtime_def
-    by (simp add: rt_scope_eq abs_eq rtv_eq)
-  moreover have "tyenv_ghost_datatypes_subset ?env'" using rest(9)
-    unfolding tyenv_ghost_datatypes_subset_def by simp
   moreover have "tyenv_runtime_tyvars_subset ?env'" using rest(10)
     unfolding tyenv_runtime_tyvars_subset_def by simp
   moreover have "tyenv_abstract_types_subset ?env'" using rest(11)
@@ -351,12 +451,12 @@ proof -
     and rest: "tyenv_ctors_consistent env"
               "tyenv_payloads_well_kinded env"
               "tyenv_ctor_tyvars_distinct env"
+              "tyenv_ctor_tyvars_fresh env"
               "tyenv_ctors_by_type_consistent env"
               "tyenv_fun_types_well_kinded env"
               "tyenv_fun_tyvars_distinct env"
+              "tyenv_fun_tyvars_fresh env"
               "tyenv_fun_ghost_constraint env"
-              "tyenv_nonghost_payloads_runtime env"
-              "tyenv_ghost_datatypes_subset env"
               "tyenv_runtime_tyvars_subset env"
               "tyenv_abstract_types_subset env"
               "tyenv_datatypes_nonempty env"
@@ -373,8 +473,8 @@ proof -
   have wk_scope_eq: "\<And>tvs t. is_well_kinded (?env' \<lparr> TE_TypeVars := tvs \<rparr>) t =
                                is_well_kinded (env \<lparr> TE_TypeVars := tvs \<rparr>) t"
     by (rule is_well_kinded_cong_env) simp_all
-  \<comment> \<open>is_runtime_type only depends on TE_GhostDatatypes and TE_RuntimeTypeVars\<close>
-  have gds_eq: "TE_GhostDatatypes ?env' = TE_GhostDatatypes env" by simp
+  \<comment> \<open>is_runtime_type only depends on the ghost set and TE_RuntimeTypeVars\<close>
+  have gds_eq: "ghost_datatypes ?env' = ghost_datatypes env" by simp
   have rtv_eq: "TE_RuntimeTypeVars ?env' = TE_RuntimeTypeVars env" by simp
   have rt_preserved: "\<And>ty'. is_runtime_type ?env' ty' = is_runtime_type env ty'"
     using is_runtime_type_cong_env[OF gds_eq rtv_eq] by simp
@@ -406,23 +506,22 @@ proof -
     by (simp add: wk_scope_eq abs_eq)
   moreover have "tyenv_ctor_tyvars_distinct ?env'" using rest(3)
     unfolding tyenv_ctor_tyvars_distinct_def by simp
-  moreover have "tyenv_ctors_by_type_consistent ?env'" using rest(4)
+  moreover have "tyenv_ctor_tyvars_fresh ?env'" using rest(4)
+    unfolding tyenv_ctor_tyvars_fresh_def by simp
+  moreover have "tyenv_ctors_by_type_consistent ?env'" using rest(5)
     unfolding tyenv_ctors_by_type_consistent_def by simp
   moreover have "tyenv_fun_types_well_kinded ?env'"
-    using rest(5) unfolding tyenv_fun_types_well_kinded_def
+    using rest(6) unfolding tyenv_fun_types_well_kinded_def
     by (simp add: wk_scope_eq abs_eq)
-  moreover have "tyenv_fun_tyvars_distinct ?env'" using rest(6)
+  moreover have "tyenv_fun_tyvars_distinct ?env'" using rest(7)
     unfolding tyenv_fun_tyvars_distinct_def by simp
+  moreover have "tyenv_fun_tyvars_fresh ?env'" using rest(8)
+    unfolding tyenv_fun_tyvars_fresh_def by simp
   moreover have "tyenv_fun_ghost_constraint ?env'"
-    using rest(7) unfolding tyenv_fun_ghost_constraint_def Let_def
+    using rest(9) unfolding tyenv_fun_ghost_constraint_def Let_def
     by (simp add: rt_scope_eq abs_eq rtv_eq)
   moreover have "tyenv_fun_return_types_complete ?env'"
     using fun_ret_cp unfolding tyenv_fun_return_types_complete_def by simp
-  moreover have "tyenv_nonghost_payloads_runtime ?env'"
-    using rest(8) unfolding tyenv_nonghost_payloads_runtime_def
-    by (simp add: rt_scope_eq abs_eq rtv_eq)
-  moreover have "tyenv_ghost_datatypes_subset ?env'" using rest(9)
-    unfolding tyenv_ghost_datatypes_subset_def by simp
   moreover have "tyenv_runtime_tyvars_subset ?env'" using rest(10)
     unfolding tyenv_runtime_tyvars_subset_def by simp
   moreover have "tyenv_abstract_types_subset ?env'" using rest(11)
@@ -459,7 +558,7 @@ proof -
     tyenv_fun_tyvars_distinct_def
     tyenv_fun_ghost_constraint_def Let_def
     tyenv_fun_return_types_complete_def
-    tyenv_nonghost_payloads_runtime_def tyenv_ghost_datatypes_subset_def
+    tyenv_ctor_tyvars_fresh_def tyenv_fun_tyvars_fresh_def
     tyenv_runtime_tyvars_subset_def
     tyenv_abstract_types_subset_def
     tyenv_datatypes_nonempty_def
@@ -493,7 +592,7 @@ proof -
     tyenv_fun_tyvars_distinct_def
     tyenv_fun_ghost_constraint_def Let_def
     tyenv_fun_return_types_complete_def
-    tyenv_nonghost_payloads_runtime_def tyenv_ghost_datatypes_subset_def
+    tyenv_ctor_tyvars_fresh_def tyenv_fun_tyvars_fresh_def
     tyenv_runtime_tyvars_subset_def
     tyenv_abstract_types_subset_def
     tyenv_datatypes_nonempty_def
@@ -527,7 +626,7 @@ proof -
     tyenv_fun_tyvars_distinct_def
     tyenv_fun_ghost_constraint_def Let_def
     tyenv_fun_return_types_complete_def
-    tyenv_nonghost_payloads_runtime_def tyenv_ghost_datatypes_subset_def
+    tyenv_ctor_tyvars_fresh_def tyenv_fun_tyvars_fresh_def
     tyenv_runtime_tyvars_subset_def
     tyenv_abstract_types_subset_def
     tyenv_datatypes_nonempty_def
@@ -572,8 +671,8 @@ proof -
     and fun_tyvars_distinct: "tyenv_fun_tyvars_distinct env"
     and fun_ghost: "tyenv_fun_ghost_constraint env"
     and fun_ret_cp: "tyenv_fun_return_types_complete env"
-    and nonghost_payloads: "tyenv_nonghost_payloads_runtime env"
-    and ghost_dt_subset: "tyenv_ghost_datatypes_subset env"
+    and ctor_fresh: "tyenv_ctor_tyvars_fresh env"
+    and fun_fresh: "tyenv_fun_tyvars_fresh env"
     and rt_subset: "tyenv_runtime_tyvars_subset env"
     and abs_subset: "tyenv_abstract_types_subset env"
     and dt_nonempty: "tyenv_datatypes_nonempty env"
@@ -592,7 +691,8 @@ proof -
   proof -
     fix ty'
     assume rt1: "is_runtime_type ?e1 ty'"
-    have gd: "TE_GhostDatatypes ?e2 = TE_GhostDatatypes ?e1" by simp
+    have gd: "ghost_datatypes ?e2 \<subseteq> ghost_datatypes ?e1"
+      by simp (rule ghost_datatypes_r_antitone, auto)
     have tv_sub: "type_tyvars ty' \<subseteq> fset (TE_RuntimeTypeVars ?e1)"
       using is_runtime_type_tyvars_subset[OF rt1] .
     have "TE_RuntimeTypeVars ?e1 |\<subseteq>| TE_RuntimeTypeVars ?e2" by auto
@@ -605,7 +705,8 @@ proof -
 
   \<comment> \<open>General monotone transfer for the function/ctor scopes. The ?env'-side runtime
      set differs from the env-side only by including (?A |\<inter>| extraRT), which is a
-     superset, so is_runtime_type transfers (same TE_TypeVars, same TE_GhostDatatypes).\<close>
+     superset, so is_runtime_type transfers (same TE_TypeVars; the ghost set can
+     only shrink).\<close>
   have rt_scope_mono:
     "\<And>extraTV' base t.
        is_runtime_type (env \<lparr> TE_TypeVars := ?A |\<union>| extraTV',
@@ -619,7 +720,8 @@ proof -
     let ?f2 = "?env' \<lparr> TE_TypeVars := ?A |\<union>| extraTV',
                        TE_RuntimeTypeVars := (?A |\<inter>| TE_RuntimeTypeVars ?env') |\<union>| base \<rparr>"
     assume rt1: "is_runtime_type ?f1 t"
-    have gd: "TE_GhostDatatypes ?f2 = TE_GhostDatatypes ?f1" by simp
+    have gd: "ghost_datatypes ?f2 \<subseteq> ghost_datatypes ?f1"
+      by simp (rule ghost_datatypes_r_antitone, auto)
     have tv_sub: "type_tyvars t \<subseteq> fset (TE_RuntimeTypeVars ?f1)"
       using is_runtime_type_tyvars_subset[OF rt1] .
     have "TE_RuntimeTypeVars ?f1 |\<subseteq>| TE_RuntimeTypeVars ?f2"
@@ -688,6 +790,8 @@ proof -
     by (simp add: wk_drop_rtv abs_eq)
   moreover have "tyenv_ctor_tyvars_distinct ?env'"
     using ctor_tyvars_distinct unfolding tyenv_ctor_tyvars_distinct_def by simp
+  moreover have "tyenv_ctor_tyvars_fresh ?env'"
+    using ctor_fresh unfolding tyenv_ctor_tyvars_fresh_def by (simp add: abs_eq)
   moreover have "tyenv_ctors_by_type_consistent ?env'"
     using ctors_by_type unfolding tyenv_ctors_by_type_consistent_def by simp
   moreover have "tyenv_fun_types_well_kinded ?env'"
@@ -695,6 +799,8 @@ proof -
     by (simp add: wk_drop_rtv abs_eq)
   moreover have "tyenv_fun_tyvars_distinct ?env'"
     using fun_tyvars_distinct unfolding tyenv_fun_tyvars_distinct_def by simp
+  moreover have "tyenv_fun_tyvars_fresh ?env'"
+    using fun_fresh unfolding tyenv_fun_tyvars_fresh_def by (simp add: abs_eq)
   moreover have "tyenv_fun_ghost_constraint ?env'"
     unfolding tyenv_fun_ghost_constraint_def Let_def
   proof (intro allI impI, elim conjE)
@@ -722,26 +828,6 @@ proof -
   qed
   moreover have "tyenv_fun_return_types_complete ?env'"
     using fun_ret_cp unfolding tyenv_fun_return_types_complete_def by simp
-  moreover have "tyenv_nonghost_payloads_runtime ?env'"
-    unfolding tyenv_nonghost_payloads_runtime_def
-  proof (intro allI impI)
-    fix ctorName dtName tyVars payload
-    assume ctor_lk': "fmlookup (TE_DataCtors ?env') ctorName = Some (dtName, tyVars, payload)"
-       and ng_dt: "dtName |\<notin>| TE_GhostDatatypes ?env'"
-    from ctor_lk' have ctor_lk: "fmlookup (TE_DataCtors env) ctorName = Some (dtName, tyVars, payload)"
-      by simp
-    from ng_dt have ng_dt_env: "dtName |\<notin>| TE_GhostDatatypes env" by simp
-    from nonghost_payloads ctor_lk ng_dt_env
-    have "is_runtime_type (env \<lparr> TE_TypeVars := ?A |\<union>| fset_of_list tyVars,
-              TE_RuntimeTypeVars := (?A |\<inter>| TE_RuntimeTypeVars env) |\<union>| fset_of_list tyVars \<rparr>) payload"
-      unfolding tyenv_nonghost_payloads_runtime_def by blast
-    thus "is_runtime_type (?env' \<lparr> TE_TypeVars := TE_AbstractTypes ?env' |\<union>| fset_of_list tyVars,
-              TE_RuntimeTypeVars := (TE_AbstractTypes ?env' |\<inter>| TE_RuntimeTypeVars ?env')
-                                     |\<union>| fset_of_list tyVars \<rparr>) payload"
-      using rt_scope_mono by (simp add: abs_eq)
-  qed
-  moreover have "tyenv_ghost_datatypes_subset ?env'"
-    using ghost_dt_subset unfolding tyenv_ghost_datatypes_subset_def by simp
   moreover have "tyenv_runtime_tyvars_subset ?env'"
     using rt_subset assms(2) unfolding tyenv_runtime_tyvars_subset_def
     by simp blast

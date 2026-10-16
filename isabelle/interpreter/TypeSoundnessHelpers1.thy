@@ -398,15 +398,14 @@ lemma fun_info_matches_interp_fun_ground_cong_env:
       and dt: "TE_Datatypes env1 = TE_Datatypes env2"
       and dc: "TE_DataCtors env1 = TE_DataCtors env2"
       and dcbt: "TE_DataCtorsByType env1 = TE_DataCtorsByType env2"
-      and gd: "TE_GhostDatatypes env1 = TE_GhostDatatypes env2"
       and al: "TE_AbstractAllocLevels env1 = TE_AbstractAllocLevels env2"
   shows "fun_info_matches_interp_fun env1 funInfo interpFun =
          fun_info_matches_interp_fun env2 funInfo interpFun"
 proof -
   have body_eq: "\<And>names. body_env_for env1 names funInfo = body_env_for env2 names funInfo"
-    by (rule body_env_for_cong[OF gv fn dt dc dcbt gd al])
+    by (rule body_env_for_cong[OF gv fn dt dc dcbt al])
   have body_fun_eq: "body_env_for env1 = body_env_for env2"
-    by (rule ext)+ (rule body_env_for_cong[OF gv fn dt dc dcbt gd al])
+    by (rule ext)+ (rule body_env_for_cong[OF gv fn dt dc dcbt al])
   have ext_eq: "\<And>externFun. extern_fun_contract env1 funInfo externFun
                               = extern_fun_contract env2 funInfo externFun"
     by (rule extern_fun_contract_ground_cong_env[OF dc dt])
@@ -428,7 +427,6 @@ lemma state_matches_env_cong_env:
       and dt: "TE_Datatypes env1 = TE_Datatypes env2"
       and dc: "TE_DataCtors env1 = TE_DataCtors env2"
       and dcbt: "TE_DataCtorsByType env1 = TE_DataCtorsByType env2"
-      and gd: "TE_GhostDatatypes env1 = TE_GhostDatatypes env2"
       and al: "TE_AbstractAllocLevels env1 = TE_AbstractAllocLevels env2"
   shows "state_matches_env state env1 storeTyping = state_matches_env state env2 storeTyping"
 proof -
@@ -440,7 +438,7 @@ proof -
     by (rule type_at_path_cong_env[OF dc[symmetric]])
   have fi_eq: "\<And>info ifn. fun_info_matches_interp_fun env1 info ifn
                             = fun_info_matches_interp_fun env2 info ifn"
-    by (rule fun_info_matches_interp_fun_cong_env[OF gv fn dt dc dcbt gd tv rtv al])
+    by (rule fun_info_matches_interp_fun_cong_env[OF gv fn dt dc dcbt tv rtv al])
   \<comment> \<open>The rewriting is done by unfolding, not by simp, so that it also reaches
       inside the branches of the case expressions. \<close>
   show ?thesis
@@ -470,10 +468,9 @@ lemma state_matches_env_transfer:
       and dt: "TE_Datatypes env2 = TE_Datatypes env1"
       and dc: "TE_DataCtors env2 = TE_DataCtors env1"
       and dcbt: "TE_DataCtorsByType env2 = TE_DataCtorsByType env1"
-      and gd: "TE_GhostDatatypes env2 = TE_GhostDatatypes env1"
       and al: "TE_AbstractAllocLevels env2 = TE_AbstractAllocLevels env1"
   shows "state_matches_env state env2 storeTyping"
-  using state_matches_env_cong_env[OF lv gv cl tv rtv fn dt dc dcbt gd al] sme
+  using state_matches_env_cong_env[OF lv gv cl tv rtv fn dt dc dcbt al] sme
   by auto
 
 (* After alloc_store + fmupd of locals, the new state matches the extended env

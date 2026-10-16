@@ -71,7 +71,7 @@ definition core_module_ghost_free :: "CoreModule \<Rightarrow> bool" where
     ((\<forall>name info. fmlookup (TE_Functions (CM_TyEnv m)) name = Some info
                     \<longrightarrow> FI_Ghost info = NotGhost \<and> no_ghost_params info
                         \<and> FI_Requires info = [] \<and> FI_Ensures info = [])
-     \<and> TE_GhostDatatypes (CM_TyEnv m) = {||}
+     \<and> ghost_datatypes (CM_TyEnv m) = {}
      \<and> TE_TypeVars (CM_TyEnv m) |\<subseteq>| TE_RuntimeTypeVars (CM_TyEnv m)
      \<and> (\<forall>name f body. fmlookup (CM_Functions m) name = Some f \<and> CF_Body f = Some body
                        \<longrightarrow> core_statement_list_ghost_free body))"

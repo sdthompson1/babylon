@@ -1,27 +1,10 @@
 theory CoreTypeProps
-  imports CoreTyEnv CoreFreeVars
+  imports RuntimeType
 begin
 
 (* ========================================================================== *)
 (* Type Properties *)
 (* ========================================================================== *)
-
-(* Check if a type is a runtime-compatible type (can be represented in memory).
-   Non-runtime types include MathInt, MathReal, and ghost datatypes (whose constructor
-   payloads contain non-runtime types and thus have unknown byte sizes).
-   A rigid type variable (CoreTy_Var n with n \<in> TE_TypeVars env) is runtime iff
-   it appears in TE_RuntimeTypeVars env. *)
-fun is_runtime_type :: "CoreTyEnv \<Rightarrow> CoreType \<Rightarrow> bool" where
-  "is_runtime_type env (CoreTy_Datatype nm tyargs) =
-     (nm |\<notin>| TE_GhostDatatypes env \<and> list_all (is_runtime_type env) tyargs)"
-| "is_runtime_type env CoreTy_Bool = True"
-| "is_runtime_type env (CoreTy_FiniteInt _ _) = True"
-| "is_runtime_type env CoreTy_MathInt = False"
-| "is_runtime_type env CoreTy_MathReal = False"
-| "is_runtime_type env (CoreTy_Record flds) = list_all (is_runtime_type env) (map snd flds)"
-| "is_runtime_type env (CoreTy_Array elemTy dims) = is_runtime_type env elemTy"
-| "is_runtime_type env (CoreTy_Var n) = (n |\<in>| TE_RuntimeTypeVars env)"
-| "is_runtime_type env (CoreTy_Extern _ _) = True"
 
 (* Check if a type is complete. An incomplete type is one that mentions an array with
    a dimension of unknown size (T[]): values of such a type only exist as views onto
@@ -110,13 +93,6 @@ lemma numeric_type_no_tyvars:
   "is_numeric_type ty \<Longrightarrow> type_tyvars ty = {}"
   by (cases ty) auto
 
-(* A list of type variables (as types) satisfies list_all is_runtime_type, provided
-   the variables are all declared runtime in the env *)
-lemma list_all_tyvar_is_runtime:
-  assumes "\<forall>n \<in> set ns. n |\<in>| TE_RuntimeTypeVars env"
-  shows "list_all (is_runtime_type env) (map CoreTy_Var ns)"
-  using assms by (induction ns) auto
-
 (* Numeric types are complete *)
 lemma numeric_type_is_complete:
   "is_numeric_type ty \<Longrightarrow> is_complete_type ty"
@@ -126,151 +102,6 @@ lemma numeric_type_is_complete:
 lemma list_all_tyvar_is_complete [simp]:
   "list_all is_complete_type (map CoreTy_Var ns)"
   by (induction ns) auto
-
-(* is_runtime_type only depends on TE_GhostDatatypes and TE_RuntimeTypeVars *)
-lemma is_runtime_type_cong_env:
-  "TE_GhostDatatypes env' = TE_GhostDatatypes env \<Longrightarrow>
-   TE_RuntimeTypeVars env' = TE_RuntimeTypeVars env \<Longrightarrow>
-   is_runtime_type env' ty = is_runtime_type env ty"
-  by (induction ty) (auto simp: list_all_iff)
-
-(* For ground types (no type variables), is_runtime_type doesn't consult
-   TE_RuntimeTypeVars at all — the CoreTy_Var case is unreachable. So changing
-   that field is irrelevant. Only TE_GhostDatatypes still matters. *)
-lemma is_runtime_type_ground_cong_env:
-  assumes ground: "type_tyvars ty = {}"
-      and gd_eq:  "TE_GhostDatatypes env' = TE_GhostDatatypes env"
-  shows "is_runtime_type env' ty = is_runtime_type env ty"
-using ground proof (induction ty)
-  case (CoreTy_Datatype nm tyargs)
-  from CoreTy_Datatype.prems have args_ground: "\<forall>t \<in> set tyargs. type_tyvars t = {}"
-    by auto
-  have IH: "\<And>t. t \<in> set tyargs \<Longrightarrow> is_runtime_type env' t = is_runtime_type env t"
-    using CoreTy_Datatype.IH args_ground by auto
-  hence "list_all (is_runtime_type env') tyargs = list_all (is_runtime_type env) tyargs"
-    by (induction tyargs) auto
-  thus ?case using gd_eq by auto
-next
-  case (CoreTy_Record flds)
-  from CoreTy_Record.prems have flds_ground: "\<forall>(nm, t) \<in> set flds. type_tyvars t = {}"
-    by (auto simp: case_prod_beta)
-  have IH: "\<And>t. t \<in> snd ` set flds \<Longrightarrow> is_runtime_type env' t = is_runtime_type env t"
-    using CoreTy_Record.IH flds_ground by auto
-  hence "list_all (is_runtime_type env') (map snd flds) = list_all (is_runtime_type env) (map snd flds)"
-    by (induction flds) auto
-  thus ?case by auto
-next
-  case (CoreTy_Var n) thus ?case by simp
-qed auto
-
-lemma is_runtime_type_TE_ConstLocals_irrelevant [simp]:
-  "is_runtime_type (env \<lparr> TE_ConstLocals := c \<rparr>) ty = is_runtime_type env ty"
-  using is_runtime_type_cong_env[of "env \<lparr> TE_ConstLocals := c \<rparr>" env] by simp
-
-(* If ty is runtime in an env, then every type variable in ty is in the env's
-   TE_RuntimeTypeVars. *)
-lemma is_runtime_type_tyvars_subset:
-  assumes "is_runtime_type env ty"
-  shows "type_tyvars ty \<subseteq> fset (TE_RuntimeTypeVars env)"
-using assms proof (induction ty)
-  case (CoreTy_Datatype name argTypes)
-  from CoreTy_Datatype.prems have
-    args_rt: "list_all (is_runtime_type env) argTypes" by simp
-  show ?case
-  proof
-    fix x assume "x \<in> type_tyvars (CoreTy_Datatype name argTypes)"
-    then obtain arg where arg_in: "arg \<in> set argTypes" and x_in: "x \<in> type_tyvars arg" by auto
-    from arg_in args_rt have "is_runtime_type env arg" by (simp add: list_all_iff)
-    with CoreTy_Datatype.IH arg_in x_in show "x \<in> fset (TE_RuntimeTypeVars env)" by blast
-  qed
-next
-  case (CoreTy_Record flds)
-  from CoreTy_Record.prems have flds_rt: "\<forall>(nm, ty) \<in> set flds. is_runtime_type env ty"
-    by (auto simp: list_all_iff)
-  show ?case
-  proof
-    fix x assume "x \<in> type_tyvars (CoreTy_Record flds)"
-    then obtain nm ty where nm_ty_in: "(nm, ty) \<in> set flds" and x_in: "x \<in> type_tyvars ty"
-      by auto
-    from nm_ty_in flds_rt have ty_rt: "is_runtime_type env ty" by blast
-    from CoreTy_Record.IH[OF nm_ty_in] ty_rt x_in
-    show "x \<in> fset (TE_RuntimeTypeVars env)" by (simp add: subsetD)
-  qed
-next
-  case (CoreTy_Array elemTy dims)
-  thus ?case by auto
-next
-  case (CoreTy_Var n)
-  thus ?case by force
-qed simp_all
-
-(* Growing TE_RuntimeTypeVars preserves is_runtime_type. The TE_TypeVars field may
-   also be extended at the same time; is_runtime_type doesn't depend on it, but the
-   combined form is convenient for callers. *)
-lemma is_runtime_type_extend_runtime_tyvars:
-  assumes "is_runtime_type env ty"
-  shows "is_runtime_type
-           (env \<lparr> TE_TypeVars := TE_TypeVars env |\<union>| extraTV,
-                  TE_RuntimeTypeVars := TE_RuntimeTypeVars env |\<union>| extraRT \<rparr>) ty"
-  using assms by (induction ty) (auto simp: list_all_iff)
-
-(* If ty is runtime in one env, and every type variable of ty is a runtime tyvar in a
-   second env (with the same TE_GhostDatatypes), then ty is runtime in the second env. *)
-lemma is_runtime_type_transfer:
-  assumes rt: "is_runtime_type env1 ty"
-    and mvs_in_env2: "type_tyvars ty \<subseteq> fset (TE_RuntimeTypeVars env2)"
-    and gd_eq: "TE_GhostDatatypes env2 = TE_GhostDatatypes env1"
-  shows "is_runtime_type env2 ty"
-  using rt mvs_in_env2 gd_eq
-proof (induction ty)
-  case (CoreTy_Datatype name argTypes)
-  from CoreTy_Datatype.prems(1) have
-    dt_nonghost: "name |\<notin>| TE_GhostDatatypes env1" and
-    args_rt: "list_all (is_runtime_type env1) argTypes"
-    by auto
-  from CoreTy_Datatype.prems(2) have
-    args_tyvars: "\<And>arg. arg \<in> set argTypes \<Longrightarrow> type_tyvars arg \<subseteq> fset (TE_RuntimeTypeVars env2)"
-    by auto
-  have args_rt': "list_all (is_runtime_type env2) argTypes"
-    using CoreTy_Datatype.IH args_rt args_tyvars CoreTy_Datatype.prems(3)
-    by (induction argTypes) (auto simp: list_all_iff)
-  show ?case using dt_nonghost args_rt' CoreTy_Datatype.prems(3) by simp
-next
-  case (CoreTy_Record flds)
-  from CoreTy_Record.prems(1) have flds_rt: "list_all (is_runtime_type env1) (map snd flds)"
-    by simp
-  have "\<And>nm ty. (nm, ty) \<in> set flds \<Longrightarrow> is_runtime_type env2 ty"
-  proof -
-    fix nm ty assume mem: "(nm, ty) \<in> set flds"
-    from mem flds_rt have ty_rt: "is_runtime_type env1 ty" by (auto simp: list_all_iff)
-    have ty_tyvars: "type_tyvars ty \<subseteq> fset (TE_RuntimeTypeVars env2)"
-      using mem CoreTy_Record.prems(2) by force
-    show "is_runtime_type env2 ty"
-      using CoreTy_Record.IH gd_eq mem ty_tyvars ty_rt by auto
-  qed
-  thus ?case by (auto simp: list_all_iff)
-next
-  case (CoreTy_Array elemTy dims)
-  thus ?case by auto
-next
-  case (CoreTy_Var n)
-  thus ?case by (auto simp: fset_of_list_elem)
-qed simp_all
-
-(* Growing TE_RuntimeTypeVars (with TE_GhostDatatypes unchanged) preserves
-   is_runtime_type: a runtime type's tyvars all sit in the source env's
-   runtime set. *)
-lemma is_runtime_type_mono_rtv:
-  assumes rt: "is_runtime_type env1 ty"
-      and rtv: "fset (TE_RuntimeTypeVars env1) \<subseteq> fset (TE_RuntimeTypeVars env2)"
-      and gd: "TE_GhostDatatypes env2 = TE_GhostDatatypes env1"
-  shows "is_runtime_type env2 ty"
-proof -
-  have "type_tyvars ty \<subseteq> fset (TE_RuntimeTypeVars env2)"
-    using is_runtime_type_tyvars_subset[OF rt] rtv by blast
-  then show ?thesis using is_runtime_type_transfer[OF rt _ gd] by blast
-qed
-
 
 (* ========================================================================== *)
 (* Term Properties *)

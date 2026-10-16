@@ -211,7 +211,7 @@ definition tyenv_nonghost_ctor :: "CoreTyEnv \<Rightarrow> string \<Rightarrow> 
   "tyenv_nonghost_ctor env ctorName =
     (case fmlookup (TE_DataCtors env) ctorName of
        None \<Rightarrow> False
-     | Some (dtName, _, _) \<Rightarrow> dtName |\<notin>| TE_GhostDatatypes env)"
+     | Some (dtName, _, _) \<Rightarrow> dtName \<notin> ghost_datatypes env)"
 
 (* The domain of a restricted map, exactly (the library only has the subset
    form fmdom_restrict_fset). Needed so that TE_AbstractTypes of the erased
@@ -236,11 +236,10 @@ definition erase_ghost_tyenv :: "CoreTyEnv \<Rightarrow> CoreTyEnv" where
         fmrestrict_fset (TE_RuntimeTypeVars env) (TE_AbstractAllocLevels env),
       TE_Functions := fmmap erase_ghost_funinfo
                         (fmfilter (tyenv_nonghost_fun env) (TE_Functions env)),
-      TE_Datatypes := fmfilter (\<lambda>dtName. dtName |\<notin>| TE_GhostDatatypes env) (TE_Datatypes env),
+      TE_Datatypes := fmfilter (\<lambda>dtName. dtName \<notin> ghost_datatypes env) (TE_Datatypes env),
       TE_DataCtors := fmfilter (tyenv_nonghost_ctor env) (TE_DataCtors env),
       TE_DataCtorsByType :=
-        fmfilter (\<lambda>dtName. dtName |\<notin>| TE_GhostDatatypes env) (TE_DataCtorsByType env),
-      TE_GhostDatatypes := {||}
+        fmfilter (\<lambda>dtName. dtName \<notin> ghost_datatypes env) (TE_DataCtorsByType env)
     \<rparr>"
 
 lemma erase_ghost_tyenv_simps [simp]:
@@ -261,11 +260,10 @@ lemma erase_ghost_tyenv_simps [simp]:
   "TE_Functions (erase_ghost_tyenv env)
      = fmmap erase_ghost_funinfo (fmfilter (tyenv_nonghost_fun env) (TE_Functions env))"
   "TE_Datatypes (erase_ghost_tyenv env)
-     = fmfilter (\<lambda>dtName. dtName |\<notin>| TE_GhostDatatypes env) (TE_Datatypes env)"
+     = fmfilter (\<lambda>dtName. dtName \<notin> ghost_datatypes env) (TE_Datatypes env)"
   "TE_DataCtors (erase_ghost_tyenv env) = fmfilter (tyenv_nonghost_ctor env) (TE_DataCtors env)"
   "TE_DataCtorsByType (erase_ghost_tyenv env)
-     = fmfilter (\<lambda>dtName. dtName |\<notin>| TE_GhostDatatypes env) (TE_DataCtorsByType env)"
-  "TE_GhostDatatypes (erase_ghost_tyenv env) = {||}"
+     = fmfilter (\<lambda>dtName. dtName \<notin> ghost_datatypes env) (TE_DataCtorsByType env)"
   by (simp_all add: erase_ghost_tyenv_def)
 
 (* What is in the erased environment. *)
@@ -279,20 +277,98 @@ lemma erase_ghost_tyenv_fun_lookup:
 
 lemma erase_ghost_tyenv_datatype_lookup:
   "fmlookup (TE_Datatypes (erase_ghost_tyenv env)) dtName = Some n
-     \<longleftrightarrow> fmlookup (TE_Datatypes env) dtName = Some n \<and> dtName |\<notin>| TE_GhostDatatypes env"
+     \<longleftrightarrow> fmlookup (TE_Datatypes env) dtName = Some n \<and> dtName \<notin> ghost_datatypes env"
   by auto
 
 lemma erase_ghost_tyenv_ctor_lookup:
   "fmlookup (TE_DataCtors (erase_ghost_tyenv env)) ctorName = Some (dtName, tyVars, payload)
      \<longleftrightarrow> fmlookup (TE_DataCtors env) ctorName = Some (dtName, tyVars, payload)
-         \<and> dtName |\<notin>| TE_GhostDatatypes env"
+         \<and> dtName \<notin> ghost_datatypes env"
   by (auto simp: tyenv_nonghost_ctor_def split: option.splits)
 
 lemma erase_ghost_tyenv_ctors_by_type_lookup:
   "fmlookup (TE_DataCtorsByType (erase_ghost_tyenv env)) dtName = Some ctors
      \<longleftrightarrow> fmlookup (TE_DataCtorsByType env) dtName = Some ctors
-         \<and> dtName |\<notin>| TE_GhostDatatypes env"
+         \<and> dtName \<notin> ghost_datatypes env"
   by auto
+
+(* The erased environment has no ghost datatype. *)
+
+(* Helper: The constructor entries of a datatype in the erased environment are among
+   its entries in the original one (an entry is dropped with its constructor
+   when that constructor belongs to a ghost datatype). *)
+lemma datatype_ctor_entries_erase_ghost_tyenv:
+  assumes "dt \<notin> ghost_datatypes env"
+  shows "set (datatype_ctor_entries (erase_ghost_tyenv env) dt)
+           \<subseteq> set (datatype_ctor_entries env dt)"
+proof -
+  let ?entry = "\<lambda>tbl cn. case fmlookup tbl cn of
+                   None \<Rightarrow> [] | Some (_, tyvars, payload) \<Rightarrow> [(tyvars, payload)]"
+  have bt: "fmlookup (TE_DataCtorsByType (erase_ghost_tyenv env)) dt
+              = fmlookup (TE_DataCtorsByType env) dt"
+    using assms by simp
+  have each: "set (?entry (TE_DataCtors (erase_ghost_tyenv env)) cn)
+                \<subseteq> set (?entry (TE_DataCtors env) cn)" for cn
+    by (auto split: option.splits prod.splits)
+  have all: "set (concat (map (?entry (TE_DataCtors (erase_ghost_tyenv env))) cns))
+               \<subseteq> set (concat (map (?entry (TE_DataCtors env)) cns))" for cns
+    unfolding set_concat set_map image_image
+    by (rule UN_mono[OF subset_refl]) (rule each)
+  show ?thesis
+  proof (cases "fmlookup (TE_DataCtorsByType env) dt")
+    case None
+    show ?thesis unfolding datatype_ctor_entries_def bt None option.case by simp
+  next
+    case (Some cns)
+    show ?thesis unfolding datatype_ctor_entries_def bt Some option.case by (rule all)
+  qed
+qed
+
+(* The datatypes of the erased environment are the ones that are not ghost in
+   env; their payloads are runtime with respect to env's ghost set, hence with
+   respect to the empty set, so none of them is ghost after erasure. This holds
+   for any set R of runtime abstract types that includes those of env: the
+   body environment of a function adds the function's type parameters. *)
+lemma ghost_datatypes_r_erase_ghost_tyenv:
+  assumes sub: "TE_AbstractTypes env |\<inter>| TE_RuntimeTypeVars env |\<subseteq>| R"
+  shows "ghost_datatypes_r (erase_ghost_tyenv env) R = {}"
+proof -
+  let ?E = "erase_ghost_tyenv env"
+  have "ghost_step ?E R {} \<subseteq> {}"
+  proof
+    fix dt assume "dt \<in> ghost_step ?E R {}"
+    then have dt_in: "dt |\<in>| fmdom (TE_Datatypes ?E)"
+          and nrt: "\<not> datatype_payloads_runtime {} R ?E dt"
+      unfolding ghost_step_def by auto
+    from dt_in have dt_env: "dt |\<in>| fmdom (TE_Datatypes env)"
+                and ng: "dt \<notin> ghost_datatypes env"
+      by simp_all
+    have "datatype_payloads_runtime {} R ?E dt"
+      unfolding datatype_payloads_runtime_def list_all_iff
+    proof
+      fix e assume e_in: "e \<in> set (datatype_ctor_entries ?E dt)"
+      obtain tyvars payload where e: "e = (tyvars, payload)" by (cases e)
+      have mem: "(tyvars, payload) \<in> set (datatype_ctor_entries env dt)"
+        using datatype_ctor_entries_erase_ghost_tyenv[OF ng] e_in e by blast
+      have "is_runtime_type_g (ghost_datatypes env)
+              ((TE_AbstractTypes env |\<inter>| TE_RuntimeTypeVars env) |\<union>| fset_of_list tyvars)
+              payload"
+        by (rule ghost_datatypes_r_payload_runtime[OF dt_env ng mem])
+      then have "is_runtime_type_g {} (R |\<union>| fset_of_list tyvars) payload"
+        by (rule is_runtime_type_g_mono) (use sub in \<open>auto dest: fsubsetD\<close>)
+      then show "case e of (tyvars, payload) \<Rightarrow> payload_runtime {} R tyvars payload"
+        unfolding e payload_runtime_def by simp
+    qed
+    with nrt show "dt \<in> {}" by blast
+  qed
+  then have "ghost_datatypes_r ?E R \<subseteq> {}" by (rule ghost_datatypes_r_lowerbound)
+  then show ?thesis by simp
+qed
+
+(* Therefore, there are no ghost datatypes in the erased env. *)
+corollary ghost_datatypes_erase_ghost_tyenv:
+  "ghost_datatypes (erase_ghost_tyenv env) = {}"
+  by (rule ghost_datatypes_r_erase_ghost_tyenv) auto
 
 
 (* ========================================================================== *)

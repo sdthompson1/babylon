@@ -85,7 +85,8 @@ proof -
       "TE_Datatypes env = TE_Datatypes env"
       "TE_DataCtors env = TE_DataCtors env"
       "TE_DataCtorsByType env = TE_DataCtorsByType env"
-      "TE_GhostDatatypes env = TE_GhostDatatypes env"
+      "TE_AbstractAllocLevels env = TE_AbstractAllocLevels env"
+      "ghost_datatypes env \<subseteq> ghost_datatypes env"
       by simp_all
   next
     show "\<forall>n. n |\<in>| TE_TypeVars env \<longrightarrow>

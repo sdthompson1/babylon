@@ -18,12 +18,13 @@ begin
      apply_subst_to_module_env subst targetEnv env
 
    under conditions bundled in module_env_subst_ok: the target env agrees
-   with env on the datatype tables, the substitution covers env's type
-   variables with types well-kinded in targetEnv (with a split-out runtime
-   analogue for NotGhost mode), and - the capture-avoidance condition - the
-   bound type parameters of every function signature and data constructor
-   avoid the substitution's whole name set (subst_names: domain AND range
-   type variables). The latter is exactly what capture_avoiding
+   with env on the datatype tables (holding the substituted constructor
+   table) and has no more ghost datatypes than env, the substitution covers
+   env's type variables with types well-kinded in targetEnv (with a split-out
+   runtime analogue for NotGhost mode), and - the capture-avoidance condition
+   - the bound type parameters of every function signature and data
+   constructor avoid the substitution's whole name set (subst_names: domain
+   AND range type variables). The latter is exactly what capture_avoiding
    (CoreModule.thy) provides, discharged by a successful link
    (link_modules_capture_avoiding, LinkModules.thy).
 
@@ -149,11 +150,6 @@ lemma apply_subst_to_module_env_TE_DataCtorsByType [simp]:
      = TE_DataCtorsByType env"
   by (simp add: apply_subst_to_module_env_def)
 
-lemma apply_subst_to_module_env_TE_GhostDatatypes [simp]:
-  "TE_GhostDatatypes (apply_subst_to_module_env subst targetEnv env)
-     = TE_GhostDatatypes env"
-  by (simp add: apply_subst_to_module_env_def)
-
 lemma apply_subst_to_module_env_TE_AbstractAllocLevels [simp]:
   "TE_AbstractAllocLevels (apply_subst_to_module_env subst targetEnv env)
      = TE_AbstractAllocLevels targetEnv"
@@ -198,8 +194,15 @@ lemma is_writable_lvalue_apply_subst_to_module_env [simp]:
 
 (* Conditions relating the substitution, the target env (which supplies the
    result's type-variable fields), and the env being substituted:
-   - targetEnv agrees with env on the datatype tables (which the substitution
-     does not change);
+   - targetEnv agrees with env on the datatype tables the substitution does
+     not change (TE_Datatypes, TE_DataCtorsByType), and holds env's
+     constructor table with the substitution applied (TE_DataCtors) - so
+     targetEnv and the substituted env have the same ghost datatypes;
+   - targetEnv's abstract types are env's minus the resolved ones;
+   - the ghost datatypes of targetEnv are among those of env: resolving an
+     abstract type can make datatypes runtime, never ghost. Consumers
+     discharge this with ghost_datatypes_subst_antitone below, from the
+     runtime condition module_env_subst_runtime_ok;
    - every type variable of env is either mapped to a type well-kinded in
      targetEnv, or survives as a type variable of targetEnv;
    - capture-avoidance: the bound type parameters of every function signature
@@ -209,7 +212,10 @@ definition module_env_subst_ok ::
     "TypeSubst \<Rightarrow> CoreTyEnv \<Rightarrow> CoreTyEnv \<Rightarrow> bool" where
   "module_env_subst_ok subst targetEnv env \<equiv>
     TE_Datatypes targetEnv = TE_Datatypes env \<and>
-    TE_GhostDatatypes targetEnv = TE_GhostDatatypes env \<and>
+    TE_DataCtorsByType targetEnv = TE_DataCtorsByType env \<and>
+    TE_DataCtors targetEnv = fmmap (apply_subst_to_datactor subst) (TE_DataCtors env) \<and>
+    TE_AbstractTypes targetEnv = TE_AbstractTypes env |-| fmdom subst \<and>
+    ghost_datatypes targetEnv \<subseteq> ghost_datatypes env \<and>
     (\<forall>n. n |\<in>| TE_TypeVars env \<longrightarrow>
          (case fmlookup subst n of
             Some ty' \<Rightarrow> is_well_kinded targetEnv ty'
@@ -231,6 +237,417 @@ definition module_env_subst_runtime_ok ::
          (case fmlookup subst n of
             Some ty' \<Rightarrow> is_runtime_type targetEnv ty'
           | None \<Rightarrow> n |\<in>| TE_RuntimeTypeVars targetEnv)"
+
+
+(* ========================================================================== *)
+(* The ghost set under substitution                                           *)
+(* ========================================================================== *)
+
+(* The constructor entries of a datatype, after substituting the payloads. *)
+lemma datatype_ctor_entries_subst:
+  assumes "TE_DataCtorsByType env' = TE_DataCtorsByType env"
+      and "TE_DataCtors env' = fmmap (apply_subst_to_datactor subst) (TE_DataCtors env)"
+  shows "datatype_ctor_entries env' dt
+           = map (\<lambda>(tyvars, payload). (tyvars, apply_subst subst payload))
+                 (datatype_ctor_entries env dt)"
+proof -
+  have each: "\<And>cn.
+    (case fmlookup (TE_DataCtors env') cn of
+       None \<Rightarrow> [] | Some (_, tyvars, payload) \<Rightarrow> [(tyvars, payload)])
+    = map (\<lambda>(tyvars, payload). (tyvars, apply_subst subst payload))
+        (case fmlookup (TE_DataCtors env) cn of
+           None \<Rightarrow> [] | Some (_, tyvars, payload) \<Rightarrow> [(tyvars, payload)])"
+    unfolding assms(2) by (simp split: option.splits prod.splits)
+  show ?thesis
+    unfolding datatype_ctor_entries_def assms(1)
+    by (cases "fmlookup (TE_DataCtorsByType env) dt")
+       (simp_all add: each map_concat comp_def)
+qed
+
+(* Ghost antitonicity under substitution, locally: on a set D of datatypes
+   whose constructor entries in env' are those of env with subst applied to
+   the payloads, and whose payloads mention only datatypes of D, every
+   datatype of D runtime in env is runtime in env', provided subst resolves
+   the payloads' runtime variables R to types runtime in env' (with runtime
+   variables R') or leaves them in R'. Proof by induction over env''s least
+   fixpoint: a payload of a D-datatype outside env's ghost set is runtime
+   there, so its datatype heads lie outside env's ghost set (and in D), and
+   its type variables are constructor parameters (untouched, by
+   capture-avoidance), unresolved runtime variables, or resolved to runtime
+   types. No acyclicity is needed: a datatype whose payload mentions an
+   abstract type realized by that datatype itself is covered.
+
+   D = UNIV (with the datatype tables equal) is plain antitonicity under
+   substitution (ghost_datatypes_r_subst_antitone); subst = fmempty is
+   locality: a sub-table's datatypes keep their ghost status in a bigger
+   env that holds the same entries.
+
+   The general form below judges a resolved variable's type with the ghost
+   set the induction has at hand: env''s ghost set cut down to the datatypes
+   of D that are ghost in env. Two instances matter: the type is runtime in
+   env' (ghost_datatypes_r_subst_local, the usual reading), or, for D = UNIV,
+   runtime in env (ghost_datatypes_r_subst_antitone_src: the realized type
+   was runtime BEFORE the realization). *)
+lemma ghost_datatypes_r_subst_local_gen:
+  assumes dom': "\<And>x. x \<in> D \<Longrightarrow> x |\<in>| fmdom (TE_Datatypes env')
+                   \<Longrightarrow> x |\<in>| fmdom (TE_Datatypes env)"
+      and entries: "\<And>x. x \<in> D \<Longrightarrow> x |\<in>| fmdom (TE_Datatypes env') \<Longrightarrow>
+                      datatype_ctor_entries env' x
+                        = map (\<lambda>(tyvars, payload). (tyvars, apply_subst subst payload))
+                              (datatype_ctor_entries env x)"
+      and heads: "\<And>x tyvars payload d. x \<in> D \<Longrightarrow> x |\<in>| fmdom (TE_Datatypes env') \<Longrightarrow>
+                    (tyvars, payload) \<in> set (datatype_ctor_entries env x) \<Longrightarrow>
+                    d \<in> type_datatypes payload \<Longrightarrow> d \<in> D"
+      and cap: "\<And>x tyvars payload n. x \<in> D \<Longrightarrow> x |\<in>| fmdom (TE_Datatypes env') \<Longrightarrow>
+                  (tyvars, payload) \<in> set (datatype_ctor_entries env x) \<Longrightarrow>
+                  n |\<in>| fset_of_list tyvars \<Longrightarrow> fmlookup subst n = None"
+      and var: "\<And>x tyvars payload n. x \<in> D \<Longrightarrow> x |\<in>| fmdom (TE_Datatypes env') \<Longrightarrow>
+                  (tyvars, payload) \<in> set (datatype_ctor_entries env x) \<Longrightarrow>
+                  n \<in> type_tyvars payload \<Longrightarrow> n |\<in>| R \<Longrightarrow>
+                  (case fmlookup subst n of
+                     Some ty' \<Rightarrow> is_runtime_type_g
+                                   (ghost_datatypes_r env' R'
+                                      \<inter> {x. x \<in> D \<longrightarrow> x \<in> ghost_datatypes_r env R}) R' ty'
+                   | None \<Rightarrow> n |\<in>| R')"
+      and dt_D: "dt \<in> D"
+      and ng: "dt \<notin> ghost_datatypes_r env R"
+  shows "dt \<notin> ghost_datatypes_r env' R'"
+proof -
+  let ?G = "ghost_datatypes_r env R"
+  let ?G' = "ghost_datatypes_r env' R'"
+  let ?P = "{x. x \<in> D \<longrightarrow> x \<in> ?G}"
+  have "lfp (ghost_step env' R') \<subseteq> ?P"
+  proof (rule lfp_induct[OF ghost_step_mono])
+    show "ghost_step env' R' (lfp (ghost_step env' R') \<inter> ?P) \<subseteq> ?P"
+    proof
+      fix x assume "x \<in> ghost_step env' R' (lfp (ghost_step env' R') \<inter> ?P)"
+      then have x_dom': "x |\<in>| fmdom (TE_Datatypes env')"
+            and nrt: "\<not> datatype_payloads_runtime (?G' \<inter> ?P) R' env' x"
+        unfolding ghost_step_def ghost_datatypes_r_lfp[symmetric] by auto
+      show "x \<in> ?P"
+      proof (rule ccontr)
+        assume "x \<notin> ?P"
+        then have x_D: "x \<in> D" and x_ng: "x \<notin> ?G" by auto
+        have x_dom: "x |\<in>| fmdom (TE_Datatypes env)" using dom'[OF x_D x_dom'] .
+        have "datatype_payloads_runtime (?G' \<inter> ?P) R' env' x"
+          unfolding datatype_payloads_runtime_def entries[OF x_D x_dom'] list_all_iff
+        proof (intro ballI)
+          fix e
+          assume "e \<in> set (map (\<lambda>(tyvars, payload). (tyvars, apply_subst subst payload))
+                              (datatype_ctor_entries env x))"
+          then obtain tyvars payload where
+            mem: "(tyvars, payload) \<in> set (datatype_ctor_entries env x)" and
+            e_eq: "e = (tyvars, apply_subst subst payload)"
+            by auto
+          have rt: "is_runtime_type_g ?G (R |\<union>| fset_of_list tyvars) payload"
+            using ghost_datatypes_r_payload_runtime[OF x_dom x_ng mem] .
+          \<comment> \<open>Only the variables that occur in the payload matter.\<close>
+          let ?Rp = "(R |\<union>| fset_of_list tyvars) |\<inter>| fset_of_list (type_tyvars_list payload)"
+          have rt_p: "is_runtime_type_g ?G ?Rp payload"
+          proof (rule is_runtime_type_g_transfer[OF rt _ subset_refl])
+            show "type_tyvars payload \<subseteq> fset ?Rp"
+              using is_runtime_type_g_tyvars_subset[OF rt]
+              by (auto simp: fset_of_list_elem set_type_tyvars_list)
+          qed
+          \<comment> \<open>Heads: outside env's ghost set, hence outside the induction set.\<close>
+          have rt_h: "is_runtime_type_g (?G' \<inter> ?P) ?Rp payload"
+          proof (rule is_runtime_type_g_mono_heads[OF rt_p _ fsubset_refl])
+            fix d assume "d \<in> type_datatypes payload" and "d \<notin> ?G"
+            then show "d \<notin> ?G' \<inter> ?P" using heads[OF x_D x_dom' mem] by auto
+          qed
+          have "is_runtime_type_g (?G' \<inter> ?P) (R' |\<union>| fset_of_list tyvars)
+                  (apply_subst subst payload)"
+          proof (rule apply_subst_preserves_runtime_g[OF rt_h subset_refl])
+            fix n assume n_in: "n |\<in>| ?Rp"
+            then have n_occ: "n \<in> type_tyvars payload"
+              by (auto simp: fset_of_list_elem set_type_tyvars_list)
+            show "case fmlookup subst n of
+                    Some ty' \<Rightarrow> is_runtime_type_g (?G' \<inter> ?P) (R' |\<union>| fset_of_list tyvars) ty'
+                  | None \<Rightarrow> n |\<in>| R' |\<union>| fset_of_list tyvars"
+            proof (cases "n |\<in>| fset_of_list tyvars")
+              case True
+              then show ?thesis by (simp add: cap[OF x_D x_dom' mem])
+            next
+              case False
+              with n_in have n_R: "n |\<in>| R" by auto
+              show ?thesis
+              proof (cases "fmlookup subst n")
+                case None
+                with var[OF x_D x_dom' mem n_occ n_R] have "n |\<in>| R'" by simp
+                then show ?thesis using None by simp
+              next
+                case (Some ty')
+                with var[OF x_D x_dom' mem n_occ n_R]
+                have "is_runtime_type_g (?G' \<inter> ?P) R' ty'" by simp
+                then have "is_runtime_type_g (?G' \<inter> ?P) (R' |\<union>| fset_of_list tyvars) ty'"
+                  by (rule is_runtime_type_g_mono) auto
+                then show ?thesis using Some by simp
+              qed
+            qed
+          qed
+          then show "case e of (tyvars, payload) \<Rightarrow> payload_runtime (?G' \<inter> ?P) R' tyvars payload"
+            unfolding e_eq payload_runtime_def by simp
+        qed
+        with nrt show False ..
+      qed
+    qed
+  qed
+  then show ?thesis using dt_D ng unfolding ghost_datatypes_r_lfp[of env' R'] by auto
+qed
+
+(* The usual reading: a resolved variable's type is runtime in env'. *)
+lemma ghost_datatypes_r_subst_local:
+  assumes dom': "\<And>x. x \<in> D \<Longrightarrow> x |\<in>| fmdom (TE_Datatypes env')
+                   \<Longrightarrow> x |\<in>| fmdom (TE_Datatypes env)"
+      and entries: "\<And>x. x \<in> D \<Longrightarrow> x |\<in>| fmdom (TE_Datatypes env') \<Longrightarrow>
+                      datatype_ctor_entries env' x
+                        = map (\<lambda>(tyvars, payload). (tyvars, apply_subst subst payload))
+                              (datatype_ctor_entries env x)"
+      and heads: "\<And>x tyvars payload d. x \<in> D \<Longrightarrow> x |\<in>| fmdom (TE_Datatypes env') \<Longrightarrow>
+                    (tyvars, payload) \<in> set (datatype_ctor_entries env x) \<Longrightarrow>
+                    d \<in> type_datatypes payload \<Longrightarrow> d \<in> D"
+      and cap: "\<And>x tyvars payload n. x \<in> D \<Longrightarrow> x |\<in>| fmdom (TE_Datatypes env') \<Longrightarrow>
+                  (tyvars, payload) \<in> set (datatype_ctor_entries env x) \<Longrightarrow>
+                  n |\<in>| fset_of_list tyvars \<Longrightarrow> fmlookup subst n = None"
+      and var: "\<And>x tyvars payload n. x \<in> D \<Longrightarrow> x |\<in>| fmdom (TE_Datatypes env') \<Longrightarrow>
+                  (tyvars, payload) \<in> set (datatype_ctor_entries env x) \<Longrightarrow>
+                  n \<in> type_tyvars payload \<Longrightarrow> n |\<in>| R \<Longrightarrow>
+                  (case fmlookup subst n of
+                     Some ty' \<Rightarrow> is_runtime_type_g (ghost_datatypes_r env' R') R' ty'
+                   | None \<Rightarrow> n |\<in>| R')"
+      and dt_D: "dt \<in> D"
+      and ng: "dt \<notin> ghost_datatypes_r env R"
+  shows "dt \<notin> ghost_datatypes_r env' R'"
+proof (rule ghost_datatypes_r_subst_local_gen[OF dom' entries heads cap _ dt_D ng])
+  fix x tyvars payload n
+  assume x_D: "x \<in> D" and x_dom': "x |\<in>| fmdom (TE_Datatypes env')"
+     and mem: "(tyvars, payload) \<in> set (datatype_ctor_entries env x)"
+     and n_occ: "n \<in> type_tyvars payload" and n_R: "n |\<in>| R"
+  show "case fmlookup subst n of
+          Some ty' \<Rightarrow> is_runtime_type_g
+                        (ghost_datatypes_r env' R'
+                           \<inter> {x. x \<in> D \<longrightarrow> x \<in> ghost_datatypes_r env R}) R' ty'
+        | None \<Rightarrow> n |\<in>| R'"
+  proof (cases "fmlookup subst n")
+    case None
+    then show ?thesis using var[OF x_D x_dom' mem n_occ n_R] by simp
+  next
+    case (Some ty')
+    then have "is_runtime_type_g (ghost_datatypes_r env' R') R' ty'"
+      using var[OF x_D x_dom' mem n_occ n_R] by simp
+    then have "is_runtime_type_g
+                 (ghost_datatypes_r env' R'
+                    \<inter> {x. x \<in> D \<longrightarrow> x \<in> ghost_datatypes_r env R}) R' ty'"
+      by (rule is_runtime_type_g_mono) auto
+    then show ?thesis using Some by simp
+  qed
+qed
+
+(* Plain antitonicity under substitution: env' holds env's constructor
+   table with subst applied, and subst resolves the runtime variables R to
+   types runtime (with runtime variables R') in env' or, equivalently for
+   the induction, in both envs at once; then the ghost datatypes of env' are
+   among those of env. The two readings of "runtime" follow. *)
+lemma ghost_datatypes_r_subst_antitone_gen:
+  assumes dt: "TE_Datatypes env' = TE_Datatypes env"
+      and bt: "TE_DataCtorsByType env' = TE_DataCtorsByType env"
+      and dc: "TE_DataCtors env' = fmmap (apply_subst_to_datactor subst) (TE_DataCtors env)"
+      and cap: "\<And>ctorName dtName tyVars payload.
+                  fmlookup (TE_DataCtors env) ctorName = Some (dtName, tyVars, payload)
+                  \<Longrightarrow> fmdom subst |\<inter>| fset_of_list tyVars = {||}"
+      and var: "\<And>n. n |\<in>| R \<Longrightarrow>
+                  (case fmlookup subst n of
+                     Some ty' \<Rightarrow> is_runtime_type_g
+                                   (ghost_datatypes_r env' R' \<inter> ghost_datatypes_r env R) R' ty'
+                   | None \<Rightarrow> n |\<in>| R')"
+  shows "ghost_datatypes_r env' R' \<subseteq> ghost_datatypes_r env R"
+proof
+  fix x assume x_in: "x \<in> ghost_datatypes_r env' R'"
+  show "x \<in> ghost_datatypes_r env R"
+  proof (rule ccontr)
+    assume x_ng: "x \<notin> ghost_datatypes_r env R"
+    have "x \<notin> ghost_datatypes_r env' R'"
+    proof (rule ghost_datatypes_r_subst_local_gen[where D = UNIV, OF _ _ _ _ _ _ x_ng])
+      show "\<And>y. y \<in> UNIV \<Longrightarrow> y |\<in>| fmdom (TE_Datatypes env')
+                 \<Longrightarrow> y |\<in>| fmdom (TE_Datatypes env)"
+        unfolding dt .
+      show "\<And>y. y \<in> UNIV \<Longrightarrow> y |\<in>| fmdom (TE_Datatypes env') \<Longrightarrow>
+                  datatype_ctor_entries env' y
+                    = map (\<lambda>(tyvars, payload). (tyvars, apply_subst subst payload))
+                          (datatype_ctor_entries env y)"
+        by (rule datatype_ctor_entries_subst[OF bt dc])
+    next
+      fix y tyvars payload n
+      assume "y \<in> UNIV" "y |\<in>| fmdom (TE_Datatypes env')"
+         and mem: "(tyvars, payload) \<in> set (datatype_ctor_entries env y)"
+         and n_tv: "n |\<in>| fset_of_list tyvars"
+      obtain ctorName dtName where
+        "fmlookup (TE_DataCtors env) ctorName = Some (dtName, tyvars, payload)"
+        using datatype_ctor_entries_source[OF mem] by blast
+      from cap[OF this] n_tv have "n |\<notin>| fmdom subst"
+        by (metis fempty_iff finter_iff)
+      then show "fmlookup subst n = None" by (rule fmdom_notD)
+    next
+      fix y tyvars payload n
+      assume "y \<in> UNIV" "y |\<in>| fmdom (TE_Datatypes env')"
+             "(tyvars, payload) \<in> set (datatype_ctor_entries env y)"
+             "n \<in> type_tyvars payload"
+         and "n |\<in>| R"
+      then show "case fmlookup subst n of
+                   Some ty' \<Rightarrow> is_runtime_type_g
+                                 (ghost_datatypes_r env' R'
+                                    \<inter> {x. x \<in> UNIV \<longrightarrow> x \<in> ghost_datatypes_r env R}) R' ty'
+                 | None \<Rightarrow> n |\<in>| R'"
+        by (metis (no_types, lifting) UNIV_I inf.absorb2 inf.orderE mem_Collect_eq subsetI var)
+    qed simp_all
+    with x_in show False by simp
+  qed
+qed
+
+(* ... with the resolved types runtime in env' ... *)
+lemma ghost_datatypes_r_subst_antitone:
+  assumes dt: "TE_Datatypes env' = TE_Datatypes env"
+      and bt: "TE_DataCtorsByType env' = TE_DataCtorsByType env"
+      and dc: "TE_DataCtors env' = fmmap (apply_subst_to_datactor subst) (TE_DataCtors env)"
+      and cap: "\<And>ctorName dtName tyVars payload.
+                  fmlookup (TE_DataCtors env) ctorName = Some (dtName, tyVars, payload)
+                  \<Longrightarrow> fmdom subst |\<inter>| fset_of_list tyVars = {||}"
+      and var: "\<And>n. n |\<in>| R \<Longrightarrow>
+                  (case fmlookup subst n of
+                     Some ty' \<Rightarrow> is_runtime_type_g (ghost_datatypes_r env' R') R' ty'
+                   | None \<Rightarrow> n |\<in>| R')"
+  shows "ghost_datatypes_r env' R' \<subseteq> ghost_datatypes_r env R"
+proof (rule ghost_datatypes_r_subst_antitone_gen[OF dt bt dc cap])
+  fix n assume n_R: "n |\<in>| R"
+  show "case fmlookup subst n of
+          Some ty' \<Rightarrow> is_runtime_type_g
+                        (ghost_datatypes_r env' R' \<inter> ghost_datatypes_r env R) R' ty'
+        | None \<Rightarrow> n |\<in>| R'"
+  proof (cases "fmlookup subst n")
+    case None then show ?thesis using var[OF n_R] by simp
+  next
+    case (Some ty')
+    then have "is_runtime_type_g (ghost_datatypes_r env' R') R' ty'"
+      using var[OF n_R] by simp
+    then have "is_runtime_type_g (ghost_datatypes_r env' R' \<inter> ghost_datatypes_r env R) R' ty'"
+      by (rule is_runtime_type_g_mono) auto
+    then show ?thesis using Some by simp
+  qed
+qed
+
+(* ... or runtime in env, before the substitution (but already with the
+   runtime variables R'). This is the form the elaborator's realization
+   step has: it checks that a runtime abstract type is realized by a type
+   that is runtime in the env BEFORE the realization. *)
+lemma ghost_datatypes_r_subst_antitone_src:
+  assumes dt: "TE_Datatypes env' = TE_Datatypes env"
+      and bt: "TE_DataCtorsByType env' = TE_DataCtorsByType env"
+      and dc: "TE_DataCtors env' = fmmap (apply_subst_to_datactor subst) (TE_DataCtors env)"
+      and cap: "\<And>ctorName dtName tyVars payload.
+                  fmlookup (TE_DataCtors env) ctorName = Some (dtName, tyVars, payload)
+                  \<Longrightarrow> fmdom subst |\<inter>| fset_of_list tyVars = {||}"
+      and var: "\<And>n. n |\<in>| R \<Longrightarrow>
+                  (case fmlookup subst n of
+                     Some ty' \<Rightarrow> is_runtime_type_g (ghost_datatypes_r env R) R' ty'
+                   | None \<Rightarrow> n |\<in>| R')"
+  shows "ghost_datatypes_r env' R' \<subseteq> ghost_datatypes_r env R"
+proof (rule ghost_datatypes_r_subst_antitone_gen[OF dt bt dc cap])
+  fix n assume n_R: "n |\<in>| R"
+  show "case fmlookup subst n of
+          Some ty' \<Rightarrow> is_runtime_type_g
+                        (ghost_datatypes_r env' R' \<inter> ghost_datatypes_r env R) R' ty'
+        | None \<Rightarrow> n |\<in>| R'"
+  proof (cases "fmlookup subst n")
+    case None then show ?thesis using var[OF n_R] by simp
+  next
+    case (Some ty')
+    then have "is_runtime_type_g (ghost_datatypes_r env R) R' ty'"
+      using var[OF n_R] by simp
+    then have "is_runtime_type_g (ghost_datatypes_r env' R' \<inter> ghost_datatypes_r env R) R' ty'"
+      by (rule is_runtime_type_g_mono) auto
+    then show ?thesis using Some by simp
+  qed
+qed
+
+(* The env-level form, for discharging the ghost clause of
+   module_env_subst_ok: the other table clauses, the constructor
+   capture-avoidance clause and module_env_subst_runtime_ok give it, at a
+   target env whose runtime type variables are all abstract types (a
+   module-level env; function type parameters do not change the ghost set,
+   see ghost_datatypes_scope_eq). *)
+lemma ghost_datatypes_subst_antitone:
+  assumes dt: "TE_Datatypes targetEnv = TE_Datatypes env"
+      and bt: "TE_DataCtorsByType targetEnv = TE_DataCtorsByType env"
+      and dc: "TE_DataCtors targetEnv = fmmap (apply_subst_to_datactor subst) (TE_DataCtors env)"
+      and abs: "TE_AbstractTypes targetEnv = TE_AbstractTypes env |-| fmdom subst"
+      and cap: "\<And>ctorName dtName tyVars payload.
+                  fmlookup (TE_DataCtors env) ctorName = Some (dtName, tyVars, payload)
+                  \<Longrightarrow> subst_names subst |\<inter>| fset_of_list tyVars = {||}"
+      and ok_rt: "module_env_subst_runtime_ok subst targetEnv env"
+      and scope: "TE_RuntimeTypeVars targetEnv |\<subseteq>| TE_AbstractTypes targetEnv"
+  shows "ghost_datatypes targetEnv \<subseteq> ghost_datatypes env"
+proof (rule ghost_datatypes_r_subst_antitone[OF dt bt dc])
+  fix ctorName dtName tyVars payload
+  assume "fmlookup (TE_DataCtors env) ctorName = Some (dtName, tyVars, payload)"
+  from cap[OF this] show "fmdom subst |\<inter>| fset_of_list tyVars = {||}"
+    unfolding subst_names_def by auto
+next
+  fix n assume n_in: "n |\<in>| TE_AbstractTypes env |\<inter>| TE_RuntimeTypeVars env"
+  then have n_rtv: "n |\<in>| TE_RuntimeTypeVars env"
+        and n_abs: "n |\<in>| TE_AbstractTypes env" by auto
+  have R'_eq: "TE_AbstractTypes targetEnv |\<inter>| TE_RuntimeTypeVars targetEnv
+                 = TE_RuntimeTypeVars targetEnv"
+    using scope by (simp add: inf_absorb2)
+  show "case fmlookup subst n of
+          Some ty' \<Rightarrow> is_runtime_type_g (ghost_datatypes targetEnv)
+                        (TE_AbstractTypes targetEnv |\<inter>| TE_RuntimeTypeVars targetEnv) ty'
+        | None \<Rightarrow> n |\<in>| TE_AbstractTypes targetEnv |\<inter>| TE_RuntimeTypeVars targetEnv"
+  proof (cases "fmlookup subst n")
+    case None
+    with ok_rt n_rtv have "n |\<in>| TE_RuntimeTypeVars targetEnv"
+      unfolding module_env_subst_runtime_ok_def by auto
+    moreover have "n |\<in>| TE_AbstractTypes targetEnv"
+      using None n_abs unfolding abs by (simp add: fmdom_notI)
+    ultimately show ?thesis using None by simp
+  next
+    case (Some ty')
+    with ok_rt n_rtv have "is_runtime_type targetEnv ty'"
+      unfolding module_env_subst_runtime_ok_def by auto
+    then show ?thesis using Some unfolding is_runtime_type_def R'_eq by simp
+  qed
+qed
+
+(* On the substituted env the ghost set is targetEnv's (the two agree on the
+   datatype tables), hence among env's. The first form is the one to give
+   simp: its left-hand side is a normal form. *)
+lemma module_env_subst_ok_ghost_datatypes_r:
+  assumes "module_env_subst_ok subst targetEnv env"
+  shows "ghost_datatypes_r (apply_subst_to_module_env subst targetEnv env) R
+           = ghost_datatypes_r targetEnv R"
+proof -
+  have "TE_Datatypes targetEnv = TE_Datatypes env"
+   and "TE_DataCtorsByType targetEnv = TE_DataCtorsByType env"
+   and "TE_DataCtors targetEnv = fmmap (apply_subst_to_datactor subst) (TE_DataCtors env)"
+    using assms unfolding module_env_subst_ok_def by blast+
+  then show ?thesis by (intro ghost_datatypes_r_cong) simp_all
+qed
+
+lemma module_env_subst_ok_ghost_datatypes:
+  assumes "module_env_subst_ok subst targetEnv env"
+  shows "ghost_datatypes (apply_subst_to_module_env subst targetEnv env)
+           = ghost_datatypes targetEnv"
+    and "ghost_datatypes (apply_subst_to_module_env subst targetEnv env)
+           \<subseteq> ghost_datatypes env"
+proof -
+  show eq: "ghost_datatypes (apply_subst_to_module_env subst targetEnv env)
+              = ghost_datatypes targetEnv"
+    by (simp add: module_env_subst_ok_ghost_datatypes_r[OF assms])
+  have "ghost_datatypes targetEnv \<subseteq> ghost_datatypes env"
+    using assms unfolding module_env_subst_ok_def by blast
+  with eq show "ghost_datatypes (apply_subst_to_module_env subst targetEnv env)
+                  \<subseteq> ghost_datatypes env"
+    by simp
+qed
 
 
 (* Lifting facts: under module_env_subst_ok, apply_subst preserves
@@ -262,19 +679,18 @@ lemma apply_subst_preserves_runtime_module:
   shows "is_runtime_type (apply_subst_to_module_env subst targetEnv env)
                          (apply_subst subst ty)"
 proof (rule apply_subst_preserves_runtime[OF assms(1)])
-  show "TE_GhostDatatypes (apply_subst_to_module_env subst targetEnv env)
-          = TE_GhostDatatypes env"
-    by simp
+  show "ghost_datatypes (apply_subst_to_module_env subst targetEnv env)
+          \<subseteq> ghost_datatypes env"
+    by (rule module_env_subst_ok_ghost_datatypes(2)[OF assms(2)])
 next
-  \<comment> \<open>is_runtime_type only depends on TE_GhostDatatypes and TE_RuntimeTypeVars;
-      on the substituted env, the former agrees with targetEnv (via
-      module_env_subst_ok's datatype-table clause) and the latter is
-      targetEnv's by definition, so runtime-ness in targetEnv transfers.\<close>
+  \<comment> \<open>is_runtime_type only depends on the ghost set and TE_RuntimeTypeVars;
+      on the substituted env both are targetEnv's
+      (module_env_subst_ok_ghost_datatypes_r), so runtime-ness in targetEnv
+      transfers.\<close>
   have rt_cong: "\<And>ty'. is_runtime_type targetEnv ty'
                        = is_runtime_type (apply_subst_to_module_env subst targetEnv env) ty'"
-    using assms(2)
     by (intro is_runtime_type_cong_env)
-       (simp_all add: module_env_subst_ok_def)
+       (simp_all add: module_env_subst_ok_ghost_datatypes_r[OF assms(2)])
   fix n assume n_in: "n |\<in>| TE_RuntimeTypeVars env"
   show
     "case fmlookup subst n of
@@ -312,7 +728,7 @@ qed
    env'-form used by the term-typing proof follows by
    pattern_compatible_cong_env below. *)
 lemma pattern_compatible_apply_subst_module_aux:
-  assumes "tyenv_well_formed env"
+  assumes "tyenv_binders_distinct env"
       and "pattern_compatible env p ty"
       and "\<forall>ctorName dtName tyVars payload.
               fmlookup (TE_DataCtors env) ctorName = Some (dtName, tyVars, payload) \<longrightarrow>
@@ -344,7 +760,7 @@ next
       by (auto split: option.splits prod.splits)
     have tyvars_distinct: "distinct tyvars"
       using Variant.prems(1) ctor_lookup
-      unfolding tyenv_well_formed_def tyenv_ctor_tyvars_distinct_def by blast
+      unfolding tyenv_binders_distinct_def tyenv_ctor_tyvars_distinct_def by blast
     have avoid: "subst_names subst |\<inter>| fset_of_list tyvars = {||}"
       using Variant.prems(3) ctor_lookup by blast
     \<comment> \<open>The inner tyvar-instantiation (over substituted tyArgs, on the
@@ -420,7 +836,7 @@ qed
 (* The env'-form: any env whose ctor table is the substituted one works,
    since pattern_compatible only reads the env through TE_DataCtors. *)
 lemma pattern_compatible_apply_subst_module:
-  assumes "tyenv_well_formed env"
+  assumes "tyenv_binders_distinct env"
       and "pattern_compatible env p ty"
       and "TE_DataCtors env' = fmmap (apply_subst_to_datactor subst) (TE_DataCtors env)"
       and "\<forall>ctorName dtName tyVars payload.
@@ -457,7 +873,7 @@ lemma module_call_subst_setup:
       and len_tyArgs: "length tyArgs = length (FI_TyArgs funInfo)"
       and tyArgs_wk: "list_all (is_well_kinded env) tyArgs"
       and ng_tyArgs: "ghost = NotGhost \<longrightarrow> list_all (is_runtime_type env) tyArgs"
-      and wf: "tyenv_well_formed env"
+      and wf: "tyenv_binders_distinct env"
       and ok: "module_env_subst_ok subst targetEnv env"
       and ok_rt: "ghost = NotGhost \<longrightarrow> module_env_subst_runtime_ok subst targetEnv env"
   shows "fmlookup (TE_Functions (apply_subst_to_module_env subst targetEnv env)) fnName
@@ -503,7 +919,7 @@ proof -
 
   show tyArgs_distinct: "distinct (FI_TyArgs funInfo)"
     using wf fn_lookup
-    unfolding tyenv_well_formed_def tyenv_fun_tyvars_distinct_def by blast
+    unfolding tyenv_binders_distinct_def tyenv_fun_tyvars_distinct_def by blast
 
   have avoid: "subst_names subst |\<inter>| fset_of_list (FI_TyArgs funInfo) = {||}"
     using ok fn_lookup unfolding module_env_subst_ok_def by blast
@@ -524,8 +940,8 @@ qed
    substituted result type) in the substituted module env.
 
    Conditions:
-   - env is well-formed (variable lookups land on well-kinded types, function
-     type parameters are distinct, etc.)
+   - env has distinct binders in its signatures (tyenv_binders_distinct:
+     all the engine needs of well-formedness)
    - module_env_subst_ok: datatype-table agreement with targetEnv, tyvar
      coverage, and binder-avoidance (capture-avoidance) for function / ctor
      type parameters
@@ -536,7 +952,7 @@ qed
      allocated, stay complete. *)
 lemma core_term_type_subst_module_env:
   assumes "core_term_type env ghost tm = Some ty"
-      and "tyenv_well_formed env"
+      and "tyenv_binders_distinct env"
       and "module_env_subst_ok subst targetEnv env"
       and "ghost = NotGhost \<longrightarrow> module_env_subst_runtime_ok subst targetEnv env"
       and "\<forall>ty' \<in> fmran' subst. is_complete_type ty'"
@@ -811,53 +1227,14 @@ next
                     (apply_subst_to_term subst rhs)
        = Some (apply_subst subst rhsTy)" .
 
-  have rhsTy_wk: "is_well_kinded env rhsTy"
-    using core_term_type_well_kinded[OF rhs_typed CoreTm_Let.prems(2)] .
-  have rhsTy_rt: "ghost = NotGhost \<longrightarrow> is_runtime_type env rhsTy"
-  proof
-    assume ng: "ghost = NotGhost"
-    with rhs_typed have "core_term_type env NotGhost rhs = Some rhsTy" by simp
-    from core_term_type_notghost_runtime[OF this CoreTm_Let.prems(2)]
-    show "is_runtime_type env rhsTy" .
-  qed
-
-  have wf_ext: "tyenv_well_formed ?env_ext"
-  proof (cases ghost)
-    case NotGhost
-    from rhsTy_rt NotGhost have rt: "is_runtime_type env rhsTy" by simp
-    from tyenv_well_formed_add_var[OF CoreTm_Let.prems(2) rhsTy_wk rt]
-    have wf':
-      "tyenv_well_formed
-         (env \<lparr> TE_LocalVars := fmupd var rhsTy (TE_LocalVars env),
-                TE_GhostLocals := fminus (TE_GhostLocals env) {|var|} \<rparr>)" .
-    from tyenv_well_formed_TE_ConstLocals_irrelevant[OF wf',
-            of "finsert var (TE_ConstLocals env)"]
-    have "tyenv_well_formed
-            (env \<lparr> TE_LocalVars := fmupd var rhsTy (TE_LocalVars env),
-                   TE_GhostLocals := fminus (TE_GhostLocals env) {|var|} \<rparr>
-                 \<lparr> TE_ConstLocals := finsert var (TE_ConstLocals env) \<rparr>)" .
-    with NotGhost show ?thesis by simp
-  next
-    case Ghost
-    from tyenv_well_formed_add_ghost_var[OF CoreTm_Let.prems(2) rhsTy_wk]
-    have wf':
-      "tyenv_well_formed
-         (env \<lparr> TE_LocalVars := fmupd var rhsTy (TE_LocalVars env),
-                TE_GhostLocals := finsert var (TE_GhostLocals env) \<rparr>)" .
-    from tyenv_well_formed_TE_ConstLocals_irrelevant[OF wf',
-            of "finsert var (TE_ConstLocals env)"]
-    have "tyenv_well_formed
-            (env \<lparr> TE_LocalVars := fmupd var rhsTy (TE_LocalVars env),
-                   TE_GhostLocals := finsert var (TE_GhostLocals env) \<rparr>
-                 \<lparr> TE_ConstLocals := finsert var (TE_ConstLocals env) \<rparr>)" .
-    with Ghost show ?thesis by simp
-  qed
+  have wf_ext: "tyenv_binders_distinct ?env_ext"
+    using CoreTm_Let.prems(2) by simp
 
   \<comment> \<open>module_env_subst_ok ?env_ext: only TE_LocalVars / TE_GhostLocals /
       TE_ConstLocals changed, none of which module_env_subst_ok references. \<close>
   have ok_ext: "module_env_subst_ok subst targetEnv ?env_ext"
     using CoreTm_Let.prems(3)
-    unfolding module_env_subst_ok_def by simp
+    unfolding module_env_subst_ok_def by auto
 
   have ok_rt_ext: "ghost = NotGhost \<longrightarrow> module_env_subst_runtime_ok subst targetEnv ?env_ext"
     using CoreTm_Let.prems(4)
@@ -905,13 +1282,12 @@ next
                           TE_GhostLocals := finsert var (TE_GhostLocals env),
                           TE_ConstLocals := finsert var (TE_ConstLocals env) \<rparr>"
 
-    have wf_ext: "tyenv_well_formed ?env_ext"
-      by (rule tyenv_well_formed_TE_ConstLocals_irrelevant
-                 [OF tyenv_well_formed_add_ghost_var[OF CoreTm_Quantifier.prems(2) varTy_wk]])
+    have wf_ext: "tyenv_binders_distinct ?env_ext"
+      using CoreTm_Quantifier.prems(2) by simp
 
     have ok_ext: "module_env_subst_ok subst targetEnv ?env_ext"
       using CoreTm_Quantifier.prems(3)
-      unfolding module_env_subst_ok_def by simp
+      unfolding module_env_subst_ok_def by auto
 
     have varTy_wk_subst:
       "is_well_kinded (apply_subst_to_module_env subst targetEnv env)
@@ -1080,7 +1456,7 @@ next
     tyArgs_wk: "list_all (is_well_kinded env) tyArgs" and
     tyArgs_cp: "list_all is_complete_type tyArgs" and
     ng_constraint: "ghost = NotGhost \<longrightarrow> list_all (is_runtime_type env) tyArgs
-                                          \<and> dtName |\<notin>| TE_GhostDatatypes env" and
+                                          \<and> dtName \<notin> ghost_datatypes env" and
     payload_typed: "core_term_type env ghost payload
                       = Some (apply_subst (fmap_of_list (zip tyvars tyArgs)) payloadTy)" and
     ty_eq: "ty = CoreTy_Datatype dtName tyArgs"
@@ -1111,8 +1487,9 @@ next
   qed
 
   have ng_dt_subst:
-    "ghost = NotGhost \<longrightarrow> dtName |\<notin>| TE_GhostDatatypes ?me"
-    using ng_constraint by simp
+    "ghost = NotGhost \<longrightarrow> dtName \<notin> ghost_datatypes ?me"
+    using ng_constraint module_env_subst_ok_ghost_datatypes(2)[OF CoreTm_VariantCtor.prems(3)]
+    by blast
 
   from CoreTm_VariantCtor.IH[OF payload_typed CoreTm_VariantCtor.prems(2,3,4,5)]
   have payload_subst:
@@ -1121,7 +1498,7 @@ next
 
   have tyvars_distinct: "distinct tyvars"
     using CoreTm_VariantCtor.prems(2) ctor_lookup
-    unfolding tyenv_well_formed_def tyenv_ctor_tyvars_distinct_def by blast
+    unfolding tyenv_binders_distinct_def tyenv_ctor_tyvars_distinct_def by blast
 
   have avoid: "subst_names subst |\<inter>| fset_of_list tyvars = {||}"
     using CoreTm_VariantCtor.prems(3) ctor_lookup
@@ -1287,7 +1664,7 @@ next
 
   have tyvars_distinct: "distinct tyvars"
     using CoreTm_VariantProj.prems(2) ctor_lookup
-    unfolding tyenv_well_formed_def tyenv_ctor_tyvars_distinct_def by blast
+    unfolding tyenv_binders_distinct_def tyenv_ctor_tyvars_distinct_def by blast
 
   have avoid: "subst_names subst |\<inter>| fset_of_list tyvars = {||}"
     using CoreTm_VariantProj.prems(3) ctor_lookup
@@ -1492,7 +1869,8 @@ lemma module_env_subst_ok_fixed_eq:
   assumes "tyenv_fixed_eq env env'"
   shows "module_env_subst_ok subst targetEnv env'
            = module_env_subst_ok subst targetEnv env"
-  using assms unfolding module_env_subst_ok_def tyenv_fixed_eq_def by simp
+  using assms unfolding module_env_subst_ok_def tyenv_fixed_eq_def
+  by (simp add: tyenv_fixed_eq_ghost_datatypes_r[OF assms])
 
 lemma module_env_subst_runtime_ok_fixed_eq:
   assumes "tyenv_fixed_eq env env'"
@@ -1567,7 +1945,7 @@ qed
    which substitution leaves unchanged. *)
 lemma core_impure_call_type_subst_module_env:
   assumes ct: "core_impure_call_type env ghost fnName tyArgs tmArgs = Some retTy"
-      and wf: "tyenv_well_formed env"
+      and wf: "tyenv_binders_distinct env"
       and ok: "module_env_subst_ok subst targetEnv env"
       and ok_rt: "ghost = NotGhost \<longrightarrow> module_env_subst_runtime_ok subst targetEnv env"
       and cp: "\<forall>ty' \<in> fmran' subst. is_complete_type ty'"
@@ -1724,7 +2102,7 @@ lemma
   assumes cp: "\<forall>ty' \<in> fmran' subst. is_complete_type ty'"
   shows core_statement_type_subst_module_env:
   "core_statement_type env ghost stmt = Some envOut \<Longrightarrow>
-   tyenv_well_formed env \<Longrightarrow>
+   tyenv_binders_distinct env \<Longrightarrow>
    module_env_subst_ok subst targetEnv env \<Longrightarrow>
    ghost = NotGhost \<longrightarrow> module_env_subst_runtime_ok subst targetEnv env \<Longrightarrow>
    core_statement_type (apply_subst_to_module_env subst targetEnv env) ghost
@@ -1732,7 +2110,7 @@ lemma
      = Some (apply_subst_to_module_env subst targetEnv envOut)"
 and core_statement_list_type_subst_module_env:
   "core_statement_list_type env ghost stmts = Some envOut \<Longrightarrow>
-   tyenv_well_formed env \<Longrightarrow>
+   tyenv_binders_distinct env \<Longrightarrow>
    module_env_subst_ok subst targetEnv env \<Longrightarrow>
    ghost = NotGhost \<longrightarrow> module_env_subst_runtime_ok subst targetEnv env \<Longrightarrow>
    core_statement_list_type (apply_subst_to_module_env subst targetEnv env) ghost
@@ -2007,12 +2385,10 @@ next
     body: "core_statement_list_type ?goalEnv Ghost proofBody = Some bodyEnv" and
     out_eq: "envOut = env"
     by (auto simp: Let_def split: if_splits option.splits)
-  have wf_goal: "tyenv_well_formed ?goalEnv"
-    using tyenv_well_formed_TE_ProofTopLevel_irrelevant[OF
-            tyenv_well_formed_TE_ProofGoal_irrelevant[OF wf]]
-    by simp
+  have wf_goal: "tyenv_binders_distinct ?goalEnv"
+    using wf by simp
   have ok_goal: "module_env_subst_ok subst targetEnv ?goalEnv"
-    using ok unfolding module_env_subst_ok_def by simp
+    using ok unfolding module_env_subst_ok_def by auto
   have triv_ok_rt: "Ghost = NotGhost \<longrightarrow> module_env_subst_runtime_ok subst targetEnv ?goalEnv"
     by simp
   from "8.IH"[OF refl refl refl condOk body wf_goal ok_goal triv_ok_rt]
@@ -2115,10 +2491,10 @@ next
     using pats wf
     by (induction arms)
        (auto intro: pattern_compatible_apply_subst_module[OF _ _ dc_eq ctors_avoid])
-  have wf_F: "tyenv_well_formed ?envF"
-    using tyenv_well_formed_TE_ProofTopLevel_irrelevant[OF wf] .
+  have wf_F: "tyenv_binders_distinct ?envF"
+    using wf by simp
   have ok_F: "module_env_subst_ok subst targetEnv ?envF"
-    using ok unfolding module_env_subst_ok_def by simp
+    using ok unfolding module_env_subst_ok_def by auto
   have ok_rt_F: "matchGhost = NotGhost \<longrightarrow> module_env_subst_runtime_ok subst targetEnv ?envF"
     using ok_rt_m unfolding module_env_subst_runtime_ok_def by simp
   have bodies_subst:
@@ -2201,10 +2577,10 @@ next
          is_valid_decreases_type_apply_subst[OF v] v Some
     show ?thesis by simp
   qed
-  have wf_F: "tyenv_well_formed ?envF"
-    using tyenv_well_formed_TE_ProofTopLevel_irrelevant[OF wf] .
+  have wf_F: "tyenv_binders_distinct ?envF"
+    using wf by simp
   have ok_F: "module_env_subst_ok subst targetEnv ?envF"
-    using ok unfolding module_env_subst_ok_def by simp
+    using ok unfolding module_env_subst_ok_def by auto
   have ok_rt_F: "whileGhost = NotGhost \<longrightarrow> module_env_subst_runtime_ok subst targetEnv ?envF"
     using ok_rt_w unfolding module_env_subst_runtime_ok_def by simp
   from "12.IH"[OF gh cond refl invs decr body_typed
@@ -2231,18 +2607,10 @@ next
     by (auto simp: Let_def split: if_splits)
   have wk_subst: "is_well_kinded ?me (apply_subst subst varTy)"
     using apply_subst_preserves_well_kinded_module[OF wk ok] .
-  have wf_X: "tyenv_well_formed ?envX"
-  proof -
-    from tyenv_well_formed_add_ghost_var[OF wf wk]
-    have wf': "tyenv_well_formed
-                 (env \<lparr> TE_LocalVars := fmupd varName varTy (TE_LocalVars env),
-                        TE_GhostLocals := finsert varName (TE_GhostLocals env) \<rparr>)" .
-    from tyenv_well_formed_TE_ConstLocals_irrelevant[OF wf',
-            of "fminus (TE_ConstLocals env) {|varName|}"]
-    show ?thesis by simp
-  qed
+  have wf_X: "tyenv_binders_distinct ?envX"
+    using wf by simp
   have ok_X: "module_env_subst_ok subst targetEnv ?envX"
-    using ok unfolding module_env_subst_ok_def by simp
+    using ok unfolding module_env_subst_ok_def by auto
   have triv_ok_rt: "Ghost = NotGhost \<longrightarrow> module_env_subst_runtime_ok subst targetEnv ?envX"
     by simp
   from core_term_type_subst_module_env[OF cond wf_X ok_X triv_ok_rt cp]
@@ -2324,10 +2692,10 @@ next
     body_typed: "core_statement_list_type ?envF ghost body = Some bodyEnv" and
     out_eq: "envOut = env"
     by (auto split: option.splits)
-  have wf_F: "tyenv_well_formed ?envF"
-    using tyenv_well_formed_TE_ProofTopLevel_irrelevant[OF wf] .
+  have wf_F: "tyenv_binders_distinct ?envF"
+    using wf by simp
   have ok_F: "module_env_subst_ok subst targetEnv ?envF"
-    using ok unfolding module_env_subst_ok_def by simp
+    using ok unfolding module_env_subst_ok_def by auto
   have ok_rt_F: "ghost = NotGhost \<longrightarrow> module_env_subst_runtime_ok subst targetEnv ?envF"
     using "16.prems"(4) unfolding module_env_subst_runtime_ok_def by simp
   from "16.IH"[OF body_typed wf_F ok_F ok_rt_F]
@@ -2356,9 +2724,14 @@ next
     "core_statement_type (apply_subst_to_module_env subst targetEnv env) ghost
                          (apply_subst_to_statement subst stmt)
        = Some (apply_subst_to_module_env subst targetEnv envMid)" .
-  have wf_mid: "tyenv_well_formed envMid"
-    using core_statement_type_preserves_well_formed[OF head "18.prems"(2)] .
   note fixed_mid = core_statement_type_fixed_eq[OF head]
+  have wf_mid: "tyenv_binders_distinct envMid"
+  proof -
+    have "TE_DataCtors envMid = TE_DataCtors env" and "TE_Functions envMid = TE_Functions env"
+      using fixed_mid unfolding tyenv_fixed_eq_def by simp_all
+    then show ?thesis
+      using "18.prems"(2) tyenv_binders_distinct_cong by blast
+  qed
   have ok_mid: "module_env_subst_ok subst targetEnv envMid"
     using "18.prems"(3) module_env_subst_ok_fixed_eq[OF fixed_mid] by simp
   have ok_rt_mid: "ghost = NotGhost \<longrightarrow> module_env_subst_runtime_ok subst targetEnv envMid"
@@ -2464,8 +2837,10 @@ qed
 
 (* Runtime analogue of the previous lemma. The target env extends both
    TE_TypeVars and TE_RuntimeTypeVars by the binders, matching the shape used
-   by tyenv_fun_ghost_constraint and tyenv_nonghost_payloads_runtime (after
-   the Abs-intersection collapse performed by the caller). *)
+   by tyenv_fun_ghost_constraint (after the Abs-intersection collapse
+   performed by the caller). The binders must not shadow an abstract type of
+   env (tyenv_fun_tyvars_fresh / tyenv_ctor_tyvars_fresh), so that they leave
+   the ghost sets unchanged. *)
 lemma apply_subst_preserves_runtime_module_binders:
   assumes rt: "is_runtime_type
                  (env \<lparr> TE_TypeVars := TE_TypeVars env |\<union>| fset_of_list binders,
@@ -2473,18 +2848,35 @@ lemma apply_subst_preserves_runtime_module_binders:
       and ok: "module_env_subst_ok subst targetEnv env"
       and ok_rt: "module_env_subst_runtime_ok subst targetEnv env"
       and avoid: "subst_names subst |\<inter>| fset_of_list binders = {||}"
+      and fresh: "fset_of_list binders |\<inter>| TE_AbstractTypes env = {||}"
   shows "is_runtime_type
            (targetEnv \<lparr> TE_TypeVars := TE_TypeVars targetEnv |\<union>| fset_of_list binders,
                         TE_RuntimeTypeVars := TE_RuntimeTypeVars targetEnv |\<union>| fset_of_list binders \<rparr>)
            (apply_subst subst ty)"
 proof (rule apply_subst_preserves_runtime[OF rt])
-  show "TE_GhostDatatypes
+  have abs_eq: "TE_AbstractTypes targetEnv = TE_AbstractTypes env |-| fmdom subst"
+   and gd_sub: "ghost_datatypes targetEnv \<subseteq> ghost_datatypes env"
+    using ok unfolding module_env_subst_ok_def by blast+
+  have abs_sub: "TE_AbstractTypes targetEnv |\<subseteq>| TE_AbstractTypes env"
+    unfolding abs_eq by (rule fminus_fsubset)
+  have gd_tgt: "ghost_datatypes_r targetEnv
+                  (TE_AbstractTypes targetEnv
+                   |\<inter>| (TE_RuntimeTypeVars targetEnv |\<union>| fset_of_list binders))
+                  = ghost_datatypes targetEnv"
+    by (metis (no_types, lifting) abs_eq fresh funion_fminus_finter inf_commute inf_sup_distrib2
+        sup_bot.right_neutral sup_left_idem)
+  have gd_env: "ghost_datatypes_r env
+                  (TE_AbstractTypes env |\<inter>| (TE_RuntimeTypeVars env |\<union>| fset_of_list binders))
+                  = ghost_datatypes env"
+    by (rule ghost_datatypes_r_extend_eq)
+       (metis fresh fempty_iff finter_iff fsubsetI)
+  show "ghost_datatypes
           (targetEnv \<lparr> TE_TypeVars := TE_TypeVars targetEnv |\<union>| fset_of_list binders,
                        TE_RuntimeTypeVars := TE_RuntimeTypeVars targetEnv |\<union>| fset_of_list binders \<rparr>)
-          = TE_GhostDatatypes
+          \<subseteq> ghost_datatypes
               (env \<lparr> TE_TypeVars := TE_TypeVars env |\<union>| fset_of_list binders,
                      TE_RuntimeTypeVars := TE_RuntimeTypeVars env |\<union>| fset_of_list binders \<rparr>)"
-    using ok unfolding module_env_subst_ok_def by simp
+    by (simp add: gd_tgt gd_env gd_sub)
 next
   fix n assume "n |\<in>| TE_RuntimeTypeVars
                         (env \<lparr> TE_TypeVars := TE_TypeVars env |\<union>| fset_of_list binders,
@@ -2563,16 +2955,20 @@ proof -
    and wf_fun_dist: "tyenv_fun_tyvars_distinct env"
    and wf_fun_ghost: "tyenv_fun_ghost_constraint env"
    and wf_fun_ret_cp: "tyenv_fun_return_types_complete env"
-   and wf_ng_payloads: "tyenv_nonghost_payloads_runtime env"
-   and wf_gdt_sub: "tyenv_ghost_datatypes_subset env"
+   and wf_ctor_fresh: "tyenv_ctor_tyvars_fresh env"
+   and wf_fun_fresh: "tyenv_fun_tyvars_fresh env"
    and wf_dt_nonempty: "tyenv_datatypes_nonempty env"
     using wf[unfolded tyenv_well_formed_def] by simp_all
   have rtv_env: "TE_RuntimeTypeVars env |\<subseteq>| TE_TypeVars env"
     using wf[unfolded tyenv_well_formed_def]
     unfolding tyenv_runtime_tyvars_subset_def by simp
   have dt_eq: "TE_Datatypes targetEnv = TE_Datatypes env"
-   and gdt_eq: "TE_GhostDatatypes targetEnv = TE_GhostDatatypes env"
-    using ok unfolding module_env_subst_ok_def by simp_all
+   and abs_eq: "TE_AbstractTypes targetEnv = TE_AbstractTypes env |-| fmdom subst"
+    using ok unfolding module_env_subst_ok_def by blast+
+  have abs_sub: "TE_AbstractTypes targetEnv |\<subseteq>| TE_AbstractTypes env"
+    unfolding abs_eq by (rule fminus_fsubset)
+  have gr_eq: "\<And>R. ghost_datatypes_r ?me R = ghost_datatypes_r targetEnv R"
+    by (rule module_env_subst_ok_ghost_datatypes_r[OF ok])
   have fun_avoid: "\<And>funName info. fmlookup (TE_Functions env) funName = Some info \<Longrightarrow>
                      subst_names subst |\<inter>| fset_of_list (FI_TyArgs info) = {||}"
     using ok unfolding module_env_subst_ok_def by blast
@@ -2580,6 +2976,13 @@ proof -
                       fmlookup (TE_DataCtors env) ctorName = Some (dtName, tyVars, payload) \<Longrightarrow>
                       subst_names subst |\<inter>| fset_of_list tyVars = {||}"
     using ok unfolding module_env_subst_ok_def by blast
+  have fun_fresh: "\<And>funName info. fmlookup (TE_Functions env) funName = Some info \<Longrightarrow>
+                     fset_of_list (FI_TyArgs info) |\<inter>| TE_AbstractTypes env = {||}"
+    using wf_fun_fresh unfolding tyenv_fun_tyvars_fresh_def by blast
+  have ctor_fresh: "\<And>ctorName dtName tyVars payload.
+                      fmlookup (TE_DataCtors env) ctorName = Some (dtName, tyVars, payload) \<Longrightarrow>
+                      fset_of_list tyVars |\<inter>| TE_AbstractTypes env = {||}"
+    using wf_ctor_fresh unfolding tyenv_ctor_tyvars_fresh_def by blast
 
   \<comment> \<open>With RTV below TV, the Abs-intersection forms collapse (after rewriting
       Abs to TV via the module-level equations).\<close>
@@ -2921,12 +3324,13 @@ proof -
       have src_eq: "is_runtime_type ?srcAbs ty0 = is_runtime_type ?srcTv ty0"
         by (intro is_runtime_type_cong_env) (simp_all add: abs_env tv_inter_env)
       have rt_t: "is_runtime_type ?tgtTv (apply_subst subst ty0)"
-      proof (rule apply_subst_preserves_runtime_module_binders[OF _ ok ok_rt fun_avoid[OF f0]])
+      proof (rule apply_subst_preserves_runtime_module_binders[OF _ ok ok_rt fun_avoid[OF f0]
+                                                                  fun_fresh[OF f0]])
         show "is_runtime_type ?srcTv ty0" using r0 src_eq by simp
       qed
       have tgt_eq: "is_runtime_type ?tgtTv (apply_subst subst ty0)
                       = is_runtime_type ?tgtAbs (apply_subst subst ty0)"
-        by (intro is_runtime_type_cong_env) (simp_all add: abs_target tv_inter_target gdt_eq)
+        by (intro is_runtime_type_cong_env) (simp_all add: abs_target tv_inter_target gr_eq)
       show "is_runtime_type ?tgtAbs (apply_subst subst ty0)" using rt_t tgt_eq by simp
     qed
     have args': "\<forall>ty vor. (ty, vor, NotGhost) \<in> set (FI_TmArgs info)
@@ -2975,51 +3379,39 @@ proof -
       using apply_subst_preserves_complete[OF _ cp] by (simp add: i_eq)
   qed
 
-  \<comment> \<open>Clause 13: non-ghost ctor payloads are runtime (binder-extended runtime
-      lifting at the ctor's tyvars).\<close>
-  have c13: "tyenv_nonghost_payloads_runtime ?me"
-    unfolding tyenv_nonghost_payloads_runtime_def
+  \<comment> \<open>Clauses 13 and 14: the type parameters of constructors and functions
+      (unchanged by the substitution) avoid the abstract types of targetEnv,
+      which are among env's.\<close>
+  have c13: "tyenv_ctor_tyvars_fresh ?me"
+    unfolding tyenv_ctor_tyvars_fresh_def
   proof (intro allI impI)
     fix ctorName dtName tyVars payload
-    assume l: "fmlookup (TE_DataCtors ?me) ctorName = Some (dtName, tyVars, payload)"
-       and ng: "dtName |\<notin>| TE_GhostDatatypes ?me"
-    from l obtain payload0 where
-      dc0: "fmlookup (TE_DataCtors env) ctorName = Some (dtName, tyVars, payload0)" and
-      p_eq: "payload = apply_subst subst payload0"
+    assume "fmlookup (TE_DataCtors ?me) ctorName = Some (dtName, tyVars, payload)"
+    then obtain payload0 where
+      dc0: "fmlookup (TE_DataCtors env) ctorName = Some (dtName, tyVars, payload0)"
       by (cases "fmlookup (TE_DataCtors env) ctorName")
          (auto simp: apply_subst_to_datactor_def split: prod.splits)
-    from ng have ng0: "dtName |\<notin>| TE_GhostDatatypes env" by simp
-    let ?srcAbs = "env \<lparr> TE_TypeVars := TE_AbstractTypes env |\<union>| fset_of_list tyVars,
-                         TE_RuntimeTypeVars := (TE_AbstractTypes env |\<inter>| TE_RuntimeTypeVars env)
-                                                |\<union>| fset_of_list tyVars \<rparr>"
-    let ?srcTv = "env \<lparr> TE_TypeVars := TE_TypeVars env |\<union>| fset_of_list tyVars,
-                        TE_RuntimeTypeVars := TE_RuntimeTypeVars env |\<union>| fset_of_list tyVars \<rparr>"
-    let ?tgtTv = "targetEnv \<lparr> TE_TypeVars := TE_TypeVars targetEnv |\<union>| fset_of_list tyVars,
-                              TE_RuntimeTypeVars := TE_RuntimeTypeVars targetEnv
-                                                     |\<union>| fset_of_list tyVars \<rparr>"
-    let ?tgtAbs = "?me \<lparr> TE_TypeVars := TE_AbstractTypes ?me |\<union>| fset_of_list tyVars,
-                         TE_RuntimeTypeVars := (TE_AbstractTypes ?me |\<inter>| TE_RuntimeTypeVars ?me)
-                                                |\<union>| fset_of_list tyVars \<rparr>"
-    have r0: "is_runtime_type ?srcAbs payload0"
-      using wf_ng_payloads dc0 ng0 unfolding tyenv_nonghost_payloads_runtime_def by blast
-    have src_eq: "is_runtime_type ?srcAbs payload0 = is_runtime_type ?srcTv payload0"
-      by (intro is_runtime_type_cong_env) (simp_all add: abs_env tv_inter_env)
-    have rt_t: "is_runtime_type ?tgtTv (apply_subst subst payload0)"
-    proof (rule apply_subst_preserves_runtime_module_binders[OF _ ok ok_rt ctor_avoid[OF dc0]])
-      show "is_runtime_type ?srcTv payload0" using r0 src_eq by simp
-    qed
-    have tgt_eq: "is_runtime_type ?tgtTv (apply_subst subst payload0)
-                    = is_runtime_type ?tgtAbs (apply_subst subst payload0)"
-      by (intro is_runtime_type_cong_env) (simp_all add: abs_target tv_inter_target gdt_eq)
-    show "is_runtime_type ?tgtAbs payload"
-      using rt_t tgt_eq unfolding p_eq by simp
+    from ctor_fresh[OF dc0] abs_sub
+    show "fset_of_list tyVars |\<inter>| TE_AbstractTypes ?me = {||}"
+      by auto
+  qed
+  have c14: "tyenv_fun_tyvars_fresh ?me"
+    unfolding tyenv_fun_tyvars_fresh_def
+  proof (intro allI impI)
+    fix funName info
+    assume "fmlookup (TE_Functions ?me) funName = Some info"
+    then obtain info0 where
+      f0: "fmlookup (TE_Functions env) funName = Some info0" and
+      i_eq: "info = apply_subst_to_funinfo subst info0"
+      by (cases "fmlookup (TE_Functions env) funName") auto
+    from fun_fresh[OF f0] abs_sub
+    show "fset_of_list (FI_TyArgs info) |\<inter>| TE_AbstractTypes ?me = {||}"
+      using i_eq by auto
   qed
 
-  \<comment> \<open>Clauses 14-17: pure bookkeeping on fields that either come from
+  \<comment> \<open>Clauses 15-17: pure bookkeeping on fields that either come from
       targetEnv (with the hypotheses supplying the subset facts) or are
       untouched by the substitution.\<close>
-  have c14: "tyenv_ghost_datatypes_subset ?me"
-    using wf_gdt_sub unfolding tyenv_ghost_datatypes_subset_def by simp
   have c15: "tyenv_runtime_tyvars_subset ?me"
     using rtv_target unfolding tyenv_runtime_tyvars_subset_def by simp
   have c16: "tyenv_abstract_types_subset ?me"
@@ -3039,7 +3431,7 @@ qed
    needed. *)
 lemma core_term_type_ghost_bool_subst_module_env:
   assumes typed: "core_term_type env Ghost tm = Some CoreTy_Bool"
-      and wf: "tyenv_well_formed env"
+      and wf: "tyenv_binders_distinct env"
       and ok: "module_env_subst_ok subst targetEnv env"
       and cp: "\<forall>ty' \<in> fmran' subst. is_complete_type ty'"
   shows "core_term_type (apply_subst_to_module_env subst targetEnv env) Ghost

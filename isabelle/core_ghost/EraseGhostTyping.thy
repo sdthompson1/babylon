@@ -20,12 +20,11 @@ begin
 (* The relation between the two environments *)
 (* ========================================================================== *)
 
-(* The declarations of envE are those of env that are not ghost, and each
-   function has lost its ghost parameters. This part of
-   the relation does not look at the local variables. It does not mention
-   TE_AbstractTypes either: typing of terms and statements does not read that
-   field, and inside a function body it is not simply the erasure of the
-   original one (a type parameter may have the name of an abstract type). *)
+(* The declarations of envE are those of env that are not ghost, each
+   function has lost its ghost parameters, and envE has no ghost datatype.
+   This part of the relation does not look at the local variables. It does
+   not mention TE_AbstractTypes either: typing of terms and statements does
+   not read that field. *)
 definition tyenv_decls_erased :: "CoreTyEnv \<Rightarrow> CoreTyEnv \<Rightarrow> bool" where
   "tyenv_decls_erased env envE =
     (TE_GlobalVars envE = TE_GlobalVars env
@@ -34,11 +33,11 @@ definition tyenv_decls_erased :: "CoreTyEnv \<Rightarrow> CoreTyEnv \<Rightarrow
      \<and> TE_Functions envE
          = fmmap erase_ghost_funinfo (fmfilter (tyenv_nonghost_fun env) (TE_Functions env))
      \<and> TE_Datatypes envE
-         = fmfilter (\<lambda>dtName. dtName |\<notin>| TE_GhostDatatypes env) (TE_Datatypes env)
+         = fmfilter (\<lambda>dtName. dtName \<notin> ghost_datatypes env) (TE_Datatypes env)
      \<and> TE_DataCtors envE = fmfilter (tyenv_nonghost_ctor env) (TE_DataCtors env)
      \<and> TE_DataCtorsByType envE
-         = fmfilter (\<lambda>dtName. dtName |\<notin>| TE_GhostDatatypes env) (TE_DataCtorsByType env)
-     \<and> TE_GhostDatatypes envE = {||})"
+         = fmfilter (\<lambda>dtName. dtName \<notin> ghost_datatypes env) (TE_DataCtorsByType env)
+     \<and> ghost_datatypes envE = {})"
 
 (* tyenv_erased env envE:
     - the declarations of envE are those of env that are not ghost;
@@ -59,7 +58,8 @@ definition tyenv_erased :: "CoreTyEnv \<Rightarrow> CoreTyEnv \<Rightarrow> bool
            fmlookup (TE_LocalVars envE) name = fmlookup (TE_LocalVars env) name
            \<and> (name |\<in>| TE_ConstLocals envE \<longleftrightarrow> name |\<in>| TE_ConstLocals env)))"
 
-(* tyenv_decls_erased reads only the declaration fields. *)
+(* tyenv_decls_erased reads only the declaration fields (TE_AbstractAllocLevels
+   through the ghost sets). *)
 lemma tyenv_decls_erased_cong:
   assumes "TE_GlobalVars env1 = TE_GlobalVars env2"
     and "TE_TypeVars env1 = TE_TypeVars env2"
@@ -68,7 +68,7 @@ lemma tyenv_decls_erased_cong:
     and "TE_Datatypes env1 = TE_Datatypes env2"
     and "TE_DataCtors env1 = TE_DataCtors env2"
     and "TE_DataCtorsByType env1 = TE_DataCtorsByType env2"
-    and "TE_GhostDatatypes env1 = TE_GhostDatatypes env2"
+    and "TE_AbstractAllocLevels env1 = TE_AbstractAllocLevels env2"
     and "TE_GlobalVars envE1 = TE_GlobalVars envE2"
     and "TE_TypeVars envE1 = TE_TypeVars envE2"
     and "TE_RuntimeTypeVars envE1 = TE_RuntimeTypeVars envE2"
@@ -76,15 +76,17 @@ lemma tyenv_decls_erased_cong:
     and "TE_Datatypes envE1 = TE_Datatypes envE2"
     and "TE_DataCtors envE1 = TE_DataCtors envE2"
     and "TE_DataCtorsByType envE1 = TE_DataCtorsByType envE2"
-    and "TE_GhostDatatypes envE1 = TE_GhostDatatypes envE2"
+    and "TE_AbstractAllocLevels envE1 = TE_AbstractAllocLevels envE2"
   shows "tyenv_decls_erased env1 envE1 = tyenv_decls_erased env2 envE2"
 proof -
+  note gd = ghost_datatypes_r_cong[OF assms(5,6,7)]
+  note gdE = ghost_datatypes_r_cong[OF assms(13,14,15)]
   have f: "tyenv_nonghost_fun env1 = tyenv_nonghost_fun env2"
     by (rule ext) (simp add: tyenv_nonghost_fun_def assms)
   have c: "tyenv_nonghost_ctor env1 = tyenv_nonghost_ctor env2"
-    by (rule ext) (simp add: tyenv_nonghost_ctor_def assms split: option.splits prod.splits)
+    by (rule ext) (simp add: tyenv_nonghost_ctor_def assms gd split: option.splits prod.splits)
   show ?thesis
-    unfolding tyenv_decls_erased_def f c assms by (rule refl)
+    unfolding tyenv_decls_erased_def f c gd gdE assms by (rule refl)
 qed
 
 (* The erased environment is related to the original one, when the original
@@ -92,7 +94,8 @@ qed
 lemma tyenv_erased_erase_ghost_tyenv:
   assumes "TE_GhostLocals env = {||}"
   shows "tyenv_erased env (erase_ghost_tyenv env)"
-  using assms unfolding tyenv_erased_def tyenv_decls_erased_def by simp
+  using assms ghost_datatypes_erase_ghost_tyenv[of env]
+  unfolding tyenv_erased_def tyenv_decls_erased_def by simp
 
 (* What the relation gives. *)
 
@@ -112,15 +115,15 @@ lemma tyenv_erased_fun_lookup:
 lemma tyenv_erased_ctor_lookup:
   assumes "tyenv_erased env envE"
     and "fmlookup (TE_DataCtors env) ctorName = Some (dtName, tyVars, payload)"
-    and "dtName |\<notin>| TE_GhostDatatypes env"
+    and "dtName \<notin> ghost_datatypes env"
   shows "fmlookup (TE_DataCtors envE) ctorName = Some (dtName, tyVars, payload)"
   using assms
   unfolding tyenv_erased_def tyenv_decls_erased_def
   by (simp add: tyenv_nonghost_ctor_def)
 
 lemma tyenv_erased_no_ghost_datatype:
-  "tyenv_erased env envE \<Longrightarrow> dtName |\<notin>| TE_GhostDatatypes envE"
-  unfolding tyenv_erased_def tyenv_decls_erased_def by simp
+  "tyenv_erased env envE \<Longrightarrow> dtName \<notin> ghost_datatypes envE"
+  unfolding tyenv_erased_def tyenv_decls_erased_def by auto
 
 lemma tyenv_erased_not_ghost:
   "tyenv_erased env envE \<Longrightarrow> \<not> tyenv_var_ghost envE name"
@@ -224,7 +227,7 @@ proof (induction ty)
       wks: "list_all (is_well_kinded env) args"
     by (auto split: option.splits)
   from CoreTy_Datatype.prems(2) have
-      ng: "nm |\<notin>| TE_GhostDatatypes env" and
+      ng: "nm \<notin> ghost_datatypes env" and
       rts: "list_all (is_runtime_type env) args"
     by simp_all
   have lkE: "fmlookup (TE_Datatypes envE) nm = Some n"
@@ -299,19 +302,19 @@ proof (induction p arbitrary: ty)
              (apply_subst (fmap_of_list (zip tyvars tyArgs)) payloadTy)"
     by (auto split: option.splits prod.splits CoreType.splits)
   from CorePat_Variant.prems(2) ty have
-      ng: "dtName |\<notin>| TE_GhostDatatypes env" and
+      ng: "dtName \<notin> ghost_datatypes env" and
       rts: "list_all (is_runtime_type env) tyArgs"
     by simp_all
-  have "tyenv_nonghost_payloads_runtime env"
-    using wf unfolding tyenv_well_formed_def by blast
-  hence payload_rt:
+  have payload_rt:
     "is_runtime_type
        (env \<lparr> TE_TypeVars := TE_AbstractTypes env |\<union>| fset_of_list tyvars,
               TE_RuntimeTypeVars := (TE_AbstractTypes env |\<inter>| TE_RuntimeTypeVars env)
                                      |\<union>| fset_of_list tyvars \<rparr>) payloadTy"
-    using lk ng unfolding tyenv_nonghost_payloads_runtime_def by blast
+    by (rule tyenv_nonghost_payloads_runtime[OF wf lk ng])
+  have fresh: "fset_of_list tyvars |\<inter>| TE_AbstractTypes env = {||}"
+    using wf lk unfolding tyenv_well_formed_def tyenv_ctor_tyvars_fresh_def by blast
   have rt': "is_runtime_type env (apply_subst (fmap_of_list (zip tyvars tyArgs)) payloadTy)"
-    by (rule apply_subst_specializes_runtime[OF payload_rt rts len[symmetric]])
+    by (rule apply_subst_specializes_runtime[OF payload_rt rts len[symmetric] fresh])
   have pcE: "pattern_compatible envE payloadPat
                (apply_subst (fmap_of_list (zip tyvars tyArgs)) payloadTy)"
     by (rule CorePat_Variant.IH[OF pc rt'])
@@ -632,7 +635,7 @@ next
       wks: "list_all (is_well_kinded env) tyArgs" and
       cps: "list_all is_complete_type tyArgs" and
       rts: "list_all (is_runtime_type env) tyArgs" and
-      ng: "dtName |\<notin>| TE_GhostDatatypes env" and
+      ng: "dtName \<notin> ghost_datatypes env" and
       p: "core_term_type env NotGhost payload
             = Some (apply_subst (fmap_of_list (zip tyvars tyArgs)) payloadTy)" and
       ty_eq: "ty = CoreTy_Datatype dtName tyArgs"
@@ -746,7 +749,7 @@ next
     by (auto split: option.splits prod.splits if_splits)
   have "is_runtime_type env (CoreTy_Datatype dtName tyArgs)"
     by (rule core_term_type_notghost_runtime[OF t wf])
-  hence ng: "dtName |\<notin>| TE_GhostDatatypes env" by simp
+  hence ng: "dtName \<notin> ghost_datatypes env" by simp
   have lkE: "fmlookup (TE_DataCtors envE) ctorName = Some (dtName, tyvars, payloadTy)"
     by (rule tyenv_erased_ctor_lookup[OF rel lk ng])
   have tE: "core_term_type envE NotGhost (erase_ghost_term (TE_Functions env) tm)

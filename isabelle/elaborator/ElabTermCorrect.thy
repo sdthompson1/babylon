@@ -1712,7 +1712,7 @@ next
       by (auto simp: resolve_type_args_def Let_def
                split: if_splits sum.splits prod.splits option.splits)
     from "2.prems"(1) None gcFalse ctor_lookup nullary_mem have
-      ghost_ok: "ghost = NotGhost \<longrightarrow> dtName |\<notin>| TE_GhostDatatypes env"
+      ghost_ok: "ghost = NotGhost \<longrightarrow> dtName \<notin> ghost_datatypes env"
       by (auto simp: resolve_type_args_def Let_def
                split: if_splits sum.splits prod.splits)
 
@@ -1750,9 +1750,9 @@ next
     have ctor_lookup': "fmlookup (TE_DataCtors ?env') name = Some (dtName, tyvars, payloadTy)"
       using ctor_lookup by (simp add: extend_env_with_tyvars_def)
 
-    \<comment> \<open>TE_GhostDatatypes is unchanged\<close>
-    have ghost_ok': "ghost = NotGhost \<longrightarrow> dtName |\<notin>| TE_GhostDatatypes ?env'"
-      using ghost_ok by (simp add: extend_env_with_tyvars_def)
+    \<comment> \<open>The ghost set can only shrink under the extension\<close>
+    have ghost_ok': "ghost = NotGhost \<longrightarrow> dtName \<notin> ghost_datatypes ?env'"
+      using ghost_ok ghost_datatypes_extend_env_with_tyvars_subset by blast
 
     \<comment> \<open>Payload types match: apply_subst tySubst (CoreTy_Record []) = CoreTy_Record []\<close>
     have payload_match: "CoreTy_Record [] = apply_subst (fmap_of_list (zip tyvars newTyArgs)) (CoreTy_Record [])"
@@ -2408,8 +2408,8 @@ next
       thus "n \<in> fset (TE_RuntimeTypeVars env)" by simp
     qed
     show "is_runtime_type env rhsTy"
-      using is_runtime_type_transfer[OF rhs_rt_sub tyvars_in_env_rtv]
-      unfolding extend_env_with_tyvars_def by simp
+      using is_runtime_type_transfer[OF rhs_rt_sub tyvars_in_env_rtv
+              equalityD2[OF ghost_datatypes_extend_env_with_tyvars_fresh[OF "7.prems"(4) "7.prems"(2)]]] .
   qed
 
   have wf_body_env: "tyenv_well_formed ?body_env"

@@ -742,8 +742,11 @@ proof -
                                   (FI_ReturnType funInfo)"
       using fn_lookup not_ghost_fn[rule_format, OF ng] tyenv_fun_ghost_constraint_def Let_def
       by (meson GhostOrNot.exhaust)
+    have fresh: "fset_of_list (FI_TyArgs funInfo) |\<inter>| TE_AbstractTypes env = {||}"
+      using wf fn_lookup unfolding tyenv_well_formed_def tyenv_fun_tyvars_fresh_def by blast
     show "is_runtime_type env retTy"
-      using ty_eq apply_subst_specializes_runtime[OF ret_rt tyargs_rt[rule_format, OF ng] len_tyargs[symmetric]]
+      using ty_eq apply_subst_specializes_runtime[OF ret_rt tyargs_rt[rule_format, OF ng]
+                                                     len_tyargs[symmetric] fresh]
       by simp
   qed
   ultimately show ?thesis by blast

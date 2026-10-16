@@ -70,7 +70,7 @@ where
                   \<comment> \<open>A type argument must be a complete type (in any mode).\<close>
                   Inl [TyErr_IncompleteTypeArgument loc]
                  else if ghost = NotGhost \<and> (\<not> list_all (is_runtime_type env) elabTyArgs
-                        \<or> name |\<in>| TE_GhostDatatypes env) then
+                        \<or> name \<in> ghost_datatypes env) then
                   Inl [TyErr_GhostTypeInNonGhost loc]
                  else
                   Inr (CoreTy_Datatype name elabTyArgs))

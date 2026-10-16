@@ -118,12 +118,36 @@ proof -
   have wf: "tyenv_well_formed (CM_TyEnv (normalize_module m))"
     and scope: "tyenv_module_scope (CM_TyEnv (normalize_module m))"
     using nwt unfolding normalized_module_well_typed_def by blast+
-  have ghost: "module_ghost_subsets_ok m"
-    using wf
-    unfolding tyenv_well_formed_def tyenv_ghost_vars_subset_def
-              tyenv_ghost_datatypes_subset_def module_ghost_subsets_ok_def
-              normalize_module_def apply_subst_to_tyenv_def
-    by simp
+  \<comment> \<open>Binder freshness: normalization keeps every binder and the abstract
+     types, so the two freshness clauses of the normalized env are m's.\<close>
+  have ghost: "module_tyvars_fresh m"
+  proof -
+    have ctor: "tyenv_ctor_tyvars_fresh (CM_TyEnv (normalize_module m))"
+     and fn: "tyenv_fun_tyvars_fresh (CM_TyEnv (normalize_module m))"
+      using wf unfolding tyenv_well_formed_def by blast+
+    have "tyenv_ctor_tyvars_fresh (CM_TyEnv m)"
+      using ctor
+      unfolding tyenv_ctor_tyvars_fresh_def normalize_module_def
+                apply_subst_to_tyenv_def
+      by (auto simp: apply_subst_to_datactor_def split: prod.splits)
+    moreover have "tyenv_fun_tyvars_fresh (CM_TyEnv m)"
+    proof (unfold tyenv_fun_tyvars_fresh_def, intro allI impI)
+      fix funName info
+      assume look: "fmlookup (TE_Functions (CM_TyEnv m)) funName = Some info"
+      have "fmlookup (TE_Functions (CM_TyEnv (normalize_module m))) funName
+              = Some (apply_subst_to_funinfo (CM_TypeSubst m) info)"
+        using look unfolding normalize_module_def apply_subst_to_tyenv_def
+        by simp
+      moreover have "TE_AbstractTypes (CM_TyEnv (normalize_module m))
+                       = TE_AbstractTypes (CM_TyEnv m)"
+        unfolding normalize_module_def apply_subst_to_tyenv_def by simp
+      ultimately show "fset_of_list (FI_TyArgs info)
+                         |\<inter>| TE_AbstractTypes (CM_TyEnv m) = {||}"
+        using fn unfolding tyenv_fun_tyvars_fresh_def
+        by (metis apply_subst_to_funinfo_FI_TyArgs)
+    qed
+    ultimately show ?thesis unfolding module_tyvars_fresh_def by blast
+  qed
   have rtv: "TE_RuntimeTypeVars (CM_TyEnv m) |\<subseteq>| TE_TypeVars (CM_TyEnv m)"
     using wf
     unfolding tyenv_well_formed_def tyenv_runtime_tyvars_subset_def

@@ -92,7 +92,7 @@ proof -
                \<and> FI_Requires info = [] \<and> FI_Ensures info = []"
     if "fmlookup (TE_Functions ?envE) name = Some info" for name info
     using that unfolding erase_ghost_tyenv_fun_lookup by auto
-  have gd: "TE_GhostDatatypes ?envE = {||}" by simp
+  have gd: "ghost_datatypes ?envE = {}" by (rule ghost_datatypes_erase_ghost_tyenv)
   have tv: "TE_TypeVars ?envE |\<subseteq>| TE_RuntimeTypeVars ?envE" by auto
   have bodies: "core_statement_list_ghost_free body"
     if lk: "fmlookup (CM_Functions (erase_ghost_module m)) name = Some f"

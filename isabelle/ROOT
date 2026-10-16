@@ -60,6 +60,7 @@ session Babylon = "HOL-Library" +
     "core/MergeAllSubsts"
     "core/MergeSubstsPrelims"
     "core/ModuleBodyEnv"
+    "core/RuntimeType"
     "core/SubstAbsorption"
     "core/SubstClosureExistsUnique"
     "core/TyEnvExtension"

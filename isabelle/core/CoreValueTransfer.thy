@@ -60,15 +60,14 @@ next
 qed simp_all
 
 (* For a ground, well-kinded type, runtime-ness transfers to any env whose
-   datatype table preserves the old entries and whose ghost markers are
-   unchanged on the old datatype domain (TE_RuntimeTypeVars is never
-   consulted). Well-kindedness pins every datatype name in the type into the
-   old domain, where the ghost marker is unchanged. *)
+   datatype table preserves the old entries and in which no old non-ghost
+   datatype has become ghost (TE_RuntimeTypeVars is never consulted).
+   Well-kindedness pins every datatype name in the type into the old domain. *)
 lemma is_runtime_type_ground_mono:
   assumes dt: "\<And>d n. fmlookup (TE_Datatypes env) d = Some n
                  \<Longrightarrow> fmlookup (TE_Datatypes env') d = Some n"
       and gd: "\<And>d. d |\<in>| fmdom (TE_Datatypes env)
-                 \<Longrightarrow> (d |\<in>| TE_GhostDatatypes env' \<longleftrightarrow> d |\<in>| TE_GhostDatatypes env)"
+                 \<Longrightarrow> d \<notin> ghost_datatypes env \<Longrightarrow> d \<notin> ghost_datatypes env'"
       and ground: "type_tyvars ty = {}"
       and wk: "is_well_kinded env ty"
       and rt: "is_runtime_type env ty"
@@ -80,15 +79,15 @@ using ground wk rt proof (induction ty)
     args_wk: "list_all (is_well_kinded env) argTypes"
     by (auto split: option.splits)
   from CoreTy_Datatype.prems(3) have
-    ng: "name |\<notin>| TE_GhostDatatypes env" and
+    ng: "name \<notin> ghost_datatypes env" and
     args_rt: "list_all (is_runtime_type env) argTypes"
     by auto
   from CoreTy_Datatype.prems(1) have args_ground: "\<forall>t \<in> set argTypes. type_tyvars t = {}"
     by auto
   have dom: "name |\<in>| fmdom (TE_Datatypes env)"
     using lk by (simp add: fmdomI)
-  have ng': "name |\<notin>| TE_GhostDatatypes env'"
-    using gd[OF dom] ng by blast
+  have ng': "name \<notin> ghost_datatypes env'"
+    using gd[OF dom ng] .
   have args_rt': "list_all (is_runtime_type env') argTypes"
     using CoreTy_Datatype.IH args_ground args_wk args_rt
     unfolding list_all_iff by blast
@@ -476,11 +475,11 @@ qed
 
 (* Instantiation for apply_subst_to_module_env: the value-side analogue of
    core_term_type_subst_module_env. module_env_subst_ok's constructor
-   capture-avoidance clause supplies cap; tyenv_well_formed supplies the
+   capture-avoidance clause supplies cap; tyenv_binders_distinct supplies the
    binder distinctness. *)
 lemma value_has_type_subst_module_env:
   assumes vht: "value_has_type env val ty"
-      and wf: "tyenv_well_formed env"
+      and wf: "tyenv_binders_distinct env"
       and ok: "module_env_subst_ok subst targetEnv env"
   shows "value_has_type (apply_subst_to_module_env subst targetEnv env) val
                         (apply_subst subst ty)"
@@ -496,7 +495,7 @@ next
   show "subst_names subst |\<inter>| fset_of_list tyVars = {||}"
     using ok lk unfolding module_env_subst_ok_def by blast
   show "distinct tyVars"
-    using wf lk unfolding tyenv_well_formed_def tyenv_ctor_tyvars_distinct_def by blast
+    using wf lk unfolding tyenv_binders_distinct_def tyenv_ctor_tyvars_distinct_def by blast
 qed
 
 end

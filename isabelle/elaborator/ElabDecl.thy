@@ -59,7 +59,6 @@ definition empty_module_tyenv :: CoreTyEnv where
        TE_Datatypes = fmempty,
        TE_DataCtors = fmempty,
        TE_DataCtorsByType = fmempty,
-       TE_GhostDatatypes = {||},
        TE_AbstractAllocLevels = fmempty \<rparr>"
 
 (* The empty module. *)
@@ -154,16 +153,14 @@ definition tyenv_add_abstract_type ::
            TE_AbstractAllocLevels := fmupd name level (TE_AbstractAllocLevels env) \<rparr>"
 
 (* Add a datatype to the CoreTyEnv, updating all relevant fields (TE_Datatypes,
-   TE_DataCtors, TE_DataCtorsByType, TE_GhostDatatypes) accordingly. *)
+   TE_DataCtors, TE_DataCtorsByType) accordingly. *)
 definition tyenv_add_datatype ::
-  "string \<Rightarrow> string list \<Rightarrow> (string \<times> CoreType) list \<Rightarrow> bool \<Rightarrow> CoreTyEnv \<Rightarrow> CoreTyEnv" where
-  "tyenv_add_datatype name tyvars ctors isGhost env =
+  "string \<Rightarrow> string list \<Rightarrow> (string \<times> CoreType) list \<Rightarrow> CoreTyEnv \<Rightarrow> CoreTyEnv" where
+  "tyenv_add_datatype name tyvars ctors env =
      env \<lparr> TE_Datatypes := fmupd name (length tyvars) (TE_Datatypes env),
            TE_DataCtors := fold (\<lambda>(cn, payload). fmupd cn (name, tyvars, payload))
                                 ctors (TE_DataCtors env),
-           TE_DataCtorsByType := fmupd name (map fst ctors) (TE_DataCtorsByType env),
-           TE_GhostDatatypes := (if isGhost then finsert name (TE_GhostDatatypes env)
-                                 else TE_GhostDatatypes env) \<rparr>"
+           TE_DataCtorsByType := fmupd name (map fst ctors) (TE_DataCtorsByType env) \<rparr>"
 
 
 (* ========================================================================== *)
@@ -848,43 +845,37 @@ definition elab_datatype_decl ::
                         in case elab_data_ctors payloadEnv payloadElabEnv (DD_Ctors dd) of
                              Inl errs \<Rightarrow> Inl errs
                            | Inr ctorInfo \<Rightarrow>
-                               \<comment> \<open>If, in payloadEnv, all payloads have runtime type, then the
-                                  datatype itself is runtime; otherwise, it is considered a
-                                  ghost datatype.\<close>
-                               (let isGhost = \<not> list_all
-                                       (\<lambda>(_, payloadTy, _). is_runtime_type payloadEnv payloadTy)
-                                       ctorInfo
-                                \<comment> \<open>A runtime abstract type can't be realized by a ghost datatype.\<close>
-                                in if isRealization \<and> name |\<in>| TE_RuntimeTypeVars env \<and> isGhost
-                                   then Inl [TyErr_GhostRealizationOfRuntimeType loc name]
-                                   \<comment> \<open>Another variable capture check.\<close>
-                                   else if isRealization \<and>
-                                        realization_captures env elabEnv name
-                                          (CoreTy_Datatype name [])
-                                   then Inl [TyErr_TypeVarCapture loc name]
-                                   else
-                                     \<comment> \<open>Update the env and module with the new datatype
-                                        (and realization if applicable).\<close>
-                                     (let ctors = map (\<lambda>(cn, payload, _). (cn, payload)) ctorInfo;
-                                          env1 = tyenv_add_datatype name tyvars ctors isGhost env;
-                                          elabEnv1 = elabEnv
-                                            \<lparr> EE_NullaryDataCtors :=
-                                                fset_of_list
-                                                  (map fst (filter (\<lambda>(_, _, isNullary). isNullary) ctorInfo))
-                                                |\<union>| EE_NullaryDataCtors elabEnv \<rparr>;
-                                          m1 = m \<lparr> CM_TyEnv :=
-                                                     tyenv_add_datatype name tyvars ctors isGhost
-                                                       (CM_TyEnv m) \<rparr>
-                                      \<comment> \<open>A realization must respect the alloc level declared for
-                                         the abstract type. The datatype's level is computed in
-                                         env1, where the datatype is in scope.\<close>
-                                      in if isRealization \<and>
-                                            \<not> realization_alloc_ok env1 name (CoreTy_Datatype name [])
-                                         then Inl [TyErr_IncompatibleAllocLevel loc name]
-                                         else if isRealization
-                                         then Inr (apply_realization name
-                                                     (CoreTy_Datatype name []) env1 elabEnv1 m1)
-                                         else Inr (env1, elabEnv1, m1))))))))"
+                               \<comment> \<open>Another variable capture check.\<close>
+                               (if isRealization \<and>
+                                   realization_captures env elabEnv name
+                                     (CoreTy_Datatype name [])
+                                then Inl [TyErr_TypeVarCapture loc name]
+                                else
+                                  \<comment> \<open>Update the env and module with the new datatype
+                                     (and realization if applicable).\<close>
+                                  (let ctors = map (\<lambda>(cn, payload, _). (cn, payload)) ctorInfo;
+                                       env1 = tyenv_add_datatype name tyvars ctors env;
+                                       elabEnv1 = elabEnv
+                                         \<lparr> EE_NullaryDataCtors :=
+                                             fset_of_list
+                                               (map fst (filter (\<lambda>(_, _, isNullary). isNullary) ctorInfo))
+                                             |\<union>| EE_NullaryDataCtors elabEnv \<rparr>;
+                                       m1 = m \<lparr> CM_TyEnv :=
+                                                  tyenv_add_datatype name tyvars ctors
+                                                    (CM_TyEnv m) \<rparr>
+                                   \<comment> \<open>A realization must respect the alloc level, and runtime-ness,
+                                      declared for the abstract type. (The datatype's alloc level
+                                      and runtime-ness are computed in env1, where it is in scope.)\<close>
+                                   in if isRealization \<and> name |\<in>| TE_RuntimeTypeVars env
+                                         \<and> \<not> is_runtime_type env1 (CoreTy_Datatype name [])
+                                      then Inl [TyErr_GhostRealizationOfRuntimeType loc name]
+                                      else if isRealization \<and>
+                                         \<not> realization_alloc_ok env1 name (CoreTy_Datatype name [])
+                                      then Inl [TyErr_IncompatibleAllocLevel loc name]
+                                      else if isRealization
+                                      then Inr (apply_realization name
+                                                  (CoreTy_Datatype name []) env1 elabEnv1 m1)
+                                      else Inr (env1, elabEnv1, m1))))))))"
 
 
 (* ========================================================================== *)
@@ -979,6 +970,11 @@ definition elab_typedef_decl ::
                  \<comment> \<open>A new abstract type.\<close>
                  \<comment> \<open>Abstract types currently cannot have type variables.\<close>
                  (if tyvars \<noteq> [] then Inl [TyErr_TypeArgsNotAllowed loc name]
+                  \<comment> \<open>An abstract type may not share its name with a bound type parameter anywhere
+                     in scope. (This check should always pass on renamer output: abstract types are
+                     dotted, type parameters undotted.)\<close>
+                  else if name |\<in>| scope_bound_tyvars env elabEnv
+                  then Inl [TyErr_TypeVarCapture loc name]
                   else
                     \<comment> \<open>Add the new abstract type to the env and module.\<close>
                     Inr (tyenv_add_abstract_type name (DT_Ghost dt)

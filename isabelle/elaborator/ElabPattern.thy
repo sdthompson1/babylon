@@ -112,7 +112,7 @@ definition resolve_pattern_ctor ::
     (case fmlookup (TE_DataCtors env) ctorName of
        None \<Rightarrow> Inl [TyErr_NameNotFound loc ctorName]
      | Some (dtName, tyvars, payloadTy) \<Rightarrow>
-         if ghost = NotGhost \<and> dtName |\<in>| TE_GhostDatatypes env then
+         if ghost = NotGhost \<and> dtName \<in> ghost_datatypes env then
            Inl [TyErr_GhostVariableInNonGhost loc ctorName]
          else
            Inr (dtName, tyvars, payloadTy, ctorName |\<in>| EE_NullaryDataCtors elabEnv))"

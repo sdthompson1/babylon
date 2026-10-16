@@ -255,35 +255,33 @@ proof (rule apply_subst_cong_on_tyvars_val)
     using assms by simp
 qed
 
-(* Substituting runtime types preserves runtime-ness.
-   The source env (where ty lives) and target env (where the result lives) may differ:
-   the substitution must map every runtime type variable in src that is not also in tgt
-   to a type runtime in tgt, and any runtime type variables left over must still be in tgt.
-   TE_GhostDatatypes must be the same across src and tgt. *)
-(* See also: apply_subst_preserves_well_kinded in CoreKindcheck.thy *)
-lemma apply_subst_preserves_runtime:
-  assumes "is_runtime_type src ty"
-    and "TE_GhostDatatypes tgt = TE_GhostDatatypes src"
-    and "\<And>n. n |\<in>| TE_RuntimeTypeVars src \<Longrightarrow>
+(* Substituting runtime types preserves runtime-ness (stated in terms of is_runtime_type_g).
+   Here, ty is judged with ghost set G and runtime variables R, and the result with G'
+   and R'. The substitution must map every variable of R to a type runtime in (G', R')
+   or leave it in R', and the ghost datatypes G' must be among G. *)
+lemma apply_subst_preserves_runtime_g:
+  assumes "is_runtime_type_g G R ty"
+    and "G' \<subseteq> G"
+    and "\<And>n. n |\<in>| R \<Longrightarrow>
              (case fmlookup subst n of
-                Some ty' \<Rightarrow> is_runtime_type tgt ty'
-              | None \<Rightarrow> n |\<in>| TE_RuntimeTypeVars tgt)"
-  shows "is_runtime_type tgt (apply_subst subst ty)"
+                Some ty' \<Rightarrow> is_runtime_type_g G' R' ty'
+              | None \<Rightarrow> n |\<in>| R')"
+  shows "is_runtime_type_g G' R' (apply_subst subst ty)"
 using assms proof (induction ty)
   case (CoreTy_Datatype name tyArgs)
-  have not_ghost: "name |\<notin>| TE_GhostDatatypes tgt"
-    using CoreTy_Datatype.prems(1,2) by simp
-  have "list_all (is_runtime_type src) tyArgs"
+  have not_ghost: "name \<notin> G'"
+    using CoreTy_Datatype.prems(1,2) by auto
+  have "list_all (is_runtime_type_g G R) tyArgs"
     using CoreTy_Datatype.prems(1) by simp
-  hence "list_all (is_runtime_type tgt) (map (apply_subst subst) tyArgs)"
+  hence "list_all (is_runtime_type_g G' R') (map (apply_subst subst) tyArgs)"
     using CoreTy_Datatype.IH CoreTy_Datatype.prems(2,3)
     by (simp add: list_all_iff)
   thus ?case using not_ghost by simp
 next
   case (CoreTy_Record flds)
-  have "list_all (is_runtime_type src) (map snd flds)"
+  have "list_all (is_runtime_type_g G R) (map snd flds)"
     using CoreTy_Record.prems(1) by simp
-  hence "list_all (is_runtime_type tgt) (map (apply_subst subst \<circ> snd) flds)"
+  hence "list_all (is_runtime_type_g G' R') (map (apply_subst subst \<circ> snd) flds)"
     using CoreTy_Record.IH CoreTy_Record.prems(2,3)
     by (simp add: comp_def list.pred_map list.pred_mono_strong snds.intros)
   moreover have "map (apply_subst subst \<circ> snd) flds =
@@ -292,18 +290,35 @@ next
   ultimately show ?case by simp
 next
   case (CoreTy_Var n)
-  from CoreTy_Var.prems(1) have n_in_src: "n |\<in>| TE_RuntimeTypeVars src" by simp
+  from CoreTy_Var.prems(1) have n_in: "n |\<in>| R" by simp
   show ?case
   proof (cases "fmlookup subst n")
     case None
-    from CoreTy_Var.prems(3)[OF n_in_src] None have "n |\<in>| TE_RuntimeTypeVars tgt" by simp
+    from CoreTy_Var.prems(3)[OF n_in] None have "n |\<in>| R'" by simp
     thus ?thesis using None by simp
   next
     case (Some ty')
-    from CoreTy_Var.prems(3)[OF n_in_src] Some have "is_runtime_type tgt ty'" by simp
+    from CoreTy_Var.prems(3)[OF n_in] Some have "is_runtime_type_g G' R' ty'" by simp
     thus ?thesis using Some by simp
   qed
 qed simp_all
+
+(* Substituting runtime types preserves runtime-ness (stated in terms of is_runtime_type).
+   The source env (where ty lives) and target env (where the result lives) may differ:
+   the substitution must map every runtime type variable in src that is not also in tgt
+   to a type runtime in tgt, and any runtime type variables left over must still be in tgt.
+   The ghost datatypes of tgt must be among those of src. *)
+(* See also: apply_subst_preserves_well_kinded in CoreKindcheck.thy *)
+lemma apply_subst_preserves_runtime:
+  assumes "is_runtime_type src ty"
+    and "ghost_datatypes tgt \<subseteq> ghost_datatypes src"
+    and "\<And>n. n |\<in>| TE_RuntimeTypeVars src \<Longrightarrow>
+             (case fmlookup subst n of
+                Some ty' \<Rightarrow> is_runtime_type tgt ty'
+              | None \<Rightarrow> n |\<in>| TE_RuntimeTypeVars tgt)"
+  shows "is_runtime_type tgt (apply_subst subst ty)"
+  using assms unfolding is_runtime_type_def
+  by (rule apply_subst_preserves_runtime_g)
 
 (* Substituting complete types into a complete type gives a complete type.
    No env is involved, since is_complete_type is purely syntactic. *)
@@ -397,19 +412,22 @@ qed simp_all
    substitution mapping each type parameter to a runtime type in env, the result is
    runtime-valid in env. The abstract runtime tyvars (TE_AbstractTypes env |\<inter>|
    TE_RuntimeTypeVars env) remain in scope after substitution because they are runtime
-   tyvars of env. *)
+   tyvars of env. The type parameters must not shadow abstract types, so that
+   the source env has the same ghost datatypes as env. *)
 lemma apply_subst_specializes_runtime:
   assumes src_rt: "is_runtime_type (env \<lparr> TE_TypeVars := TE_AbstractTypes env |\<union>| fset_of_list tyvars,
                                            TE_RuntimeTypeVars := (TE_AbstractTypes env |\<inter>| TE_RuntimeTypeVars env)
                                                                   |\<union>| fset_of_list tyvars \<rparr>) ty"
     and tys_rt: "list_all (is_runtime_type env) tys"
     and len_eq: "length tyvars = length tys"
+    and fresh: "fset_of_list tyvars |\<inter>| TE_AbstractTypes env = {||}"
   shows "is_runtime_type env (apply_subst (fmap_of_list (zip tyvars tys)) ty)"
 proof (rule apply_subst_preserves_runtime[OF src_rt])
-  show "TE_GhostDatatypes env =
-          TE_GhostDatatypes (env \<lparr> TE_TypeVars := TE_AbstractTypes env |\<union>| fset_of_list tyvars,
-                                    TE_RuntimeTypeVars := (TE_AbstractTypes env |\<inter>| TE_RuntimeTypeVars env)
-                                                           |\<union>| fset_of_list tyvars \<rparr>)" by simp
+  show "ghost_datatypes env \<subseteq>
+          ghost_datatypes (env \<lparr> TE_TypeVars := TE_AbstractTypes env |\<union>| fset_of_list tyvars,
+                                 TE_RuntimeTypeVars := (TE_AbstractTypes env |\<inter>| TE_RuntimeTypeVars env)
+                                                        |\<union>| fset_of_list tyvars \<rparr>)"
+    unfolding ghost_datatypes_scope_eq[OF fresh] by (rule subset_refl)
 next
   fix n assume "n |\<in>| TE_RuntimeTypeVars (env \<lparr> TE_TypeVars := TE_AbstractTypes env |\<union>| fset_of_list tyvars,
                   TE_RuntimeTypeVars := (TE_AbstractTypes env |\<inter>| TE_RuntimeTypeVars env)
@@ -774,9 +792,16 @@ proof
     then obtain ty1 where "ty1 \<in> fmran' s1" and "ty = apply_subst s2 ty1" by auto
     from \<open>ty1 \<in> fmran' s1\<close> assms(1) have "is_runtime_type env ty1" by blast
     thus ?thesis
-      using \<open>ty \<in> fmran' s2 \<or> (\<exists>ty1\<in>fmran' s1. ty = apply_subst s2 ty1)\<close>
-        apply_subst_preserves_runtime assms(1,2)
-      by (metis fmran'I option.case_eq_if option.collapse)
+      unfolding \<open>ty = apply_subst s2 ty1\<close>
+    proof (rule apply_subst_preserves_runtime)
+      show "ghost_datatypes env \<subseteq> ghost_datatypes env" by (rule subset_refl)
+    next
+      fix n assume "n |\<in>| TE_RuntimeTypeVars env"
+      thus "case fmlookup s2 n of
+              Some ty' \<Rightarrow> is_runtime_type env ty'
+            | None \<Rightarrow> n |\<in>| TE_RuntimeTypeVars env"
+        using assms(2) by (auto split: option.splits intro: fmran'I)
+    qed
   qed
 qed
 

@@ -445,7 +445,7 @@ function core_term_type :: "CoreTyEnv \<Rightarrow> GhostOrNot \<Rightarrow> Cor
         else if \<not> list_all (is_well_kinded env) tyArgs then None
         else if \<not> list_all is_complete_type tyArgs then None
         else if ghost = NotGhost \<and> (\<not> list_all (is_runtime_type env) tyArgs
-               \<or> dtName |\<in>| TE_GhostDatatypes env) then None
+               \<or> dtName \<in> ghost_datatypes env) then None
         else let tySubst = fmap_of_list (zip tyvars tyArgs)
              in case core_term_type env ghost payload of
                   None \<Rightarrow> None
@@ -839,7 +839,7 @@ lemma core_term_type_cong_env:
     and "TE_Datatypes env1 = TE_Datatypes env2"
     and "TE_DataCtors env1 = TE_DataCtors env2"
     and "TE_DataCtorsByType env1 = TE_DataCtorsByType env2"
-    and "TE_GhostDatatypes env1 = TE_GhostDatatypes env2"
+    and "TE_AbstractAllocLevels env1 = TE_AbstractAllocLevels env2"
   shows "core_term_type env1 ghost tm = core_term_type env2 ghost tm"
 proof -
   \<comment> \<open>The read fields of env1 equal those of (env1 with env2's TE_ConstLocals,
@@ -876,7 +876,7 @@ proof -
     have wk_eq: "is_well_kinded env1 ty = is_well_kinded env2 ty"
       using is_well_kinded_cong_env CoreTm_LitArray.prems by metis
     have rt_eq: "is_runtime_type env1 ty = is_runtime_type env2 ty"
-      using is_runtime_type_cong_env CoreTm_LitArray.prems by metis
+      using is_runtime_type_cong_fields CoreTm_LitArray.prems by metis
     have elem_eq: "\<And>tm. tm \<in> set tms \<Longrightarrow>
         core_term_type env1 ghost tm = core_term_type env2 ghost tm"
       using CoreTm_LitArray.IH CoreTm_LitArray.prems by blast
@@ -893,7 +893,7 @@ proof -
     have wk_eq: "\<And>ty. is_well_kinded env1 ty = is_well_kinded env2 ty"
       using is_well_kinded_cong_env CoreTm_FunctionCall.prems by metis
     have rt_eq: "\<And>ty. is_runtime_type env1 ty = is_runtime_type env2 ty"
-      using is_runtime_type_cong_env CoreTm_FunctionCall.prems by metis
+      using is_runtime_type_cong_fields CoreTm_FunctionCall.prems by metis
     have IH: "\<And>tm mode. tm \<in> set args \<Longrightarrow>
       core_term_type env1 mode tm = core_term_type env2 mode tm"
       using CoreTm_FunctionCall.IH CoreTm_FunctionCall.prems by blast
@@ -914,7 +914,16 @@ proof -
     have wk_eq: "\<And>ty. is_well_kinded env1 ty = is_well_kinded env2 ty"
       using is_well_kinded_cong_env CoreTm_VariantCtor.prems by metis
     have rt_eq: "\<And>ty. is_runtime_type env1 ty = is_runtime_type env2 ty"
-      using is_runtime_type_cong_env CoreTm_VariantCtor.prems by metis
+      using is_runtime_type_cong_fields CoreTm_VariantCtor.prems by metis
+    \<comment> \<open>The ghost status of a datatype is its runtime-ness at zero arguments.\<close>
+    have gd_eq: "\<And>dt. (dt \<in> ghost_datatypes env1) = (dt \<in> ghost_datatypes env2)"
+    proof -
+      fix dt
+      have "is_runtime_type env1 (CoreTy_Datatype dt [])
+              = is_runtime_type env2 (CoreTy_Datatype dt [])"
+        by (rule rt_eq)
+      then show "(dt \<in> ghost_datatypes env1) = (dt \<in> ghost_datatypes env2)" by auto
+    qed
     have arg_eq: "core_term_type env1 ghost arg = core_term_type env2 ghost arg"
       using CoreTm_VariantCtor.IH CoreTm_VariantCtor.prems by blast
     have la_wk: "list_all (is_well_kinded env1) tyArgs = list_all (is_well_kinded env2) tyArgs"
@@ -923,7 +932,7 @@ proof -
       by (simp add: list_all_iff rt_eq)
     show ?case
       by (simp only: core_term_type.simps
-                     CoreTm_VariantCtor.prems arg_eq la_wk la_rt)
+                     CoreTm_VariantCtor.prems(8) arg_eq la_wk la_rt gd_eq)
   next
     case (CoreTm_Record flds)
     have IH: "\<And>nm tm. (nm, tm) \<in> set flds \<Longrightarrow>
@@ -1004,7 +1013,7 @@ proof -
   next
     case (CoreTm_Cast targetTy tm)
     have rt_eq: "\<And>ty. is_runtime_type env1 ty = is_runtime_type env2 ty"
-      using is_runtime_type_cong_env CoreTm_Cast.prems by metis
+      using is_runtime_type_cong_fields CoreTm_Cast.prems by metis
     have co_eq: "\<And>a b. cast_ok env1 a b = cast_ok env2 a b"
       using cast_ok_cong_env CoreTm_Cast.prems by metis
     have tm_eq: "core_term_type env1 ghost tm = core_term_type env2 ghost tm"
@@ -1049,7 +1058,7 @@ proof -
     have wk_eq: "is_well_kinded env1 ty = is_well_kinded env2 ty"
       using is_well_kinded_cong_env CoreTm_Default.prems by metis
     have rt_eq: "is_runtime_type env1 ty = is_runtime_type env2 ty"
-      using is_runtime_type_cong_env CoreTm_Default.prems by metis
+      using is_runtime_type_cong_fields CoreTm_Default.prems by metis
     show ?case by (simp add: wk_eq rt_eq)
   qed simp_all
 qed
@@ -1647,8 +1656,12 @@ next
     using wk_mono by (auto simp: list_all_iff)
   have la_rt: "list_all (is_runtime_type env) tyArgs \<Longrightarrow> list_all (is_runtime_type ?env') tyArgs"
     using rt_mono by (auto simp: list_all_iff)
+  \<comment> \<open>More runtime tyvars can only shrink the ghost set (stated as simp leaves it).\<close>
+  have gd_sub: "ghost_datatypes_r env (TE_AbstractTypes env |\<inter>| (TE_RuntimeTypeVars env |\<union>| extraRT))
+                  \<subseteq> ghost_datatypes env"
+    by (rule ghost_datatypes_r_antitone) auto
   show ?case using CoreTm_VariantCtor la_wk la_rt
-    by (auto split: option.splits if_splits)
+    by (auto split: option.splits if_splits dest: subsetD[OF gd_sub])
 next
   case (CoreTm_Record flds)
   let ?env' = "env \<lparr> TE_TypeVars := TE_TypeVars env |\<union>| extraTV,
@@ -1854,7 +1867,9 @@ qed
    env via is_well_kinded_transfer / is_runtime_type_transfer, justified by the
    disjointness of the dropped tyvars from core_term_free_tyvars. extraRT |\<subseteq>|
    extraTV keeps both envs well-shaped (every runtime tyvar is a tyvar) and lets
-   the disjointness premise mention only extraTV. *)
+   the disjointness premise mention only extraTV. The last premise says the
+   dropped runtime tyvars include no ghost abstract type, so that both envs
+   have the same ghost datatypes (ghost_datatypes_extend_eq). *)
 lemma core_term_type_remove_unused_tyvars:
   assumes "core_term_type
              (env \<lparr> TE_TypeVars := TE_TypeVars env |\<union>| extraTV,
@@ -1862,6 +1877,7 @@ lemma core_term_type_remove_unused_tyvars:
              ghost tm = Some ty"
       and "extraRT |\<subseteq>| extraTV"
       and "core_term_free_tyvars tm \<inter> fset extraTV = {}"
+      and "TE_AbstractTypes env |\<inter>| extraRT |\<subseteq>| TE_RuntimeTypeVars env"
     shows "core_term_type env ghost tm = Some ty"
 using assms proof (induction tm arbitrary: env ghost ty)
   case (CoreTm_Var name)
@@ -1897,7 +1913,9 @@ next
     have "type_tyvars elemTy \<subseteq> fset (TE_RuntimeTypeVars env)"
       using is_runtime_type_tyvars_subset[OF rt'] elemTy_disj CoreTm_LitArray.prems(2)
       by (auto simp: less_eq_fset.rep_eq)
-    thus "is_runtime_type env elemTy" using is_runtime_type_transfer[OF rt'] by simp
+    thus "is_runtime_type env elemTy"
+      using is_runtime_type_transfer[OF rt' _ ghost_datatypes_extend_subset[OF CoreTm_LitArray.prems(4)]]
+      by blast
   qed
   have all_tms: "list_all (\<lambda>tm. core_term_type env ghost tm = Some elemTy) tms"
     unfolding list_all_iff
@@ -1908,7 +1926,8 @@ next
     have x_disj: "core_term_free_tyvars x \<inter> fset extraTV = {}"
       using x_in CoreTm_LitArray.prems(3) by (force simp: list_all_iff)
     show "core_term_type env ghost x = Some elemTy"
-      by (rule CoreTm_LitArray.IH[OF x_in x_ty' CoreTm_LitArray.prems(2) x_disj])
+      by (rule CoreTm_LitArray.IH[OF x_in x_ty' CoreTm_LitArray.prems(2) x_disj
+                                     CoreTm_LitArray.prems(4)])
   qed
   show ?case using elemTy_wk elemTy_rt all_tms len_range ty_eq by simp
 next
@@ -1924,7 +1943,7 @@ next
   have tm_disj: "core_term_free_tyvars tm \<inter> fset extraTV = {}"
     using CoreTm_Cast.prems(3) by auto
   have operand_ty: "core_term_type env ghost tm = Some operandTy"
-    by (rule CoreTm_Cast.IH[OF operand_ty' CoreTm_Cast.prems(2) tm_disj])
+    by (rule CoreTm_Cast.IH[OF operand_ty' CoreTm_Cast.prems(2) tm_disj CoreTm_Cast.prems(4)])
   have targetTy_disj: "type_tyvars targetTy \<inter> fset extraTV = {}"
     using CoreTm_Cast.prems(3) by auto
   have targetTy_tv: "type_tyvars targetTy \<subseteq> fset (TE_TypeVars env)"
@@ -1941,7 +1960,9 @@ next
     have "type_tyvars targetTy \<subseteq> fset (TE_RuntimeTypeVars env)"
       using is_runtime_type_tyvars_subset[OF rt'] disj CoreTm_Cast.prems(2)
       by (auto simp: less_eq_fset.rep_eq)
-    thus "is_runtime_type env targetTy" using is_runtime_type_transfer[OF rt'] by simp
+    thus "is_runtime_type env targetTy"
+      using is_runtime_type_transfer[OF rt' _ ghost_datatypes_extend_subset[OF CoreTm_Cast.prems(4)]]
+      by blast
   qed
   show ?case using operand_ty co targetTy_rt ty_eq by simp
 next
@@ -1962,7 +1983,7 @@ next
   have body_disj: "core_term_free_tyvars body \<inter> fset extraTV = {}"
     using CoreTm_Let.prems(3) by auto
   have rhs_ty: "core_term_type env ghost rhs = Some rhsTy"
-    by (rule CoreTm_Let.IH(1)[OF rhs_ty' CoreTm_Let.prems(2) rhs_disj])
+    by (rule CoreTm_Let.IH(1)[OF rhs_ty' CoreTm_Let.prems(2) rhs_disj CoreTm_Let.prems(4)])
   let ?body_env = "env \<lparr> TE_LocalVars := fmupd var rhsTy (TE_LocalVars env),
                          TE_GhostLocals := (if ghost = Ghost then finsert var (TE_GhostLocals env)
                                              else fminus (TE_GhostLocals env) {|var|}),
@@ -1976,6 +1997,7 @@ next
     by simp
   have body_ty: "core_term_type ?body_env ghost body = Some ty"
     by (rule CoreTm_Let.IH(2)[OF body_ty'[unfolded body_env_shape] CoreTm_Let.prems(2) body_disj])
+       (simp add: CoreTm_Let.prems(4))
   show ?case using rhs_ty body_ty
     by (metis core_term_type.simps(8) option.simps(5))
 next
@@ -2016,6 +2038,7 @@ next
       using CoreTm_Quantifier.prems(3) by auto
     have body_ty: "core_term_type ?body_env Ghost body = Some bodyTy"
       by (rule CoreTm_Quantifier.IH[OF body_ty'[unfolded body_env_shape] CoreTm_Quantifier.prems(2) body_disj])
+         (simp add: CoreTm_Quantifier.prems(4))
     from Ghost wk body_ty body_env_shape body_bool ty_eq show ?thesis
       by (metis CoreType.case(2) core_term_type.simps(10) option.simps(5))
   qed
@@ -2044,7 +2067,9 @@ next
     have a_tv: "type_tyvars a \<subseteq> fset (TE_RuntimeTypeVars env)"
       using is_runtime_type_tyvars_subset[OF a_rt'] a_disj CoreTm_FunctionCall.prems(2)
       by (auto simp: less_eq_fset.rep_eq)
-    have "is_runtime_type env a" using is_runtime_type_transfer[OF a_rt' a_tv] by simp
+    have "is_runtime_type env a"
+      by (rule is_runtime_type_transfer[OF a_rt' a_tv
+                 ghost_datatypes_extend_subset[OF CoreTm_FunctionCall.prems(4)]])
     moreover have "list_all (is_runtime_type env) as" using Cons by simp
     ultimately show ?case by simp
   qed simp
@@ -2056,7 +2081,8 @@ next
     have tm_disj: "core_term_free_tyvars tm \<inter> fset extraTV = {}"
       using mem CoreTm_FunctionCall.prems(3) by (force simp: list_all_iff)
     show "core_term_type env mode tm = Some ty"
-      by (rule CoreTm_FunctionCall.IH[OF mem tm_ty' CoreTm_FunctionCall.prems(2) tm_disj])
+      by (rule CoreTm_FunctionCall.IH[OF mem tm_ty' CoreTm_FunctionCall.prems(2) tm_disj
+                                         CoreTm_FunctionCall.prems(4)])
   qed
   have la2_mono: "\<And>ys. list_all2 (\<lambda>tm (expectedTy, mode).
                              core_term_type ?env' mode tm = Some expectedTy) args ys \<Longrightarrow>
@@ -2090,7 +2116,9 @@ next
     have a_tv: "type_tyvars a \<subseteq> fset (TE_RuntimeTypeVars env)"
       using is_runtime_type_tyvars_subset[OF a_rt'] a_disj CoreTm_VariantCtor.prems(2)
       by (auto simp: less_eq_fset.rep_eq)
-    have "is_runtime_type env a" using is_runtime_type_transfer[OF a_rt' a_tv] by simp
+    have "is_runtime_type env a"
+      by (rule is_runtime_type_transfer[OF a_rt' a_tv
+                 ghost_datatypes_extend_subset[OF CoreTm_VariantCtor.prems(4)]])
     moreover have "list_all (is_runtime_type env) as" using Cons by simp
     ultimately show ?case by simp
   qed simp
@@ -2098,9 +2126,11 @@ next
     using CoreTm_VariantCtor.prems(3) by auto
   have arg_IH: "\<And>ty. core_term_type ?env' ghost arg = Some ty \<Longrightarrow>
                       core_term_type env ghost arg = Some ty"
-    using CoreTm_VariantCtor.IH CoreTm_VariantCtor.prems(2) arg_disj by blast
+    using CoreTm_VariantCtor.IH CoreTm_VariantCtor.prems(2,4) arg_disj by blast
+  \<comment> \<open>The ghost set is the same in both envs (stated as simp leaves it).\<close>
+  note gd_eq = ghost_datatypes_r_extend_eq[OF CoreTm_VariantCtor.prems(4)]
   show ?case using CoreTm_VariantCtor.prems(1) wk_down'[OF tyArgs_disj] rt_down'[OF tyArgs_disj] arg_IH
-    by (auto split: option.splits if_splits)
+    by (auto simp: gd_eq split: option.splits if_splits)
 next
   case (CoreTm_Record flds)
   let ?env' = "env \<lparr> TE_TypeVars := TE_TypeVars env |\<union>| extraTV,
@@ -2118,7 +2148,8 @@ next
       using mem CoreTm_Record.prems(3) by (force simp: image_iff)
     have tm_in: "tm \<in> Basic_BNFs.snds (nm, tm)" by (simp add: snds.intros)
     show "core_term_type env ghost tm = Some ty'"
-      by (rule CoreTm_Record.IH[OF mem tm_in tm_ty' CoreTm_Record.prems(2) tm_disj])
+      by (rule CoreTm_Record.IH[OF mem tm_in tm_ty' CoreTm_Record.prems(2) tm_disj
+                                   CoreTm_Record.prems(4)])
   qed
   from those_eq have la2: "list_all2 (\<lambda>x y. x = Some y)
                                       (map (\<lambda>(name, tm). core_term_type ?env' ghost tm) flds) tys"
@@ -2159,7 +2190,8 @@ next
   have tm_disj: "core_term_free_tyvars tm \<inter> fset extraTV = {}"
     using CoreTm_RecordProj.prems(3) by simp
   have tm_ty: "core_term_type env ghost tm = Some (CoreTy_Record fieldTypes)"
-    by (rule CoreTm_RecordProj.IH[OF tm_ty' CoreTm_RecordProj.prems(2) tm_disj])
+    by (rule CoreTm_RecordProj.IH[OF tm_ty' CoreTm_RecordProj.prems(2) tm_disj
+                                       CoreTm_RecordProj.prems(4)])
   show ?case using tm_ty ty_eq by simp
 next
   case (CoreTm_VariantProj tm ctorName)
@@ -2171,7 +2203,8 @@ next
   have tm_disj: "core_term_free_tyvars tm \<inter> fset extraTV = {}"
     using CoreTm_VariantProj.prems(3) by simp
   have tm_ty: "core_term_type env ghost tm = Some tmTy"
-    by (rule CoreTm_VariantProj.IH[OF tm_ty' CoreTm_VariantProj.prems(2) tm_disj])
+    by (rule CoreTm_VariantProj.IH[OF tm_ty' CoreTm_VariantProj.prems(2) tm_disj
+                                        CoreTm_VariantProj.prems(4)])
   show ?case using CoreTm_VariantProj.prems(1) tm_ty tm_ty'
     by (auto split: option.splits CoreType.splits)
 next
@@ -2188,7 +2221,8 @@ next
   have tm_disj: "core_term_free_tyvars tm \<inter> fset extraTV = {}"
     using CoreTm_ArrayProj.prems(3) by auto
   have tm_ty: "core_term_type env ghost tm = Some (CoreTy_Array elemTy dims)"
-    by (rule CoreTm_ArrayProj.IH(1)[OF tm_ty' CoreTm_ArrayProj.prems(2) tm_disj])
+    by (rule CoreTm_ArrayProj.IH(1)[OF tm_ty' CoreTm_ArrayProj.prems(2) tm_disj
+                                       CoreTm_ArrayProj.prems(4)])
   have idxs_ty: "list_all (\<lambda>tm. core_term_type env ghost tm =
                                   Some (CoreTy_FiniteInt Unsigned IntBits_64)) idxTms"
     unfolding list_all_iff
@@ -2199,7 +2233,8 @@ next
     have x_disj: "core_term_free_tyvars x \<inter> fset extraTV = {}"
       using x_in CoreTm_ArrayProj.prems(3) by (force simp: list_all_iff)
     show "core_term_type env ghost x = Some (CoreTy_FiniteInt Unsigned IntBits_64)"
-      by (rule CoreTm_ArrayProj.IH(2)[OF x_in x_ty' CoreTm_ArrayProj.prems(2) x_disj])
+      by (rule CoreTm_ArrayProj.IH(2)[OF x_in x_ty' CoreTm_ArrayProj.prems(2) x_disj
+                                         CoreTm_ArrayProj.prems(4)])
   qed
   show ?case using tm_ty len_eq idxs_ty ty_eq by simp
 next
@@ -2212,7 +2247,8 @@ next
   have scrut_disj: "core_term_free_tyvars scrut \<inter> fset extraTV = {}"
     using CoreTm_Match.prems(3) by auto
   have scrut_ty: "core_term_type env ghost scrut = Some scrutTy"
-    by (rule CoreTm_Match.IH(1)[OF scrut_ty' CoreTm_Match.prems(2) scrut_disj])
+    by (rule CoreTm_Match.IH(1)[OF scrut_ty' CoreTm_Match.prems(2) scrut_disj
+                                   CoreTm_Match.prems(4)])
   from CoreTm_Match.prems(1) scrut_ty' have arms_nonempty: "arms \<noteq> []"
     by (auto split: option.splits if_splits)
   let ?pats = "map fst arms"
@@ -2254,7 +2290,8 @@ next
     from mem obtain p where pair_in: "(p, body) \<in> set arms" by auto
     have body_in: "body \<in> Basic_BNFs.snds (p, body)" by (simp add: snds.intros)
     show "core_term_type env ghost body = Some ty'"
-      by (rule CoreTm_Match.IH(2)[OF pair_in body_in body_ty' CoreTm_Match.prems(2) arms_disj[OF mem]])
+      by (rule CoreTm_Match.IH(2)[OF pair_in body_in body_ty' CoreTm_Match.prems(2) arms_disj[OF mem]
+                                     CoreTm_Match.prems(4)])
   qed
   have first_ty: "core_term_type env ghost (snd (hd arms)) = Some firstBodyTy"
     using bodies_IH[OF hd_in first_ty'] .
@@ -2276,7 +2313,7 @@ next
   have tm_disj: "core_term_free_tyvars tm \<inter> fset extraTV = {}"
     using CoreTm_Sizeof.prems(3) by simp
   have tm_ty: "core_term_type env ghost tm = Some (CoreTy_Array elemTy dims)"
-    by (rule CoreTm_Sizeof.IH[OF tm_ty' CoreTm_Sizeof.prems(2) tm_disj])
+    by (rule CoreTm_Sizeof.IH[OF tm_ty' CoreTm_Sizeof.prems(2) tm_disj CoreTm_Sizeof.prems(4)])
   show ?case using CoreTm_Sizeof.prems(1) tm_ty tm_ty'
     by (auto split: option.splits CoreType.splits if_splits)
 next
@@ -2295,7 +2332,8 @@ next
       cp: "is_complete_type annTy" and ty_eq: "ty = CoreTy_Bool"
       by (auto split: option.splits if_splits)
     have "core_term_type env Ghost tm = Some annTy"
-      by (rule CoreTm_Allocated.IH[OF tm_ty'[unfolded Ghost] CoreTm_Allocated.prems(2) tm_disj])
+      by (rule CoreTm_Allocated.IH[OF tm_ty'[unfolded Ghost] CoreTm_Allocated.prems(2) tm_disj
+                                      CoreTm_Allocated.prems(4)])
     with Ghost cp ty_eq show ?thesis by simp
   qed
 next
@@ -2312,7 +2350,7 @@ next
   have op_disj: "core_term_free_tyvars operand \<inter> fset extraTV = {}"
     using CoreTm_Unop.prems(3) by simp
   have op_ty: "core_term_type env ghost operand = Some operandTy"
-    by (rule CoreTm_Unop.IH[OF op_ty' CoreTm_Unop.prems(2) op_disj])
+    by (rule CoreTm_Unop.IH[OF op_ty' CoreTm_Unop.prems(2) op_disj CoreTm_Unop.prems(4)])
   show ?case using CoreTm_Unop.prems(1) op_ty op_ty'
     by (auto split: option.splits CoreUnop.splits if_splits)
 next
@@ -2328,9 +2366,9 @@ next
   have rhs_disj: "core_term_free_tyvars rhs \<inter> fset extraTV = {}"
     using CoreTm_Binop.prems(3) by auto
   have lhs_ty: "core_term_type env ghost lhs = Some lhsTy"
-    by (rule CoreTm_Binop.IH(1)[OF lhs_ty' CoreTm_Binop.prems(2) lhs_disj])
+    by (rule CoreTm_Binop.IH(1)[OF lhs_ty' CoreTm_Binop.prems(2) lhs_disj CoreTm_Binop.prems(4)])
   have rhs_ty: "core_term_type env ghost rhs = Some rhsTy"
-    by (rule CoreTm_Binop.IH(2)[OF rhs_ty' CoreTm_Binop.prems(2) rhs_disj])
+    by (rule CoreTm_Binop.IH(2)[OF rhs_ty' CoreTm_Binop.prems(2) rhs_disj CoreTm_Binop.prems(4)])
   show ?case using CoreTm_Binop.prems(1) lhs_ty lhs_ty' rhs_ty rhs_ty'
     by (auto split: option.splits if_splits)
 next
@@ -2354,7 +2392,9 @@ next
     have "type_tyvars tyD \<subseteq> fset (TE_RuntimeTypeVars env)"
       using is_runtime_type_tyvars_subset[OF r'] tyD_disj CoreTm_Default.prems(2)
       by (auto simp: less_eq_fset.rep_eq)
-    thus "is_runtime_type env tyD" using is_runtime_type_transfer[OF r'] by simp
+    thus "is_runtime_type env tyD"
+      using is_runtime_type_transfer[OF r' _ ghost_datatypes_extend_subset[OF CoreTm_Default.prems(4)]]
+      by blast
   qed
   show ?case using wk rt ty_eq by simp
 qed
@@ -2451,8 +2491,12 @@ next
         using is_runtime_type_tyvars_subset[OF rt_cleared] by simp
       hence tyvars_sub: "type_tyvars ty \<subseteq> fset (TE_RuntimeTypeVars env)"
         by (auto simp: inf_fset.rep_eq)
+      \<comment> \<open>The cleared env has the same runtime abstract types, so the same ghost set.\<close>
+      have gd: "ghost_datatypes env \<subseteq> ghost_datatypes (env \<lparr> TE_TypeVars := TE_AbstractTypes env,
+              TE_RuntimeTypeVars := TE_AbstractTypes env |\<inter>| TE_RuntimeTypeVars env \<rparr>)"
+        by (rule ghost_datatypes_rtv_upd_supset) auto
       show ?thesis
-        using is_runtime_type_transfer[OF rt_cleared tyvars_sub] by simp
+        using is_runtime_type_transfer[OF rt_cleared tyvars_sub gd] .
     qed
   qed
   ultimately show ?case by blast
@@ -2524,7 +2568,7 @@ next
     by simp_all
   have "is_well_kinded env ty"
     using body_IH is_well_kinded_cong_env[OF env'_fields] by simp
-  have gds_eq: "TE_GhostDatatypes ?env' = TE_GhostDatatypes env" by simp
+  have gds_eq: "ghost_datatypes ?env' = ghost_datatypes env" by simp
   have rtv_eq: "TE_RuntimeTypeVars ?env' = TE_RuntimeTypeVars env" by simp
   moreover have "ghost = NotGhost \<longrightarrow> is_runtime_type env ty"
     using body_IH is_runtime_type_cong_env[OF gds_eq rtv_eq] by blast
@@ -2573,8 +2617,12 @@ next
                                    (FI_ReturnType funInfo)"
       using fn_lookup not_ghost_fn tyenv_fun_ghost_constraint_def Let_def
       by (meson GhostOrNot.exhaust)
+    have fresh: "fset_of_list (FI_TyArgs funInfo) |\<inter>| TE_AbstractTypes env = {||}"
+      using CoreTm_FunctionCall.prems(2) fn_lookup
+      unfolding tyenv_well_formed_def tyenv_fun_tyvars_fresh_def by blast
     show "is_runtime_type env ty"
-      using ty_eq apply_subst_specializes_runtime[OF ret_rt tyargs_rt len_tyargs[symmetric]] by simp
+      using ty_eq apply_subst_specializes_runtime[OF ret_rt tyargs_rt len_tyargs[symmetric] fresh]
+      by simp
   qed
   ultimately show ?case by blast
 next
@@ -2599,7 +2647,7 @@ next
     assume ng: "ghost = NotGhost"
     from CoreTm_VariantCtor.prems(1) ng ctor_lookup len_eq have
       tyargs_rt: "list_all (is_runtime_type env) tyArgs" and
-      dt_nonghost: "dtName |\<notin>| TE_GhostDatatypes env"
+      dt_nonghost: "dtName \<notin> ghost_datatypes env"
       by (auto simp: Let_def split: option.splits prod.splits if_splits)
     show "is_runtime_type env ty" using ty_eq tyargs_rt dt_nonghost by simp
   qed
@@ -2715,17 +2763,20 @@ next
   proof
     assume ng: "ghost = NotGhost"
     from tm_IH ng have scrut_rt: "is_runtime_type env (CoreTy_Datatype dtName tyArgs)" by blast
-    hence dt_nonghost: "dtName |\<notin>| TE_GhostDatatypes env" by simp
+    hence dt_nonghost: "dtName \<notin> ghost_datatypes env" by simp
     from scrut_rt have tyargs_rt: "list_all (is_runtime_type env) tyArgs" by simp
-    have "tyenv_nonghost_payloads_runtime env"
-      using CoreTm_VariantProj.prems(2) tyenv_well_formed_def by blast
-    hence payload_rt: "is_runtime_type (env \<lparr> TE_TypeVars := TE_AbstractTypes env |\<union>| fset_of_list tyvars,
-                                               TE_RuntimeTypeVars := (TE_AbstractTypes env |\<inter>| TE_RuntimeTypeVars env)
-                                                                      |\<union>| fset_of_list tyvars \<rparr>)
-                                       payloadTy"
-      using ctor_lookup dt_eq dt_nonghost tyenv_nonghost_payloads_runtime_def by blast
+    have payload_rt: "is_runtime_type (env \<lparr> TE_TypeVars := TE_AbstractTypes env |\<union>| fset_of_list tyvars,
+                                             TE_RuntimeTypeVars := (TE_AbstractTypes env |\<inter>| TE_RuntimeTypeVars env)
+                                                                    |\<union>| fset_of_list tyvars \<rparr>)
+                                     payloadTy"
+      using tyenv_nonghost_payloads_runtime[OF CoreTm_VariantProj.prems(2) _ dt_nonghost]
+            ctor_lookup dt_eq by blast
+    have fresh: "fset_of_list tyvars |\<inter>| TE_AbstractTypes env = {||}"
+      using CoreTm_VariantProj.prems(2) ctor_lookup dt_eq
+      unfolding tyenv_well_formed_def tyenv_ctor_tyvars_fresh_def by blast
     show "is_runtime_type env ty"
-      using ty_eq apply_subst_specializes_runtime[OF payload_rt tyargs_rt len_eq[symmetric]] by simp
+      using ty_eq apply_subst_specializes_runtime[OF payload_rt tyargs_rt len_eq[symmetric] fresh]
+      by simp
   qed
   ultimately show ?case by blast
 next
@@ -2776,7 +2827,7 @@ next
                    (map snd (zip (tuple_field_names ?n) (replicate ?n u64_type)))"
       using snd_vals by (auto simp: list_all_iff u64_type_def)
     ultimately show ?thesis using "2_2"
-      using distinct_tuple_field_names fst_zip is_runtime_type.simps(6) is_well_kinded.simps(6)
+      using distinct_tuple_field_names fst_zip is_runtime_type_simps(6) is_well_kinded.simps(6)
         sizeof_type.simps(3) by metis
   qed
   thus ?case using ty_eq by auto

@@ -47,13 +47,19 @@ qed
    they are disjoint from the interval, which core_term_type_remove_unused_tyvars
    then lets us drop. The typing mode is independent of the mode the interval
    was added in: a call's ghost actual is typed in Ghost mode inside an
-   interval added in the ambient mode. *)
+   interval added in the ambient mode. Well-formedness is needed only to
+   place the abstract types among the type variables, and so outside the
+   interval: then the two envs have the same runtime abstract types and the
+   same ghost datatypes. *)
 lemma inferred_term_typed_in_env:
   assumes typed: "core_term_type (extend_env_with_tyvars env ghost lo hi) mode tm = Some ty"
     and bound: "\<forall>n. n |\<in>| TE_TypeVars env \<longrightarrow> tyvar_fresh_ok n lo"
     and inf: "term_inferred env tm"
+    and wf: "tyenv_well_formed env"
   shows "core_term_type env mode tm = Some ty"
 proof -
+  have abs: "TE_AbstractTypes env |\<inter>| mv_fset lo hi = {||}"
+    using abstract_types_notin_mv_fset[OF bound wf] .
   have free_sub: "core_term_free_tyvars tm \<subseteq> fset (TE_TypeVars env)"
     using inf unfolding term_inferred_def by (auto simp: list_all_iff)
   have disj: "core_term_free_tyvars tm \<inter> fset (mv_fset lo hi) = {}"
@@ -73,7 +79,7 @@ proof -
                   |\<union>| (if ghost = NotGhost then mv_fset lo hi else {||}) \<rparr>"
     unfolding extend_env_with_tyvars_def by simp
   show ?thesis
-    using core_term_type_remove_unused_tyvars[OF typed[unfolded envE_shape] _ ] disj
+    using core_term_type_remove_unused_tyvars[OF typed[unfolded envE_shape] _ ] disj abs
     by (cases "ghost = NotGhost") auto
 qed
 
@@ -87,6 +93,7 @@ lemma inferred_type_well_kinded_runtime:
     and rt: "ghost = NotGhost \<longrightarrow> is_runtime_type (extend_env_with_tyvars env ghost lo hi) ty"
     and bound: "\<forall>n. n |\<in>| TE_TypeVars env \<longrightarrow> tyvar_fresh_ok n lo"
     and inf: "type_inferred env ty"
+    and wf: "tyenv_well_formed env"
   shows "is_well_kinded env ty \<and> (ghost = NotGhost \<longrightarrow> is_runtime_type env ty)"
 proof -
   let ?envE = "extend_env_with_tyvars env ghost lo hi"
@@ -115,10 +122,10 @@ proof -
       have "n \<in> fset (TE_RuntimeTypeVars env) \<union> mv_name ` {lo..<hi}" by auto
       with n_not_fresh show "n \<in> fset (TE_RuntimeTypeVars env)" by auto
     qed
-    have gd_eq: "TE_GhostDatatypes env = TE_GhostDatatypes ?envE"
-      unfolding extend_env_with_tyvars_def by simp
+    have gd: "ghost_datatypes env \<subseteq> ghost_datatypes ?envE"
+      by (rule equalityD2[OF ghost_datatypes_extend_env_with_tyvars_fresh[OF bound wf]])
     show "is_runtime_type env ty"
-      using is_runtime_type_transfer[OF rtE tvs_in_rt gd_eq] .
+      using is_runtime_type_transfer[OF rtE tvs_in_rt gd] .
   qed
   from wk' rt' show ?thesis by blast
 qed
@@ -129,6 +136,7 @@ lemma inferred_types_well_kinded_runtime:
     and rt: "ghost = NotGhost \<longrightarrow> list_all (is_runtime_type (extend_env_with_tyvars env ghost lo hi)) tys"
     and bound: "\<forall>n. n |\<in>| TE_TypeVars env \<longrightarrow> tyvar_fresh_ok n lo"
     and inf: "list_all (type_inferred env) tys"
+    and wf: "tyenv_well_formed env"
   shows "list_all (is_well_kinded env) tys"
     and "ghost = NotGhost \<longrightarrow> list_all (is_runtime_type env) tys"
 proof -
@@ -141,7 +149,7 @@ proof -
       using rt t_in by (simp add: list_all_iff)
     have infT: "type_inferred env t" using inf t_in by (simp add: list_all_iff)
     show "is_well_kinded env t \<and> (ghost = NotGhost \<longrightarrow> is_runtime_type env t)"
-      using inferred_type_well_kinded_runtime[OF wkE rtE bound infT] .
+      using inferred_type_well_kinded_runtime[OF wkE rtE bound infT wf] .
   qed
   show "list_all (is_well_kinded env) tys" using each by (auto simp: list_all_iff)
   show "ghost = NotGhost \<longrightarrow> list_all (is_runtime_type env) tys" using each by (auto simp: list_all_iff)
@@ -257,7 +265,7 @@ proof -
   \<comment> \<open>The coerced term passes the inferred check, so the interval can be dropped.\<close>
   show ?thesis
     unfolding tm'_eq tgt_id
-    using inferred_term_typed_in_env[OF cast_typed bound inf[unfolded tm'_eq tgt_id]] .
+    using inferred_term_typed_in_env[OF cast_typed bound inf[unfolded tm'_eq tgt_id] wf] .
 qed
 
 (* is_writable_lvalue is unchanged by the fresh-tyvar extension (it ignores type
@@ -330,7 +338,7 @@ proof -
   \<comment> \<open>The ty-args are well-kinded / runtime in env (their tyvars are in scope).\<close>
   have tyArgs_wk: "list_all (is_well_kinded env) tyArgs"
     and tyArgs_rt: "ghost = NotGhost \<longrightarrow> list_all (is_runtime_type env) tyArgs"
-    using inferred_types_well_kinded_runtime[OF wk rt bound ty_inf] by blast+
+    using inferred_types_well_kinded_runtime[OF wk rt bound ty_inf wf] by blast+
 
   \<comment> \<open>Each arg term typechecks in env, in its own mode, to its expected type
       (the term bridge).\<close>
@@ -347,7 +355,7 @@ proof -
     have infI: "term_inferred env (argTms ! i)"
       using tm_inf i_lt by (simp add: list_all_length)
     show "core_term_type env (?modes ! i) (argTms ! i) = Some (?exps ! i)"
-      using inferred_term_typed_in_env[OF tm_typed bound infI] .
+      using inferred_term_typed_in_env[OF tm_typed bound infI wf] .
   qed
 
   \<comment> \<open>Reassemble core_impure_call_type's per-argument check in env.\<close>
@@ -904,7 +912,13 @@ proof -
       have "is_runtime_type (?env1 \<lparr> TE_TypeVars := TE_AbstractTypes ?env1 |\<union>| fset_of_list (FI_TyArgs funInfo),
                                      TE_RuntimeTypeVars := (TE_AbstractTypes ?env1 |\<inter>| TE_RuntimeTypeVars ?env1)
                                                             |\<union>| fset_of_list (FI_TyArgs funInfo) \<rparr>) t" by blast
-      then have "is_runtime_type ?env1 (apply_subst (fmap_of_list (zip (FI_TyArgs funInfo) newTyArgs)) t)"
+      moreover have "fset_of_list (FI_TyArgs funInfo) |\<inter>| TE_AbstractTypes ?env1 = {||}"
+      proof -
+        have "fset_of_list (FI_TyArgs funInfo) |\<inter>| TE_AbstractTypes env = {||}"
+          using wf fn_lookup unfolding tyenv_well_formed_def tyenv_fun_tyvars_fresh_def by blast
+        then show ?thesis by (simp add: extend_env_with_tyvars_def)
+      qed
+      ultimately have "is_runtime_type ?env1 (apply_subst (fmap_of_list (zip (FI_TyArgs funInfo) newTyArgs)) t)"
         using apply_subst_specializes_runtime[OF _ tyargs_rt len_tyargs[symmetric]] by simp
       moreover have "expArgTypes ! i = apply_subst (fmap_of_list (zip (FI_TyArgs funInfo) newTyArgs)) t"
         using expArg_eq i_fi p_eq by simp
@@ -1312,7 +1326,7 @@ proof -
   have typed: "core_term_type (extend_env_with_tyvars env g next_mv next_mv') g coreTm = Some rhsTy"
     using elab_term_correct(1)[OF elab wf ee_wf] bound by simp
   show t: "core_term_type env g coreTm = Some rhsTy"
-    using inferred_term_typed_in_env[OF typed bound inf] .
+    using inferred_term_typed_in_env[OF typed bound inf wf] .
   show "is_well_kinded env rhsTy \<and> (g = NotGhost \<longrightarrow> is_runtime_type env rhsTy)"
     using core_term_type_well_kinded_and_runtime[OF t wf] .
 qed
@@ -1402,7 +1416,7 @@ proof -
       env'_eq: "env' = vardecl_add_local env ghost varName rhsTy"
       by (auto simp: elab_vardecl_pure_def split: sum.splits prod.splits if_splits)
     have init_typed: "core_term_type env ghost coreTm = Some rhsTy"
-      using inferred_term_typed_in_env[OF coreTm_typed_decl bound inf] .
+      using inferred_term_typed_in_env[OF coreTm_typed_decl bound inf wf] .
     have wk: "is_well_kinded env rhsTy"
       using core_term_type_well_kinded[OF init_typed wf] .
     have rt: "ghost = NotGhost \<longrightarrow> is_runtime_type env rhsTy"
@@ -1653,7 +1667,7 @@ proof -
       by (auto simp: elab_vardecl_ref_def vardecl_add_local_def Let_def
                split: sum.splits prod.splits if_splits)
     have init_typed: "core_term_type env ghost coreTm = Some rhsTy"
-      using inferred_term_typed_in_env[OF coreTm_typed_decl bound inf] .
+      using inferred_term_typed_in_env[OF coreTm_typed_decl bound inf wf] .
     have wk: "is_well_kinded env rhsTy"
       using core_term_type_well_kinded[OF init_typed wf] .
     have rt: "ghost = NotGhost \<longrightarrow> is_runtime_type env rhsTy"
@@ -1676,7 +1690,7 @@ proof -
       by (auto simp: elab_vardecl_ref_def vardecl_add_local_def Let_def
                split: sum.splits prod.splits option.splits if_splits)
     have init_typed: "core_term_type env ghost coreTm = Some coreTy"
-      using inferred_term_typed_in_env[OF coreTm_typed_decl bound inf] ty_eq by simp
+      using inferred_term_typed_in_env[OF coreTm_typed_decl bound inf wf] ty_eq by simp
     have wk: "is_well_kinded env coreTy"
       using core_term_type_well_kinded[OF init_typed wf] .
     have rt: "ghost = NotGhost \<longrightarrow> is_runtime_type env coreTy"
@@ -1747,7 +1761,7 @@ proof -
     unfolding coerce by (auto split: if_splits)
   \<comment> \<open>lhs: passes the inferred check, so it types to lhsTy in env.\<close>
   have lhs_init: "core_term_type env ghost lhsTm = Some lhsTy"
-    using inferred_term_typed_in_env[OF lhs_typed bound lhs_inf] .
+    using inferred_term_typed_in_env[OF lhs_typed bound lhs_inf wf] .
   \<comment> \<open>rhs: typed at the extended env from next_mv1, then coerced to lhsTy.\<close>
   have bound1: "\<forall>n. n |\<in>| TE_TypeVars env \<longrightarrow> tyvar_fresh_ok n next_mv1"
     using bound mono_lhs tyvar_fresh_ok_mono by blast
@@ -1832,7 +1846,7 @@ proof -
     unfolding rcr by (auto split: if_splits)
   \<comment> \<open>lhs: passes the inferred check, so it types to lhsTy in env.\<close>
   have lhs_init: "core_term_type env ghost lhsTm = Some lhsTy"
-    using inferred_term_typed_in_env[OF lhs_typed bound lhs_inf] .
+    using inferred_term_typed_in_env[OF lhs_typed bound lhs_inf wf] .
   \<comment> \<open>The call typechecks (extended env from next_mv1), via elab_impure_call_term_correct.\<close>
   have bound1: "\<forall>n. n |\<in>| TE_TypeVars env \<longrightarrow> tyvar_fresh_ok n next_mv1"
     using bound mono_lhs tyvar_fresh_ok_mono by blast
@@ -1914,7 +1928,7 @@ proof -
     by (auto split: if_splits)
   \<comment> \<open>lhs: passes the inferred check, so it types to lhsTy in env.\<close>
   have lhs_init: "core_term_type env ghost lhsTm = Some lhsTy"
-    using inferred_term_typed_in_env[OF lhs_typed bound lhs_inf] .
+    using inferred_term_typed_in_env[OF lhs_typed bound lhs_inf wf] .
   \<comment> \<open>rhs: typed at the extended env from next_mv1; its type is exactly lhsTy, and it
       passes the inferred check, so it types to lhsTy in env.\<close>
   have bound1: "\<forall>n. n |\<in>| TE_TypeVars env \<longrightarrow> tyvar_fresh_ok n next_mv1"
@@ -1922,7 +1936,7 @@ proof -
   have rhs_typed1: "core_term_type (extend_env_with_tyvars env ghost next_mv1 next_mv2) ghost rhsTm = Some rhsTy"
     using elab_term_correct(1)[OF erhs wf ee_wf] bound1 by simp
   have rhs_init: "core_term_type env ghost rhsTm = Some lhsTy"
-    using inferred_term_typed_in_env[OF rhs_typed1 bound1 rhs_inf] rhs_ty by simp
+    using inferred_term_typed_in_env[OF rhs_typed1 bound1 rhs_inf wf] rhs_ty by simp
   show ?thesis using lhs_wl rhs_wl lhs_glv rhs_glv lhs_init rhs_init lhs_cp
     by (simp add: cs_eq env'_eq)
 qed
@@ -2332,7 +2346,7 @@ next
     "core_term_type ?envD Ghost (apply_subst_to_term subst coreInv) = Some CoreTy_Bool"
     using subst_typed by simp
   have head_typed: "core_term_type env Ghost (apply_subst_to_term subst coreInv) = Some CoreTy_Bool"
-    using inferred_term_typed_in_env[OF subst_typed_bool "2.prems"(4) inf] .
+    using inferred_term_typed_in_env[OF subst_typed_bool "2.prems"(4) inf "2.prems"(2)] .
   \<comment> \<open>Tail invariants type to Bool via the IH (the tyvar bound lifts to next_mv1).\<close>
   have nmv1: "next_mv \<le> next_mv1" using elab_term_next_mv_monotone[OF etm] .
   have bound1: "\<forall>n. n |\<in>| TE_TypeVars env \<longrightarrow> tyvar_fresh_ok n next_mv1" using "2.prems"(4) nmv1 tyvar_fresh_ok_mono by blast
@@ -2371,7 +2385,7 @@ next
   have decr_typed: "core_term_type ?envD Ghost coreD = Some decrTy"
     using elab_term_correct(1)[OF decrE wf ee_wf] bound by simp
   have "core_term_type env Ghost coreD = Some decrTy"
-    using inferred_term_typed_in_env[OF decr_typed bound decr_inf] .
+    using inferred_term_typed_in_env[OF decr_typed bound decr_inf wf] .
   with decr_valid cd_eq show ?thesis by simp
 qed
 
@@ -2446,7 +2460,7 @@ proof -
     "core_term_type ?envC ghost (apply_subst_to_term subst coreCond) = Some CoreTy_Bool"
     using subst_typed by simp
   have cond_bool: "core_term_type env ghost condTm = Some CoreTy_Bool"
-    using inferred_term_typed_in_env[OF subst_typed_bool bound cond_inf] cc_eq by simp
+    using inferred_term_typed_in_env[OF subst_typed_bool bound cond_inf wf] cc_eq by simp
   \<comment> \<open>Lift the tyvar bound across the cond / invariant intervals.\<close>
   have nmv1: "next_mv \<le> next_mv1" using elab_term_next_mv_monotone[OF etm] .
   have bound1: "\<forall>n. n |\<in>| TE_TypeVars env \<longrightarrow> tyvar_fresh_ok n next_mv1" using bound nmv1 tyvar_fresh_ok_mono by blast
@@ -3808,7 +3822,7 @@ next
   have env1_tv: "TE_TypeVars ?env1 = TE_TypeVars env" by simp
   have env1_dt: "TE_Datatypes ?env1 = TE_Datatypes env" by simp
   have env1_rtv: "TE_RuntimeTypeVars ?env1 = TE_RuntimeTypeVars env" by simp
-  have env1_gd: "TE_GhostDatatypes ?env1 = TE_GhostDatatypes env" by simp
+  have env1_gd: "ghost_datatypes ?env1 = ghost_datatypes env" by simp
   have tail_wk:
     "\<And>vr' n' vTy' proj'. (vr', n', vTy', proj') \<in> set projs'
        \<Longrightarrow> is_well_kinded ?env1 vTy'"
@@ -4156,7 +4170,7 @@ next
   have inf_obtain: "term_inferred ?eo (apply_subst_to_term subst coreTm)"
     using inf term_inferred_cong_env[of ?eo env] by simp
   have cond_typed: "core_term_type ?eo Ghost (apply_subst_to_term subst coreTm) = Some CoreTy_Bool"
-    using inferred_term_typed_in_env[OF subst_typed_bool bound_obtain inf_obtain] .
+    using inferred_term_typed_in_env[OF subst_typed_bool bound_obtain inf_obtain wf_obtain] .
   \<comment> \<open>Assemble the Core Obtain rule: is_well_kinded env coreTy plus the Bool-typed
       predicate under env_obtain, which is definitionally the rule's result env.\<close>
   show ?case using wk cond_typed
@@ -4392,7 +4406,7 @@ next
       "core_term_type ?envD Ghost (apply_subst_to_term subst coreCond) = Some CoreTy_Bool"
       using subst_typed by simp
     have cond_typed: "core_term_type env Ghost ?cond0 = Some CoreTy_Bool"
-      using inferred_term_typed_in_env[OF subst_typed_bool "8.prems"(4) inf] .
+      using inferred_term_typed_in_env[OF subst_typed_bool "8.prems"(4) inf "8.prems"(2)] .
     \<comment> \<open>goalEnv0 = env with the condition installed; premises for the list IH.\<close>
     have wf_goal: "tyenv_well_formed ?goalEnv0"
       using tyenv_well_formed_TE_ProofTopLevel_irrelevant[OF
@@ -4457,7 +4471,7 @@ next
     "core_term_type ?envD Ghost (apply_subst_to_term subst coreTm) = Some CoreTy_Bool"
     using subst_typed by simp
   have init_typed: "core_term_type env Ghost (apply_subst_to_term subst coreTm) = Some CoreTy_Bool"
-    using inferred_term_typed_in_env[OF subst_typed_bool "9.prems"(4) inf] .
+    using inferred_term_typed_in_env[OF subst_typed_bool "9.prems"(4) inf "9.prems"(2)] .
   show ?case using init_typed by (simp add: cs_eq env'_eq)
 next
   \<comment> \<open>If: desugars to a CoreStmt_Match on the condition with a True arm (the then-block)
@@ -4530,7 +4544,7 @@ next
     "core_term_type ?envD ghost (apply_subst_to_term subst coreCond) = Some CoreTy_Bool"
     using subst_typed by simp
   have scrut_typed: "core_term_type env ghost ?cond = Some CoreTy_Bool"
-    using inferred_term_typed_in_env[OF subst_typed_bool "10.prems"(4) inf] .
+    using inferred_term_typed_in_env[OF subst_typed_bool "10.prems"(4) inf "10.prems"(2)] .
   \<comment> \<open>(c) The then-block and else-block typecheck under armEnv (the mutual list IH).
       armEnv differs from env only in TE_ProofTopLevel, so the IH premises transfer.\<close>
   have wf_arm: "tyenv_well_formed ?armEnv"
@@ -4687,7 +4701,7 @@ next
 
   \<comment> \<open>The scrutinee typechecks in the plain env (it passed the inferred check).\<close>
   have scrut_typed: "core_term_type env ghost scrutTm = Some scrutTy"
-    using inferred_term_typed_in_env[OF typed_mv1 "13.prems"(4) scrut_facts(6)] .
+    using inferred_term_typed_in_env[OF typed_mv1 "13.prems"(4) scrut_facts(6) "13.prems"(2)] .
   have scrutTy_wk: "is_well_kinded env scrutTy"
     using core_term_type_well_kinded[OF scrut_typed "13.prems"(2)] .
   have scrutTy_rt: "ghost = NotGhost \<Longrightarrow> is_runtime_type env scrutTy"
@@ -4784,7 +4798,7 @@ next
     unfolding scrut_facts(3) vardecl_add_local_def by simp
   have env1_rtv: "TE_RuntimeTypeVars ?env1 = TE_RuntimeTypeVars env"
     unfolding scrut_facts(3) vardecl_add_local_def by simp
-  have env1_gd: "TE_GhostDatatypes ?env1 = TE_GhostDatatypes env"
+  have env1_gd: "ghost_datatypes ?env1 = ghost_datatypes env"
     unfolding scrut_facts(3) vardecl_add_local_def by simp
   have env1_fg: "TE_FunctionGhost ?env1 = TE_FunctionGhost env"
     unfolding scrut_facts(3) vardecl_add_local_def by simp

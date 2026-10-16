@@ -88,12 +88,6 @@ record CoreTyEnv =
   (* Should be consistent with TE_DataCtors *)
   TE_DataCtorsByType :: "(string, string list) fmap"
 
-  (* Ghost datatypes: datatypes whose constructors have non-runtime payload types.
-     These cannot be represented in memory (e.g. as tagged unions) because the payload
-     sizes are not known. A datatype is ghost if any of its constructor payloads
-     contains MathInt, MathReal, or another ghost datatype. *)
-  TE_GhostDatatypes :: "string fset"
-
   (* The set of type variables that represent abstract types ("type T;" in a module
      interface), paired with their declared alloc levels.
       - The domain is a subset of TE_TypeVars.
@@ -268,7 +262,7 @@ definition tyenv_fixed_eq :: "CoreTyEnv \<Rightarrow> CoreTyEnv \<Rightarrow> bo
     TE_Datatypes env1 = TE_Datatypes env2 \<and>
     TE_DataCtors env1 = TE_DataCtors env2 \<and>
     TE_DataCtorsByType env1 = TE_DataCtorsByType env2 \<and>
-    TE_GhostDatatypes env1 = TE_GhostDatatypes env2 \<and>
+    TE_AbstractAllocLevels env1 = TE_AbstractAllocLevels env2 \<and>
     TE_TypeVars env1 = TE_TypeVars env2 \<and>
     TE_RuntimeTypeVars env1 = TE_RuntimeTypeVars env2"
 

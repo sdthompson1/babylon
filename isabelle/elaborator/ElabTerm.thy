@@ -96,7 +96,7 @@ definition resolve_callee_data_ctor ::
   "resolve_callee_data_ctor env elabEnv ghost loc name tyArgs next_mv =
     (case fmlookup (TE_DataCtors env) name of
       Some (dtName, tyvars, payloadTy) \<Rightarrow>
-        if ghost = NotGhost \<and> dtName |\<in>| TE_GhostDatatypes env then
+        if ghost = NotGhost \<and> dtName \<in> ghost_datatypes env then
           Inl [TyErr_GhostVariableInNonGhost loc name]
         else if name |\<in>| EE_NullaryDataCtors elabEnv then
           Inl [TyErr_DataCtorNotCallable loc name]
@@ -892,7 +892,7 @@ where
           Some (dtName, tyvars, _) \<Rightarrow>
             if name |\<notin>| EE_NullaryDataCtors elabEnv then
               Inl [TyErr_DataCtorHasPayload loc name]
-            else if ghost = NotGhost \<and> dtName |\<in>| TE_GhostDatatypes env then
+            else if ghost = NotGhost \<and> dtName \<in> ghost_datatypes env then
               Inl [TyErr_GhostVariableInNonGhost loc name]
             else
               (case resolve_type_args env elabEnv ghost loc name tyvars tyArgs next_mv of

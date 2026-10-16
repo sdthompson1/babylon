@@ -470,16 +470,15 @@ lemma body_env_for_well_formed_post:
 
 (* body_env_for only depends on the "global" fields of env (TE_GlobalVars,
    TE_Functions, TE_Datatypes, TE_DataCtors, TE_DataCtorsByType,
-   TE_GhostDatatypes, TE_AbstractAllocLevels); the "local" fields it sets
-   are all overwritten from funInfo. So if two envs agree on the global
-   fields, body_env_for produces the same env. *)
+   TE_AbstractAllocLevels); the "local" fields it sets are all overwritten
+   from funInfo. So if two envs agree on the global fields, body_env_for
+   produces the same env. *)
 lemma body_env_for_cong:
   assumes "TE_GlobalVars env1 = TE_GlobalVars env2"
       and "TE_Functions env1 = TE_Functions env2"
       and "TE_Datatypes env1 = TE_Datatypes env2"
       and "TE_DataCtors env1 = TE_DataCtors env2"
       and "TE_DataCtorsByType env1 = TE_DataCtorsByType env2"
-      and "TE_GhostDatatypes env1 = TE_GhostDatatypes env2"
       and "TE_AbstractAllocLevels env1 = TE_AbstractAllocLevels env2"
   shows "body_env_for env1 names funInfo = body_env_for env2 names funInfo"
   using assms unfolding body_env_for_def by simp
@@ -495,7 +494,6 @@ lemma fun_info_matches_interp_fun_cong_env:
       and dt: "TE_Datatypes env1 = TE_Datatypes env2"
       and dc: "TE_DataCtors env1 = TE_DataCtors env2"
       and dcbt: "TE_DataCtorsByType env1 = TE_DataCtorsByType env2"
-      and gd: "TE_GhostDatatypes env1 = TE_GhostDatatypes env2"
       and tv: "TE_TypeVars env1 = TE_TypeVars env2"
       and rtv: "TE_RuntimeTypeVars env1 = TE_RuntimeTypeVars env2"
       and al: "TE_AbstractAllocLevels env1 = TE_AbstractAllocLevels env2"
@@ -503,13 +501,13 @@ lemma fun_info_matches_interp_fun_cong_env:
          fun_info_matches_interp_fun env2 funInfo interpFun"
 proof -
   have body_eq: "\<And>names. body_env_for env1 names funInfo = body_env_for env2 names funInfo"
-    by (rule body_env_for_cong[OF gv fn dt dc dcbt gd al])
+    by (rule body_env_for_cong[OF gv fn dt dc dcbt al])
   have body_fun_eq: "body_env_for env1 = body_env_for env2"
-    by (rule ext)+ (rule body_env_for_cong[OF gv fn dt dc dcbt gd al])
+    by (rule ext)+ (rule body_env_for_cong[OF gv fn dt dc dcbt al])
   have wk_eq: "\<And>ty. is_well_kinded env1 ty = is_well_kinded env2 ty"
     by (rule is_well_kinded_cong_env[OF tv dt])
   have rt_eq: "\<And>ty. is_runtime_type env1 ty = is_runtime_type env2 ty"
-    by (rule is_runtime_type_cong_env[OF gd rtv])
+    by (meson al dc dcbt dt is_runtime_type_cong_fields rtv)
   have vht_eq: "value_has_type env1 = value_has_type env2"
     by (rule ext)+ (rule value_has_type_cong_env[OF dc dt tv])
   have ext_eq: "\<And>externFun. extern_fun_contract env1 funInfo externFun

@@ -42,7 +42,7 @@ proof (induction is_flex ty1 ty2 and is_flex tys1 tys2 arbitrary: subst and subs
       with "1.prems"(1) CoreTy_Datatype have unify_ok: "unify_list is_flex tyArgs1 tyArgs2 = Some subst" by simp
       from "1.prems"(2) have "list_all (is_runtime_type env) tyArgs1" by auto
       from "1.prems"(3) CoreTy_Datatype have "list_all (is_runtime_type env) tyArgs2"
-        using is_runtime_type.simps(1) by blast
+        using is_runtime_type_simps(1) by blast
       from "1.IH"[OF CoreTy_Datatype True unify_ok
                     \<open>list_all (is_runtime_type env) tyArgs1\<close>
                     \<open>list_all (is_runtime_type env) tyArgs2\<close>]

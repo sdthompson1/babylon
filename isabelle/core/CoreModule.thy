@@ -129,7 +129,7 @@ lemma core_module_closed_normalize_module [simp]:
 
 
 (* ========================================================================== *)
-(* Capture-avoidance                                                          *)
+(* Abstract type name distinctness from local type parameter names *)
 (* ========================================================================== *)
 
 (* The type variable names mentioned in the CM_TypeSubst (in both domain and
@@ -159,16 +159,11 @@ lemma capture_avoiding_empty_subst:
   unfolding capture_avoiding_def using assms by simp
 
 
-(* ========================================================================== *)
-(* Ghost-marker sanity                                                        *)
-(* ========================================================================== *)
-
-(* A module may only mark ghost what it itself declares: TE_GhostDatatypes
-   names its own datatypes. *)
-
-definition module_ghost_subsets_ok :: "CoreModule \<Rightarrow> bool" where
-  "module_ghost_subsets_ok m =
-    (TE_GhostDatatypes (CM_TyEnv m) |\<subseteq>| fmdom (TE_Datatypes (CM_TyEnv m)))"
+(* Similarly, abstract type names mentioned in TE_AbstractTypes must be distinct
+   from type parameter names of generic functions or datatypes. *)
+definition module_tyvars_fresh :: "CoreModule \<Rightarrow> bool" where
+  "module_tyvars_fresh m =
+    (tyenv_ctor_tyvars_fresh (CM_TyEnv m) \<and> tyenv_fun_tyvars_fresh (CM_TyEnv m))"
 
 
 (* ========================================================================== *)
@@ -212,7 +207,7 @@ lemma subst_preserves_tyenv_module_scope:
 
    The conjuncts:
    - CM_TypeSubst is idempotent and capture-avoiding;
-   - ghost markers only on the module's own declarations;
+   - no type parameter of a signature shadows an abstract type;
    - a resolved abstract type is recorded in the substitution and removed
      from TE_TypeVars, so the two are disjoint;
    - the runtime type variables are a subset of the in-scope type variables;
@@ -222,14 +217,14 @@ definition core_module_invariant :: "CoreModule \<Rightarrow> bool" where
   "core_module_invariant m =
     (idempotent_subst (CM_TypeSubst m)
      \<and> capture_avoiding m
-     \<and> module_ghost_subsets_ok m
+     \<and> module_tyvars_fresh m
      \<and> fmdom (CM_TypeSubst m) |\<inter>| TE_TypeVars (CM_TyEnv m) = {||}
      \<and> TE_RuntimeTypeVars (CM_TyEnv m) |\<subseteq>| TE_TypeVars (CM_TyEnv m)
      \<and> tyenv_module_scope (CM_TyEnv m))"
 
 (* Destructor for the conjunct that theorems most often take per input. *)
-lemma core_module_invariant_ghost_subsets_ok:
-  "core_module_invariant m \<Longrightarrow> module_ghost_subsets_ok m"
+lemma core_module_invariant_tyvars_fresh:
+  "core_module_invariant m \<Longrightarrow> module_tyvars_fresh m"
   unfolding core_module_invariant_def by blast
 
 end

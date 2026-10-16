@@ -65,6 +65,14 @@ definition module_body_env_for :: "CoreTyEnv \<Rightarrow> string list \<Rightar
     \<rparr>"
 
 
+(* The body env keeps the signature tables, so it has distinct binders
+   exactly when the enclosing env does. *)
+lemma tyenv_binders_distinct_module_body_env_for [simp]:
+  "tyenv_binders_distinct (module_body_env_for env names info)
+     = tyenv_binders_distinct env"
+  unfolding module_body_env_for_def by simp
+
+
 (* ========================================================================== *)
 (* Contract signatures                                                         *)
 (* ========================================================================== *)
@@ -243,17 +251,6 @@ proof -
                FI_Ghost info' = NotGhost \<Longrightarrow> is_complete_type (FI_ReturnType info')"
     using wf
     unfolding tyenv_well_formed_def tyenv_fun_return_types_complete_def by blast
-  have npr: "\<And>ctorName dtName tyVars payload.
-               fmlookup (TE_DataCtors env) ctorName = Some (dtName, tyVars, payload) \<Longrightarrow>
-               dtName |\<notin>| TE_GhostDatatypes env \<Longrightarrow>
-               is_runtime_type
-                 (env \<lparr> TE_TypeVars := TE_AbstractTypes env |\<union>| fset_of_list tyVars,
-                        TE_RuntimeTypeVars :=
-                          (TE_AbstractTypes env |\<inter>| TE_RuntimeTypeVars env)
-                          |\<union>| fset_of_list tyVars \<rparr>) payload"
-    using wf
-    unfolding tyenv_well_formed_def tyenv_nonghost_payloads_runtime_def by blast
-
   show ?thesis
     unfolding tyenv_well_formed_def
   proof (intro conjI)
@@ -342,15 +339,18 @@ proof -
                                  TE_RuntimeTypeVars :=
                                    TE_AbstractTypes ?be |\<inter>| TE_RuntimeTypeVars ?be \<rparr>))"
           by (auto simp: module_body_env_for_def)
-        show "TE_GhostDatatypes
+        \<comment> \<open>The body env has at least the runtime abstract types of env, so at
+            most its ghost datatypes.\<close>
+        show "ghost_datatypes
                 (?be \<lparr> TE_TypeVars := TE_AbstractTypes ?be,
                        TE_RuntimeTypeVars :=
                          TE_AbstractTypes ?be |\<inter>| TE_RuntimeTypeVars ?be \<rparr>)
-                = TE_GhostDatatypes
+                \<subseteq> ghost_datatypes
                     (env \<lparr> TE_TypeVars := TE_AbstractTypes env,
                            TE_RuntimeTypeVars :=
                              TE_AbstractTypes env |\<inter>| TE_RuntimeTypeVars env \<rparr>)"
           by (simp add: module_body_env_for_def)
+             (intro impI ghost_datatypes_r_antitone; auto)
       qed
     qed
   next
@@ -509,8 +509,35 @@ proof -
                        TE_RuntimeTypeVars :=
                          (TE_AbstractTypes ?be |\<inter>| TE_RuntimeTypeVars ?be)
                          |\<union>| fset_of_list (FI_TyArgs info') \<rparr>) ty"
-          by (rule is_runtime_type_mono_rtv[OF r])
-             (auto simp: module_body_env_for_def)
+        proof (rule is_runtime_type_mono_rtv[OF r])
+          show "fset (TE_RuntimeTypeVars
+                        (env \<lparr> TE_TypeVars := TE_AbstractTypes env
+                                              |\<union>| fset_of_list (FI_TyArgs info'),
+                               TE_RuntimeTypeVars :=
+                                 (TE_AbstractTypes env |\<inter>| TE_RuntimeTypeVars env)
+                                 |\<union>| fset_of_list (FI_TyArgs info') \<rparr>))
+                \<subseteq> fset (TE_RuntimeTypeVars
+                          (?be \<lparr> TE_TypeVars := TE_AbstractTypes ?be
+                                                |\<union>| fset_of_list (FI_TyArgs info'),
+                                 TE_RuntimeTypeVars :=
+                                   (TE_AbstractTypes ?be |\<inter>| TE_RuntimeTypeVars ?be)
+                                   |\<union>| fset_of_list (FI_TyArgs info') \<rparr>))"
+            by (auto simp: module_body_env_for_def)
+          show "ghost_datatypes
+                  (?be \<lparr> TE_TypeVars := TE_AbstractTypes ?be
+                                        |\<union>| fset_of_list (FI_TyArgs info'),
+                         TE_RuntimeTypeVars :=
+                           (TE_AbstractTypes ?be |\<inter>| TE_RuntimeTypeVars ?be)
+                           |\<union>| fset_of_list (FI_TyArgs info') \<rparr>)
+                \<subseteq> ghost_datatypes
+                    (env \<lparr> TE_TypeVars := TE_AbstractTypes env
+                                          |\<union>| fset_of_list (FI_TyArgs info'),
+                           TE_RuntimeTypeVars :=
+                             (TE_AbstractTypes env |\<inter>| TE_RuntimeTypeVars env)
+                             |\<union>| fset_of_list (FI_TyArgs info') \<rparr>)"
+            by (simp add: module_body_env_for_def)
+               (intro impI ghost_datatypes_r_antitone; auto)
+        qed
       qed
       show "(\<forall>ty vor. (ty, vor, NotGhost) \<in> set (FI_TmArgs info') \<longrightarrow>
                is_runtime_type
@@ -541,32 +568,12 @@ proof -
         using frc[OF lk' ng'] .
     qed
   next
-    show "tyenv_nonghost_payloads_runtime ?be"
-      unfolding tyenv_nonghost_payloads_runtime_def
-    proof (intro allI impI)
-      fix ctorName dtName tyVars payload
-      assume "fmlookup (TE_DataCtors ?be) ctorName = Some (dtName, tyVars, payload)"
-         and "dtName |\<notin>| TE_GhostDatatypes ?be"
-      then have lk_c: "fmlookup (TE_DataCtors env) ctorName = Some (dtName, tyVars, payload)"
-            and ng_c: "dtName |\<notin>| TE_GhostDatatypes env"
-        by (simp_all add: module_body_env_for_def)
-      have r: "is_runtime_type
-                 (env \<lparr> TE_TypeVars := TE_AbstractTypes env |\<union>| fset_of_list tyVars,
-                        TE_RuntimeTypeVars :=
-                          (TE_AbstractTypes env |\<inter>| TE_RuntimeTypeVars env)
-                          |\<union>| fset_of_list tyVars \<rparr>) payload"
-        using npr[OF lk_c ng_c] .
-      show "is_runtime_type
-              (?be \<lparr> TE_TypeVars := TE_AbstractTypes ?be |\<union>| fset_of_list tyVars,
-                     TE_RuntimeTypeVars :=
-                       (TE_AbstractTypes ?be |\<inter>| TE_RuntimeTypeVars ?be)
-                       |\<union>| fset_of_list tyVars \<rparr>) payload"
-        by (rule is_runtime_type_mono_rtv[OF r])
-           (auto simp: module_body_env_for_def)
-    qed
+    show "tyenv_ctor_tyvars_fresh ?be"
+      using wf unfolding tyenv_well_formed_def tyenv_ctor_tyvars_fresh_def
+      by (simp add: module_body_env_for_def)
   next
-    show "tyenv_ghost_datatypes_subset ?be"
-      using wf unfolding tyenv_well_formed_def tyenv_ghost_datatypes_subset_def
+    show "tyenv_fun_tyvars_fresh ?be"
+      using wf unfolding tyenv_well_formed_def tyenv_fun_tyvars_fresh_def
       by (simp add: module_body_env_for_def)
   next
     show "tyenv_runtime_tyvars_subset ?be"

@@ -450,7 +450,6 @@ lemma state_iface_facts:
       and k: "k |\<in>| fmdom ps"
   shows "CM_TypeSubst (state_iface ps k) = fmempty"
     and "core_module_invariant (state_iface ps k)"
-    and "module_ghost_subsets_ok (state_iface ps k)"
 proof -
   have cok: "compiled_module_ok (M_CompiledInterface (the (fmlookup ps k)))"
     using state_entry_interface_ok[OF ok k] .
@@ -458,8 +457,6 @@ proof -
     using cok unfolding compiled_module_ok_def state_iface_def by blast
   show inv: "core_module_invariant (state_iface ps k)"
     using cok unfolding compiled_module_ok_def state_iface_def by blast
-  show "module_ghost_subsets_ok (state_iface ps k)"
-    using core_module_invariant_ghost_subsets_ok[OF inv] .
 qed
 
 (* The empty link yields the empty module... *)
@@ -500,7 +497,7 @@ proof -
               tyenv_ctors_by_type_consistent_def tyenv_fun_types_well_kinded_def
               tyenv_fun_tyvars_distinct_def tyenv_fun_ghost_constraint_def
               tyenv_fun_return_types_complete_def
-              tyenv_nonghost_payloads_runtime_def tyenv_ghost_datatypes_subset_def
+              tyenv_ctor_tyvars_fresh_def tyenv_fun_tyvars_fresh_def
               tyenv_runtime_tyvars_subset_def tyenv_abstract_types_subset_def
               tyenv_datatypes_nonempty_def empty_module_tyenv_def
     by simp
@@ -515,7 +512,8 @@ proof -
     unfolding core_module_invariant_def
     using capture_avoiding_empty_subst[OF subst_empty] scope
     by (simp add: empty_core_module_def empty_module_tyenv_def
-                  module_ghost_subsets_ok_def)
+                  module_tyvars_fresh_def tyenv_ctor_tyvars_fresh_def
+                  tyenv_fun_tyvars_fresh_def)
   show ?thesis
     unfolding core_module_well_typed_def norm
     using inv nwt
@@ -726,10 +724,8 @@ proof (induction ns arbitrary: m rule: length_induct)
         using set_ns' dn_sub n_in unfolding dn_def by auto
       then show ?thesis by (simp add: image_Un)
     qed
-    have ghostOK: "\<forall>x \<in> set (map (state_iface ps) ns). module_ghost_subsets_ok x"
-      using state_iface_facts(3)[OF ok] in_dom by auto
     show ?thesis
-      using link_preserves_well_typed[OF linkA wtA linkB wtB linkM setMS ghostOK] .
+      using link_preserves_well_typed[OF linkA wtA linkB wtB linkM setMS] .
   qed
 qed
 
@@ -1409,7 +1405,6 @@ lemma state_impl_facts:
   assumes ok: "pipeline_state_ok ps"
       and k: "k |\<in>| fmdom ps"
   shows "core_module_invariant (state_impl ps k)"
-    and "module_ghost_subsets_ok (state_impl ps k)"
     and "fmdom (CM_TypeSubst (state_impl ps k))
            = TE_TypeVars (CM_TyEnv (state_iface ps k))"
 proof -
@@ -1418,8 +1413,6 @@ proof -
   note eok = pipeline_state_okD(1)[OF ok lk]
   show inv: "core_module_invariant (state_impl ps k)"
     using pipeline_entry_okD(7)[OF eok] lk unfolding state_impl_def by simp
-  show "module_ghost_subsets_ok (state_impl ps k)"
-    using core_module_invariant_ghost_subsets_ok[OF inv] .
   show "fmdom (CM_TypeSubst (state_impl ps k))
           = TE_TypeVars (CM_TyEnv (state_iface ps k))"
     using pipeline_entry_okD(8)[OF eok] pipeline_entry_okD(9)[OF eok] lk
@@ -1657,7 +1650,7 @@ proof
   \<comment> \<open>Its own implementation's substitution domain covers that tyvar, and is
      itself an input of the union.\<close>
   have y_dom: "y |\<in>| fmdom (CM_TypeSubst (state_impl ps d))"
-    using y_x x_eq state_impl_facts(3)[OF ok in_dom[OF d_in_ns]] by simp
+    using y_x x_eq state_impl_facts(2)[OF ok in_dom[OF d_in_ns]] by simp
   have impl_in: "CM_TypeSubst (state_impl ps d)
                    \<in> set (map CM_TypeSubst (map (face_module ps) (face_keys ns)))"
     using face_keys_impl_in[OF d_in_ns] by (force simp: face_module_def)
@@ -1697,7 +1690,7 @@ proof -
     case False
     then have "z = state_iface ps (fst kk)"
       using z_eq unfolding face_module_def by simp
-    then show ?thesis using n_z state_impl_facts(3)[OF ok k_dom] by simp
+    then show ?thesis using n_z state_impl_facts(2)[OF ok k_dom] by simp
   qed
   moreover have "CM_TypeSubst (state_impl ps (fst kk))
                    \<in> set (map CM_TypeSubst (map (face_module ps) (face_keys ns)))"
@@ -2013,21 +2006,82 @@ proof -
        well-typed links already in hand: the previous prefix link a for the
        earlier faces, and the derived implementation link for m's two
        faces.\<close>
-    have aokT: "\<And>\<sigma>a. merge_all_substs (map CM_TypeSubst
-                   (map (face_module ps) (face_keys (take (Suc i) names)))) = Inr \<sigma>a
-                 \<Longrightarrow> link_alloc_ok (map (face_module ps) (face_keys (take (Suc i) names))) \<sigma>a"
+    let ?F = "map (face_module ps) (face_keys (take (Suc i) names))"
+    let ?Ai = "map (face_module ps) (face_keys (take i names))"
+    let ?Bf = "map (face_module ps) bkeys"
+    let ?B = "link_result ?Bf \<sigma>B"
+    let ?DT = "fmdom (fmlist_union (map (\<lambda>x. TE_Datatypes (CM_TyEnv x)) ?F))"
+    have set_Ai_F: "set ?Ai \<subseteq> set ?F"
+      unfolding P_split by auto
+    have set_B_F: "set ?Bf \<subseteq> set ?F"
+      unfolding setMS by auto
+    note Wa = well_typed_link_entry_facts[OF linkA wtA]
+    note WB = well_typed_link_entry_facts[OF linkB wtB]
+    note fA = link_modules_result_fields[OF linkA]
+    \<comment> \<open>The tables of the two earlier links sit inside the prefix's.\<close>
+    have DC_a: "fmdom (TE_DataCtors (CM_TyEnv a))
+                  |\<subseteq>| fmdom (fmlist_union (map (\<lambda>x. TE_DataCtors (CM_TyEnv x)) ?F))"
+      unfolding fA(14) by (rule fmdom_fmlist_union_map_mono[OF set_Ai_F])
+    have BT_a: "fmdom (TE_DataCtorsByType (CM_TyEnv a))
+                  |\<subseteq>| fmdom (fmlist_union (map (\<lambda>x. TE_DataCtorsByType (CM_TyEnv x)) ?F))"
+      unfolding fA(15) by (rule fmdom_fmlist_union_map_mono[OF set_Ai_F])
+    have B_fields:
+      "TE_Datatypes (CM_TyEnv ?B) = fmlist_union (map (\<lambda>x. TE_Datatypes (CM_TyEnv x)) ?Bf)"
+      "TE_DataCtors (CM_TyEnv ?B) = fmlist_union (map (\<lambda>x. TE_DataCtors (CM_TyEnv x)) ?Bf)"
+      "TE_DataCtorsByType (CM_TyEnv ?B)
+         = fmlist_union (map (\<lambda>x. TE_DataCtorsByType (CM_TyEnv x)) ?Bf)"
+      unfolding link_result_def by simp_all
+    have DC_B: "fmdom (TE_DataCtors (CM_TyEnv ?B))
+                  |\<subseteq>| fmdom (fmlist_union (map (\<lambda>x. TE_DataCtors (CM_TyEnv x)) ?F))"
+      unfolding B_fields(2) by (rule fmdom_fmlist_union_map_mono[OF set_B_F])
+    have BT_B: "fmdom (TE_DataCtorsByType (CM_TyEnv ?B))
+                  |\<subseteq>| fmdom (fmlist_union (map (\<lambda>x. TE_DataCtorsByType (CM_TyEnv x)) ?F))"
+      unfolding B_fields(3) by (rule fmdom_fmlist_union_map_mono[OF set_B_F])
+    \<comment> \<open>Hypothesis: every listed constructor has an entry in the prefix.\<close>
+    have cov: "c |\<in>| fmdom (fmlist_union (map (\<lambda>x. TE_DataCtors (CM_TyEnv x)) ?F))"
+      if x_in: "x \<in> set ?F" and lk: "fmlookup (TE_DataCtorsByType (CM_TyEnv x)) dt = Some cs"
+         and c_in: "c \<in> set cs"
+      for x dt cs c
+    proof -
+      have "x \<in> set ?Ai \<or> x \<in> set ?Bf"
+        using x_in unfolding setMS by blast
+      then show ?thesis
+      proof
+        assume xa: "x \<in> set ?Ai"
+        show ?thesis using Wa(3)[OF xa lk c_in] DC_a by (auto dest: fsubsetD)
+      next
+        assume xb: "x \<in> set ?Bf"
+        show ?thesis using WB(3)[OF xb lk c_in] DC_B by (auto dest: fsubsetD)
+      qed
+    qed
+    \<comment> \<open>Hypothesis: every declared datatype has a constructor list in the prefix.\<close>
+    have nonempty: "dt |\<in>| fmdom (fmlist_union (map (\<lambda>x. TE_DataCtorsByType (CM_TyEnv x)) ?F))"
+      if x_in: "x \<in> set ?F" and lk: "fmlookup (TE_Datatypes (CM_TyEnv x)) dt = Some ar"
+      for x dt ar
+    proof -
+      have "x \<in> set ?Ai \<or> x \<in> set ?Bf"
+        using x_in unfolding setMS by blast
+      then show ?thesis
+      proof
+        assume xa: "x \<in> set ?Ai"
+        show ?thesis using Wa(4)[OF xa lk] BT_a by (auto dest: fsubsetD)
+      next
+        assume xb: "x \<in> set ?Bf"
+        show ?thesis using WB(4)[OF xb lk] BT_B by (auto dest: fsubsetD)
+      qed
+    qed
+    \<comment> \<open>The \<sigma>-dependent hypotheses (the merged ranges and the payloads are
+       ground over the prefix) together with the alloc gate, for every merged
+       substitution of the prefix.\<close>
+    have groundT: "\<And>\<sigma>a. merge_all_substs (map CM_TypeSubst ?F) = Inr \<sigma>a \<Longrightarrow>
+         (\<forall>n ty. fmlookup \<sigma>a n = Some ty \<longrightarrow> type_datatypes ty \<subseteq> fset ?DT)
+         \<and> (\<forall>x c dt tyvars p. x \<in> set ?F \<longrightarrow>
+               fmlookup (TE_DataCtors (CM_TyEnv x)) c = Some (dt, tyvars, p) \<longrightarrow>
+               type_datatypes p \<subseteq> fset ?DT \<and> type_tyvars p \<subseteq> set tyvars \<union> fset (fmdom \<sigma>a))
+         \<and> link_alloc_ok ?F \<sigma>a"
     proof -
       fix \<sigma>a
-      let ?F = "map (face_module ps) (face_keys (take (Suc i) names))"
-      let ?Ai = "map (face_module ps) (face_keys (take i names))"
-      let ?Bf = "map (face_module ps) bkeys"
-      let ?B = "link_result ?Bf \<sigma>B"
-      let ?DT = "fmdom (fmlist_union (map (\<lambda>x. TE_Datatypes (CM_TyEnv x)) ?F))"
       assume mergeT: "merge_all_substs (map CM_TypeSubst ?F) = Inr \<sigma>a"
-      have set_Ai_F: "set ?Ai \<subseteq> set ?F"
-        unfolding P_split by auto
-      have set_B_F: "set ?Bf \<subseteq> set ?F"
-        unfolding setMS by auto
       \<comment> \<open>The previous prefix link and its substitution.\<close>
       obtain \<sigma>i where mergeA: "merge_all_substs (map CM_TypeSubst ?Ai) = Inr \<sigma>i"
           and a_eq: "a = link_result ?Ai \<sigma>i"
@@ -2173,7 +2227,7 @@ proof -
           then have "v |\<in>| TE_TypeVars (CM_TyEnv (state_iface ps m))"
             using v_kk by (simp add: face_module_def)
           then have "v |\<in>| fmdom (CM_TypeSubst (state_impl ps m))"
-            using state_impl_facts(3)[OF st(1) m_dom] by simp
+            using state_impl_facts(2)[OF st(1) m_dom] by simp
           then show ?thesis using v_nB \<sigma>B_eq by simp
         next
           assume kk_eq: "kk = (m, True)"
@@ -2271,73 +2325,35 @@ proof -
           then show ?thesis using d1 DT_B by (auto dest: fsubsetD)
         qed
       qed
-      \<comment> \<open>Hypothesis: every listed constructor has an entry in the prefix.\<close>
-      have cov: "c |\<in>| fmdom (fmlist_union (map (\<lambda>x. TE_DataCtors (CM_TyEnv x)) ?F))"
-        if x_in: "x \<in> set ?F" and lk: "fmlookup (TE_DataCtorsByType (CM_TyEnv x)) dt = Some cs"
-           and c_in: "c \<in> set cs"
-        for x dt cs c
-      proof -
-        have "x \<in> set ?Ai \<or> x \<in> set ?Bf"
-          using x_in unfolding setMS by blast
-        then show ?thesis
-        proof
-          assume xa: "x \<in> set ?Ai"
-          show ?thesis using Wa(3)[OF xa lk c_in] DC_a by (auto dest: fsubsetD)
-        next
-          assume xb: "x \<in> set ?Bf"
-          show ?thesis using WB(3)[OF xb lk c_in] DC_B by (auto dest: fsubsetD)
-        qed
-      qed
-      \<comment> \<open>Hypothesis: every declared datatype has a constructor list in the prefix.\<close>
-      have nonempty: "dt |\<in>| fmdom (fmlist_union (map (\<lambda>x. TE_DataCtorsByType (CM_TyEnv x)) ?F))"
-        if x_in: "x \<in> set ?F" and lk: "fmlookup (TE_Datatypes (CM_TyEnv x)) dt = Some ar"
-        for x dt ar
-      proof -
-        have "x \<in> set ?Ai \<or> x \<in> set ?Bf"
-          using x_in unfolding setMS by blast
-        then show ?thesis
-        proof
-          assume xa: "x \<in> set ?Ai"
-          show ?thesis using Wa(4)[OF xa lk] BT_a by (auto dest: fsubsetD)
-        next
-          assume xb: "x \<in> set ?Bf"
-          show ?thesis using WB(4)[OF xb lk] BT_B by (auto dest: fsubsetD)
-        qed
-      qed
-      show "link_alloc_ok ?F \<sigma>a"
+      have aok: "link_alloc_ok ?F \<sigma>a"
         by (rule link_alloc_ok_sublist_ground[OF linkW msubT mergeT ground G1 G2 cov nonempty])
+      show "(\<forall>n ty. fmlookup \<sigma>a n = Some ty \<longrightarrow> type_datatypes ty \<subseteq> fset ?DT)
+            \<and> (\<forall>x c dt tyvars p. x \<in> set ?F \<longrightarrow>
+                  fmlookup (TE_DataCtors (CM_TyEnv x)) c = Some (dt, tyvars, p) \<longrightarrow>
+                  type_datatypes p \<subseteq> fset ?DT \<and> type_tyvars p \<subseteq> set tyvars \<union> fset (fmdom \<sigma>a))
+            \<and> link_alloc_ok ?F \<sigma>a"
+        using G1 G2 aok by blast
     qed
-    obtain p where linkP: "link_modules
+    have rng: "\<And>\<sigma>a n ty. merge_all_substs (map CM_TypeSubst ?F) = Inr \<sigma>a \<Longrightarrow>
+                 fmlookup \<sigma>a n = Some ty \<Longrightarrow> type_datatypes ty \<subseteq> fset ?DT"
+      using groundT by blast
+    have pay: "\<And>\<sigma>a x c dt tyvars p. merge_all_substs (map CM_TypeSubst ?F) = Inr \<sigma>a \<Longrightarrow>
+                 x \<in> set ?F \<Longrightarrow>
+                 fmlookup (TE_DataCtors (CM_TyEnv x)) c = Some (dt, tyvars, p) \<Longrightarrow>
+                 type_datatypes p \<subseteq> fset ?DT \<and> type_tyvars p \<subseteq> set tyvars \<union> fset (fmdom \<sigma>a)"
+      using groundT by blast
+    have aokT: "\<And>\<sigma>a. merge_all_substs (map CM_TypeSubst ?F) = Inr \<sigma>a \<Longrightarrow> link_alloc_ok ?F \<sigma>a"
+      using groundT by blast
+    \<comment> \<open>The premised hypotheses are passed by rule, not OF: their conclusions do
+       not mention every bound variable, so OF would leave schematic residue.\<close>
+    have "\<exists>p. link_modules ?F = Inr p"
+      by (rule link_modules_sublink_ground[OF linkW msubT ground])
+         (rule rng pay cov nonempty aokT; assumption)+
+    then obtain p where linkP: "link_modules
         (map (face_module ps) (face_keys (take (Suc i) names))) = Inr p"
-      using link_modules_sublink_ground[OF linkW msubT ground aokT] by blast
-    have ghostOK: "\<forall>z \<in> set (map (face_module ps) (face_keys (take (Suc i) names))).
-                     module_ghost_subsets_ok z"
-    proof
-      fix z assume "z \<in> set (map (face_module ps) (face_keys (take (Suc i) names)))"
-      then obtain kk where kk_in: "kk \<in> set (face_keys (take (Suc i) names))"
-          and z_eq: "z = face_module ps kk"
-        by auto
-      have "fst kk \<in> set names"
-        using face_keys_fst[OF kk_in] set_take_subset by fastforce
-      then have kk_dom: "fst kk |\<in>| fmdom ps"
-        using dom_eq by (simp add: fset_of_list_elem)
-      show "module_ghost_subsets_ok z"
-      proof (cases "snd kk")
-        case True
-        then have "z = state_impl ps (fst kk)"
-          using z_eq unfolding face_module_def by simp
-        then show ?thesis
-          using state_impl_facts(2)[OF st(1) kk_dom] by simp
-      next
-        case False
-        then have "z = state_iface ps (fst kk)"
-          using z_eq unfolding face_module_def by simp
-        then show ?thesis
-          using state_iface_facts(3)[OF st(1) kk_dom] by simp
-      qed
-    qed
+      by blast
     have "core_module_well_typed p"
-      using link_preserves_well_typed[OF linkA wtA linkB wtB linkP setMS ghostOK] .
+      using link_preserves_well_typed[OF linkA wtA linkB wtB linkP setMS] .
     then show ?case using linkP by blast
   qed
 
@@ -2504,7 +2520,7 @@ proof -
       have "v |\<in>| TE_TypeVars (CM_TyEnv (state_iface ps (fst kk)))"
         using v_kk not_impl by (simp add: face_module_def)
       then have v_sub: "v |\<in>| fmdom (CM_TypeSubst (state_impl ps (fst kk)))"
-        using state_impl_facts(3)[OF st(1) n_dom] by simp
+        using state_impl_facts(2)[OF st(1) n_dom] by simp
       have impl_in: "(fst kk, True) \<in> set (face_keys names)"
         using face_keys_impl_in face_keys_fst[OF kk_in] by blast
       have w_in: "fmdom (CM_TypeSubst (face_module ps (fst kk, True)))
@@ -2531,7 +2547,7 @@ proof -
       have "v |\<in>| fmdom (CM_TypeSubst (state_impl ps (fst kk)))"
         using v_kk is_impl by (simp add: face_module_def)
       then have v_tv: "v |\<in>| TE_TypeVars (CM_TyEnv (state_iface ps (fst kk)))"
-        using state_impl_facts(3)[OF st(1) n_dom] by simp
+        using state_impl_facts(2)[OF st(1) n_dom] by simp
       have iface_in: "(fst kk, False) \<in> set (face_keys names)"
         using face_keys_iface_in face_keys_fst[OF kk_in] by blast
       have w_in: "TE_TypeVars (CM_TyEnv (face_module ps (fst kk, False)))

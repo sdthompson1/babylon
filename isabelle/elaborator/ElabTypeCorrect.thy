@@ -409,7 +409,7 @@ qed
 
 (* In Ghost mode, elab_type never consults TE_RuntimeTypeVars: the only
    reads of runtime-ness information (the is_runtime_type checks and the
-   TE_GhostDatatypes check) are guarded by ghost = NotGhost. *)
+   ghost_datatypes check) are guarded by ghost = NotGhost. *)
 lemma elab_type_TE_RuntimeTypeVars_irrelevant:
   "elab_type (env \<lparr> TE_RuntimeTypeVars := R \<rparr>) elabEnv Ghost ty
      = elab_type env elabEnv Ghost ty"

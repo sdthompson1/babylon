@@ -22,9 +22,9 @@ lemma runtime_type_transfer_erased:
   assumes tv: "\<And>n. n |\<in>| TE_RuntimeTypeVars env1
                  \<Longrightarrow> n |\<in>| TE_TypeVars env2 \<and> n |\<in>| TE_RuntimeTypeVars env2"
     and dt: "\<And>dtName n. fmlookup (TE_Datatypes env1) dtName = Some n
-                 \<Longrightarrow> dtName |\<notin>| TE_GhostDatatypes env1
+                 \<Longrightarrow> dtName \<notin> ghost_datatypes env1
                  \<Longrightarrow> fmlookup (TE_Datatypes env2) dtName = Some n"
-    and gd: "TE_GhostDatatypes env2 = {||}"
+    and gd: "ghost_datatypes env2 = {}"
   shows "is_well_kinded env1 ty \<Longrightarrow> is_runtime_type env1 ty
            \<Longrightarrow> is_well_kinded env2 ty \<and> is_runtime_type env2 ty"
 proof (induction ty)
@@ -35,7 +35,7 @@ proof (induction ty)
       wks: "list_all (is_well_kinded env1) args"
     by (auto split: option.splits)
   from CoreTy_Datatype.prems(2) have
-      ng: "nm |\<notin>| TE_GhostDatatypes env1" and
+      ng: "nm \<notin> ghost_datatypes env1" and
       rts: "list_all (is_runtime_type env1) args"
     by simp_all
   have lk2: "fmlookup (TE_Datatypes env2) nm = Some n"
@@ -80,13 +80,16 @@ lemma fset_scoped_tyvars_eq2:
 
 (* A type checked with the abstract types and the type variables T in scope.
    This is the form in which tyenv_well_formed checks the types of functions
-   and of constructor payloads. *)
+   and of constructor payloads. T must not shadow an abstract type (as the
+   type parameters of a well-formed env never do): otherwise a ghost abstract
+   type would be runtime in the scope, and the scope's ghost set smaller. *)
 lemma erase_ghost_tyenv_scoped_type:
   assumes wk: "is_well_kinded (env \<lparr> TE_TypeVars := TE_AbstractTypes env |\<union>| T \<rparr>) ty"
     and rt: "is_runtime_type
                (env \<lparr> TE_TypeVars := TE_AbstractTypes env |\<union>| T,
                       TE_RuntimeTypeVars :=
                         (TE_AbstractTypes env |\<inter>| TE_RuntimeTypeVars env) |\<union>| T \<rparr>) ty"
+    and fresh: "T |\<inter>| TE_AbstractTypes env = {||}"
   shows "is_well_kinded
            ((erase_ghost_tyenv env)
               \<lparr> TE_TypeVars := TE_AbstractTypes (erase_ghost_tyenv env) |\<union>| T \<rparr>) ty"
@@ -108,8 +111,16 @@ proof -
           = is_well_kinded (env \<lparr> TE_TypeVars := TE_AbstractTypes env |\<union>| T \<rparr>) ty"
     by (rule is_well_kinded_cong_env) simp_all
   hence wk1: "is_well_kinded ?env1 ty" using wk by simp
+  \<comment> \<open>T does not shadow an abstract type, so ?env1 has the ghost set of env;
+      ?env2 has no ghost datatype.\<close>
+  note gd1 = ghost_datatypes_r_scope_eq[OF fresh]
+  have sub2: "TE_AbstractTypes env |\<inter>| TE_RuntimeTypeVars env
+                |\<subseteq>| TE_AbstractTypes ?env2 |\<inter>| TE_RuntimeTypeVars ?env2"
+    by auto
+  have gd2: "ghost_datatypes ?env2 = {}"
+    using ghost_datatypes_r_erase_ghost_tyenv[OF sub2] by simp
   have both: "is_well_kinded ?env2 ty \<and> is_runtime_type ?env2 ty"
-    by (rule runtime_type_transfer_erased[OF _ _ _ wk1 rt]) auto
+    by (rule runtime_type_transfer_erased[OF _ _ gd2 wk1 rt]) (auto simp: gd1)
   have "is_well_kinded (?E \<lparr> TE_TypeVars := TE_AbstractTypes ?E |\<union>| T \<rparr>) ty
           = is_well_kinded ?env2 ty"
     by (rule is_well_kinded_cong_env) simp_all
@@ -142,12 +153,13 @@ proof -
                       TE_RuntimeTypeVars :=
                         (TE_AbstractTypes env |\<inter>| TE_RuntimeTypeVars env) |\<union>| {||} \<rparr>) ty"
     using rt by simp
-  from erase_ghost_tyenv_scoped_type(1)[OF wk0 rt0]
+  have fr: "{||} |\<inter>| TE_AbstractTypes env = {||}" by simp
+  from erase_ghost_tyenv_scoped_type(1)[OF wk0 rt0 fr]
   show "is_well_kinded
           ((erase_ghost_tyenv env)
              \<lparr> TE_TypeVars := TE_AbstractTypes (erase_ghost_tyenv env) \<rparr>) ty"
     by simp
-  from erase_ghost_tyenv_scoped_type(2)[OF wk0 rt0]
+  from erase_ghost_tyenv_scoped_type(2)[OF wk0 rt0 fr]
   show "is_runtime_type
           ((erase_ghost_tyenv env)
              \<lparr> TE_TypeVars := TE_AbstractTypes (erase_ghost_tyenv env),
@@ -177,12 +189,13 @@ proof -
     and a7: "tyenv_ctors_consistent env"
     and a8: "tyenv_payloads_well_kinded env"
     and a9: "tyenv_ctor_tyvars_distinct env"
-    and a10: "tyenv_ctors_by_type_consistent env"
-    and a11: "tyenv_fun_types_well_kinded env"
-    and a12: "tyenv_fun_tyvars_distinct env"
-    and a13: "tyenv_fun_ghost_constraint env"
-    and a14: "tyenv_fun_return_types_complete env"
-    and a15: "tyenv_nonghost_payloads_runtime env"
+    and a10: "tyenv_ctor_tyvars_fresh env"
+    and a11: "tyenv_ctors_by_type_consistent env"
+    and a12: "tyenv_fun_types_well_kinded env"
+    and a13: "tyenv_fun_tyvars_distinct env"
+    and a14: "tyenv_fun_tyvars_fresh env"
+    and a15: "tyenv_fun_ghost_constraint env"
+    and a16: "tyenv_fun_return_types_complete env"
     and a17: "tyenv_runtime_tyvars_subset env"
     and a18: "tyenv_abstract_types_subset env"
     and a19: "tyenv_datatypes_nonempty env"
@@ -193,15 +206,30 @@ proof -
     using scope unfolding tyenv_module_scope_def by simp_all
 
   \<comment> \<open>What is in the erased tables is in the original ones, and is not ghost.\<close>
-  have ctorD: "fmlookup (TE_DataCtors env) c = Some (dt, tvs, p)
-               \<and> dt |\<notin>| TE_GhostDatatypes env"
+  have ctorD: "fmlookup (TE_DataCtors env) c = Some (dt, tvs, p)" "dt \<notin> ghost_datatypes env"
     if "fmlookup (TE_DataCtors ?E) c = Some (dt, tvs, p)" for c dt tvs p
-    using that unfolding erase_ghost_tyenv_ctor_lookup .
+    using that unfolding erase_ghost_tyenv_ctor_lookup by simp_all
   have funD: "\<exists>info0. fmlookup (TE_Functions env) f = Some info0
                      \<and> FI_Ghost info0 = NotGhost
                      \<and> info = erase_ghost_funinfo info0"
     if "fmlookup (TE_Functions ?E) f = Some info" for f info
     using that unfolding erase_ghost_tyenv_fun_lookup .
+
+  \<comment> \<open>The type parameters of a constructor or a function do not shadow an
+      abstract type of env, nor one of ?E (those are among env's).\<close>
+  have ctorF: "fset_of_list tvs |\<inter>| TE_AbstractTypes env = {||}"
+    if "fmlookup (TE_DataCtors env) c = Some (dt, tvs, p)" for c dt tvs p
+    using a10 that unfolding tyenv_ctor_tyvars_fresh_def by blast
+  have funF: "fset_of_list (FI_TyArgs info) |\<inter>| TE_AbstractTypes env = {||}"
+    if "fmlookup (TE_Functions env) f = Some info" for f info
+    using a14 that unfolding tyenv_fun_tyvars_fresh_def by blast
+  have freshE: "S |\<inter>| TE_AbstractTypes ?E = {||}"
+    if "S |\<inter>| TE_AbstractTypes env = {||}" for S
+  proof -
+    have "S |\<inter>| (TE_AbstractTypes env |\<inter>| TE_RuntimeTypeVars env) = {||}"
+      using that by (metis fempty_iff finter_iff fsubsetI fsubset_fempty)
+    then show ?thesis by simp
+  qed
 
   have c1: "tyenv_vars_well_kinded ?E"
     unfolding tyenv_vars_well_kinded_def
@@ -282,10 +310,10 @@ proof -
                        TE_RuntimeTypeVars :=
                          (TE_AbstractTypes env |\<inter>| TE_RuntimeTypeVars env)
                            |\<union>| fset_of_list tvs \<rparr>) p"
-      using a15 d unfolding tyenv_nonghost_payloads_runtime_def by blast
+      by (rule tyenv_nonghost_payloads_runtime[OF wf d])
     show "is_well_kinded
             (?E \<lparr> TE_TypeVars := TE_AbstractTypes ?E |\<union>| fset_of_list tvs \<rparr>) p"
-      by (rule erase_ghost_tyenv_scoped_type(1)[OF wk rt])
+      by (rule erase_ghost_tyenv_scoped_type(1)[OF wk rt ctorF[OF d(1)]])
   qed
 
   have c9: "tyenv_ctor_tyvars_distinct ?E"
@@ -298,23 +326,32 @@ proof -
       using a9 d unfolding tyenv_ctor_tyvars_distinct_def by blast
   qed
 
-  have c10: "tyenv_ctors_by_type_consistent ?E"
+  have c10: "tyenv_ctor_tyvars_fresh ?E"
+    unfolding tyenv_ctor_tyvars_fresh_def
+  proof (intro allI impI)
+    fix c dt tvs p
+    assume lkE: "fmlookup (TE_DataCtors ?E) c = Some (dt, tvs, p)"
+    show "fset_of_list tvs |\<inter>| TE_AbstractTypes ?E = {||}"
+      by (rule freshE[OF ctorF[OF ctorD(1)[OF lkE]]])
+  qed
+
+  have c11: "tyenv_ctors_by_type_consistent ?E"
     unfolding tyenv_ctors_by_type_consistent_def
   proof (intro allI impI)
     fix dt ctors c
     assume lkE: "fmlookup (TE_DataCtorsByType ?E) dt = Some ctors"
     hence lk: "fmlookup (TE_DataCtorsByType env) dt = Some ctors"
-      and ng: "dt |\<notin>| TE_GhostDatatypes env"
+      and ng: "dt \<notin> ghost_datatypes env"
       unfolding erase_ghost_tyenv_ctors_by_type_lookup by simp_all
     have orig: "(c \<in> set ctors)
                   = (\<exists>tvs p. fmlookup (TE_DataCtors env) c = Some (dt, tvs, p))"
-      using a10 lk unfolding tyenv_ctors_by_type_consistent_def by blast
+      using a11 lk unfolding tyenv_ctors_by_type_consistent_def by blast
     show "(c \<in> set ctors)
             = (\<exists>tvs p. fmlookup (TE_DataCtors ?E) c = Some (dt, tvs, p))"
       unfolding erase_ghost_tyenv_ctor_lookup using orig ng by blast
   qed
 
-  have c11: "tyenv_fun_types_well_kinded ?E"
+  have c12: "tyenv_fun_types_well_kinded ?E"
     unfolding tyenv_fun_types_well_kinded_def
   proof (intro allI impI)
     fix f info
@@ -331,17 +368,17 @@ proof -
                           (TE_AbstractTypes env |\<inter>| TE_RuntimeTypeVars env) |\<union>| ?T \<rparr>"
     have wks: "(\<forall>ty \<in> fst ` set (FI_TmArgs info0). is_well_kinded ?wenv ty)
                \<and> is_well_kinded ?wenv (FI_ReturnType info0)"
-      using a11 lk0 unfolding tyenv_fun_types_well_kinded_def by blast
+      using a12 lk0 unfolding tyenv_fun_types_well_kinded_def by blast
     have rts: "(\<forall>ty vor. (ty, vor, NotGhost) \<in> set (FI_TmArgs info0)
                            \<longrightarrow> is_runtime_type ?renv ty)
                \<and> is_runtime_type ?renv (FI_ReturnType info0)"
-      using a13 lk0 ng0 unfolding tyenv_fun_ghost_constraint_def Let_def by blast
+      using a15 lk0 ng0 unfolding tyenv_fun_ghost_constraint_def Let_def by blast
     \<comment> \<open>A parameter of the erased signature is a non-ghost parameter of the
         original one.\<close>
     have kept: "\<exists>vor. (ty, vor, NotGhost) \<in> set (FI_TmArgs info0)"
       if "ty \<in> fst ` set (FI_TmArgs info)" for ty
       using that unfolding info_eq by force
-    note S = erase_ghost_tyenv_scoped_type(1)[where env = env and T = ?T]
+    note S = erase_ghost_tyenv_scoped_type(1)[where env = env and T = ?T, OF _ _ funF[OF lk0]]
     show "(\<forall>ty \<in> fst ` set (FI_TmArgs info).
               is_well_kinded
                 (?E \<lparr> TE_TypeVars := TE_AbstractTypes ?E |\<union>| fset_of_list (FI_TyArgs info) \<rparr>)
@@ -368,7 +405,7 @@ proof -
     qed
   qed
 
-  have c12: "tyenv_fun_tyvars_distinct ?E"
+  have c13: "tyenv_fun_tyvars_distinct ?E"
     unfolding tyenv_fun_tyvars_distinct_def
   proof (intro allI impI)
     fix f info
@@ -378,11 +415,24 @@ proof -
         info_eq: "info = erase_ghost_funinfo info0"
       by blast
     have "distinct (FI_TyArgs info0)"
-      using a12 lk0 unfolding tyenv_fun_tyvars_distinct_def by blast
+      using a13 lk0 unfolding tyenv_fun_tyvars_distinct_def by blast
     thus "distinct (FI_TyArgs info)" by (simp add: info_eq)
   qed
 
-  have c13: "tyenv_fun_ghost_constraint ?E"
+  have c14: "tyenv_fun_tyvars_fresh ?E"
+    unfolding tyenv_fun_tyvars_fresh_def
+  proof (intro allI impI)
+    fix f info
+    assume lkE: "fmlookup (TE_Functions ?E) f = Some info"
+    from funD[OF lkE] obtain info0 where
+        lk0: "fmlookup (TE_Functions env) f = Some info0" and
+        info_eq: "info = erase_ghost_funinfo info0"
+      by blast
+    show "fset_of_list (FI_TyArgs info) |\<inter>| TE_AbstractTypes ?E = {||}"
+      unfolding info_eq erase_ghost_funinfo_simps(1) by (rule freshE[OF funF[OF lk0]])
+  qed
+
+  have c15: "tyenv_fun_ghost_constraint ?E"
     unfolding tyenv_fun_ghost_constraint_def Let_def
   proof (intro allI impI)
     fix f info
@@ -404,12 +454,12 @@ proof -
                                |\<union>| fset_of_list tvs \<rparr>"
     have wks: "(\<forall>ty \<in> fst ` set (FI_TmArgs info0). is_well_kinded ?wenv ty)
                \<and> is_well_kinded ?wenv (FI_ReturnType info0)"
-      using a11 lk0 unfolding tyenv_fun_types_well_kinded_def by blast
+      using a12 lk0 unfolding tyenv_fun_types_well_kinded_def by blast
     have rts: "(\<forall>ty vor. (ty, vor, NotGhost) \<in> set (FI_TmArgs info0)
                            \<longrightarrow> is_runtime_type ?renv ty)
                \<and> is_runtime_type ?renv (FI_ReturnType info0)"
-      using a13 lk0 ng0 unfolding tyenv_fun_ghost_constraint_def Let_def by blast
-    note S = erase_ghost_tyenv_scoped_type(2)[where env = env and T = ?T]
+      using a15 lk0 ng0 unfolding tyenv_fun_ghost_constraint_def Let_def by blast
+    note S = erase_ghost_tyenv_scoped_type(2)[where env = env and T = ?T, OF _ _ funF[OF lk0]]
     show "(\<forall>ty vor. (ty, vor, NotGhost) \<in> set (FI_TmArgs info)
                       \<longrightarrow> is_runtime_type (?rE (FI_TyArgs info)) ty)
           \<and> is_runtime_type (?rE (FI_TyArgs info)) (FI_ReturnType info)"
@@ -427,7 +477,7 @@ proof -
     qed
   qed
 
-  have c14: "tyenv_fun_return_types_complete ?E"
+  have c16: "tyenv_fun_return_types_complete ?E"
     unfolding tyenv_fun_return_types_complete_def
   proof (intro allI impI)
     fix f info
@@ -439,35 +489,9 @@ proof -
         info_eq: "info = erase_ghost_funinfo info0"
       by blast
     have "is_complete_type (FI_ReturnType info0)"
-      using a14 lk0 ng0 unfolding tyenv_fun_return_types_complete_def by blast
+      using a16 lk0 ng0 unfolding tyenv_fun_return_types_complete_def by blast
     thus "is_complete_type (FI_ReturnType info)" by (simp add: info_eq)
   qed
-
-  have c15: "tyenv_nonghost_payloads_runtime ?E"
-    unfolding tyenv_nonghost_payloads_runtime_def
-  proof (intro allI impI)
-    fix c dt tvs p
-    assume lkE: "fmlookup (TE_DataCtors ?E) c = Some (dt, tvs, p)"
-    note d = ctorD[OF lkE]
-    have wk: "is_well_kinded
-                (env \<lparr> TE_TypeVars := TE_AbstractTypes env |\<union>| fset_of_list tvs \<rparr>) p"
-      using a8 d unfolding tyenv_payloads_well_kinded_def by blast
-    have rt: "is_runtime_type
-                (env \<lparr> TE_TypeVars := TE_AbstractTypes env |\<union>| fset_of_list tvs,
-                       TE_RuntimeTypeVars :=
-                         (TE_AbstractTypes env |\<inter>| TE_RuntimeTypeVars env)
-                           |\<union>| fset_of_list tvs \<rparr>) p"
-      using a15 d unfolding tyenv_nonghost_payloads_runtime_def by blast
-    show "is_runtime_type
-            (?E \<lparr> TE_TypeVars := TE_AbstractTypes ?E |\<union>| fset_of_list tvs,
-                  TE_RuntimeTypeVars :=
-                    (TE_AbstractTypes ?E |\<inter>| TE_RuntimeTypeVars ?E)
-                      |\<union>| fset_of_list tvs \<rparr>) p"
-      by (rule erase_ghost_tyenv_scoped_type(2)[OF wk rt])
-  qed
-
-  have c16: "tyenv_ghost_datatypes_subset ?E"
-    unfolding tyenv_ghost_datatypes_subset_def by simp
 
   have c17: "tyenv_runtime_tyvars_subset ?E"
     using a17 unfolding tyenv_runtime_tyvars_subset_def by auto
@@ -547,20 +571,20 @@ next
              (apply_subst (fmap_of_list (zip tyvars argTypes)) payloadTy)"
     by (cases ty) (auto split: option.splits prod.splits)
   from CV_Variant.prems(2) ty_eq have
-      ng: "dtName |\<notin>| TE_GhostDatatypes env" and
+      ng: "dtName \<notin> ghost_datatypes env" and
       rts: "list_all (is_runtime_type env) argTypes"
     by simp_all
-  have "tyenv_nonghost_payloads_runtime env"
-    using wf unfolding tyenv_well_formed_def by blast
-  hence payload_rt:
+  have payload_rt:
     "is_runtime_type
        (env \<lparr> TE_TypeVars := TE_AbstractTypes env |\<union>| fset_of_list tyvars,
               TE_RuntimeTypeVars := (TE_AbstractTypes env |\<inter>| TE_RuntimeTypeVars env)
                                      |\<union>| fset_of_list tyvars \<rparr>) payloadTy"
-    using lk ng unfolding tyenv_nonghost_payloads_runtime_def by blast
+    by (rule tyenv_nonghost_payloads_runtime[OF wf lk ng])
+  have fresh: "fset_of_list tyvars |\<inter>| TE_AbstractTypes env = {||}"
+    using wf lk unfolding tyenv_well_formed_def tyenv_ctor_tyvars_fresh_def by blast
   have rt': "is_runtime_type env
                (apply_subst (fmap_of_list (zip tyvars argTypes)) payloadTy)"
-    by (rule apply_subst_specializes_runtime[OF payload_rt rts len])
+    by (rule apply_subst_specializes_runtime[OF payload_rt rts len fresh])
   have pvE: "value_has_type envE payload
                (apply_subst (fmap_of_list (zip tyvars argTypes)) payloadTy)"
     by (rule CV_Variant.IH[OF pv rt'])
@@ -679,10 +703,14 @@ qed
 (* For a function that is not ghost, the body environment of the erased
    function is related to the body environment of the original one. The erased
    function has lost its ghost parameters; in the original body environment
-   they are ghost locals, about which the relation says nothing. *)
+   they are ghost locals, about which the relation says nothing. The
+   function's type parameters must not shadow an abstract type (they never do
+   in a well-formed env), so that the body environment has the ghost set of
+   env. *)
 lemma tyenv_erased_module_body_env:
   assumes ng: "FI_Ghost info = NotGhost"
     and len: "length names = length (FI_TmArgs info)"
+    and fresh: "fset_of_list (FI_TyArgs info) |\<inter>| TE_AbstractTypes env = {||}"
   shows "tyenv_erased (module_body_env_for env names info)
                       (module_body_env_for (erase_ghost_tyenv env)
                          (drop_ghost (param_ghost_flags info) names)
@@ -693,12 +721,13 @@ proof -
              "TE_Datatypes ?B = TE_Datatypes env"
              "TE_DataCtors ?B = TE_DataCtors env"
              "TE_DataCtorsByType ?B = TE_DataCtorsByType env"
-             "TE_GhostDatatypes ?B = TE_GhostDatatypes env"
     by (simp_all add: module_body_env_for_def)
+  have gdB: "ghost_datatypes ?B = ghost_datatypes env"
+    using ng by (simp add: module_body_env_for_def ghost_datatypes_r_scope_eq[OF fresh])
   have f: "tyenv_nonghost_fun ?B = tyenv_nonghost_fun env"
     by (rule ext) (unfold tyenv_nonghost_fun_def flds, rule refl)
   have c: "tyenv_nonghost_ctor ?B = tyenv_nonghost_ctor env"
-    by (rule ext) (unfold tyenv_nonghost_ctor_def flds, rule refl)
+    by (rule ext) (unfold tyenv_nonghost_ctor_def flds gdB, rule refl)
   have g: "TE_GlobalVars ?BE = TE_GlobalVars ?B"
     by (simp add: module_body_env_for_def)
   have tvE: "TE_TypeVars ?BE = TE_TypeVars ?B |\<inter>| TE_RuntimeTypeVars ?B"
@@ -709,18 +738,25 @@ proof -
               = fmmap erase_ghost_funinfo (fmfilter (tyenv_nonghost_fun env) (TE_Functions env))"
     by (simp add: module_body_env_for_def)
   have dE: "TE_Datatypes ?BE
-              = fmfilter (\<lambda>dtName. dtName |\<notin>| TE_GhostDatatypes env) (TE_Datatypes env)"
+              = fmfilter (\<lambda>dtName. dtName \<notin> ghost_datatypes env) (TE_Datatypes env)"
     by (simp add: module_body_env_for_def)
   have cE: "TE_DataCtors ?BE = fmfilter (tyenv_nonghost_ctor env) (TE_DataCtors env)"
     by (simp add: module_body_env_for_def)
   have bE: "TE_DataCtorsByType ?BE
-              = fmfilter (\<lambda>dtName. dtName |\<notin>| TE_GhostDatatypes env)
+              = fmfilter (\<lambda>dtName. dtName \<notin> ghost_datatypes env)
                          (TE_DataCtorsByType env)"
     by (simp add: module_body_env_for_def)
-  have gdE: "TE_GhostDatatypes ?BE = {||}"
-    by (simp add: module_body_env_for_def)
+  have gdE: "ghost_datatypes ?BE = {}"
+  proof -
+    have sub: "TE_AbstractTypes env |\<inter>| TE_RuntimeTypeVars env
+                 |\<subseteq>| TE_AbstractTypes ?BE |\<inter>| TE_RuntimeTypeVars ?BE"
+      by (auto simp: module_body_env_for_def)
+    show ?thesis
+      using ghost_datatypes_r_erase_ghost_tyenv[OF sub]
+      by (simp add: module_body_env_for_def ng)
+  qed
   have decls: "tyenv_decls_erased ?B ?BE"
-    unfolding tyenv_decls_erased_def f c flds
+    unfolding tyenv_decls_erased_def f c gdB flds
     using g tvE rtvE fE dE cE bE gdE by blast
   have ret: "TE_ReturnType ?BE = TE_ReturnType ?B"
     and fg: "TE_FunctionGhost ?BE = TE_FunctionGhost ?B"
@@ -893,9 +929,11 @@ proof -
         by auto
       have wfB: "tyenv_well_formed (module_body_env_for ?env (CF_Args f0) info)"
         by (rule module_body_env_for_well_formed[OF wf fi len])
+      have fresh: "fset_of_list (FI_TyArgs info) |\<inter>| TE_AbstractTypes ?env = {||}"
+        using wf fi unfolding tyenv_well_formed_def tyenv_fun_tyvars_fresh_def by blast
       have relB: "tyenv_erased (module_body_env_for ?env (CF_Args f0) info)
                                (module_body_env_for ?E ?namesE ?infoE)"
-        by (rule tyenv_erased_module_body_env[OF ng len])
+        by (rule tyenv_erased_module_body_env[OF ng len fresh])
       have fnB: "TE_Functions (module_body_env_for ?env (CF_Args f0) info) = ?F"
         by (simp add: module_body_env_for_def)
       from erase_ghost_statement_list_typed[OF t wfB relB, unfolded fnB] obtain envBE where

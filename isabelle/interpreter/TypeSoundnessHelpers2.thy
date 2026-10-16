@@ -185,7 +185,7 @@ proof -
     by (simp add: partial_body_env_for_def body_env_for_def)
   have pEnv_dactors_by_ty: "TE_DataCtorsByType ?pEnv = TE_DataCtorsByType env"
     by (simp add: partial_body_env_for_def body_env_for_def)
-  have pEnv_ghost_dt: "TE_GhostDatatypes ?pEnv = TE_GhostDatatypes env"
+  have pEnv_alloc: "TE_AbstractAllocLevels ?pEnv = TE_AbstractAllocLevels env"
     by (simp add: partial_body_env_for_def body_env_for_def)
   have pEnv_tyvars: "TE_TypeVars ?pEnv = fset_of_list (FI_TyArgs funInfo)"
     by (simp add: partial_body_env_for_def body_env_for_def)
@@ -268,8 +268,7 @@ proof -
                         = fun_info_matches_interp_fun env info' ifn"
       by (rule fun_info_matches_interp_fun_ground_cong_env
                  [OF pEnv_globals pEnv_funs pEnv_datatypes pEnv_dactors
-                     pEnv_dactors_by_ty pEnv_ghost_dt])
-         (simp_all add: abs_empty abs_pEnv partial_body_env_for_def body_env_for_def)
+                     pEnv_dactors_by_ty pEnv_alloc])
     show "case fmlookup (IS_Functions ?clearedState) name of None \<Rightarrow> False
           | Some interpFun \<Rightarrow> fun_info_matches_interp_fun ?pEnv info' interpFun"
       using outer fi_eq by (auto split: option.splits)
@@ -388,7 +387,7 @@ lemma partial_body_env_for_fields:
   "TE_Datatypes (partial_body_env_for env names funInfo k) = TE_Datatypes env"
   "TE_DataCtors (partial_body_env_for env names funInfo k) = TE_DataCtors env"
   "TE_DataCtorsByType (partial_body_env_for env names funInfo k) = TE_DataCtorsByType env"
-  "TE_GhostDatatypes (partial_body_env_for env names funInfo k) = TE_GhostDatatypes env"
+  "TE_AbstractAllocLevels (partial_body_env_for env names funInfo k) = TE_AbstractAllocLevels env"
   "TE_TypeVars (partial_body_env_for env names funInfo k) = fset_of_list (FI_TyArgs funInfo)"
   "TE_RuntimeTypeVars (partial_body_env_for env names funInfo k)
      = (if FI_Ghost funInfo = NotGhost then fset_of_list (FI_TyArgs funInfo) else {||})"

@@ -848,15 +848,12 @@ proof -
     using concl_i[OF linkLI] .
   have c_wt: "core_module_well_typed c"
     using C_wt[OF linkC] .
-  have ghostOK: "\<forall>x \<in> set (map fst intDeps @ map fst implDeps @ [intMod]).
-                   module_ghost_subsets_ok x"
-    using deps_inv intMod_inv unfolding core_module_invariant_def by auto
   have setB: "set (map fst intDeps @ map fst implDeps @ [intMod])
                 = set (map fst intDeps @ map fst implDeps)
                   \<union> set (map fst intDeps @ [intMod])"
     by auto
   have b_wt: "core_module_well_typed b"
-    using link_preserves_well_typed[OF linkC c_wt linkLI li_wt linkB setB ghostOK] .
+    using link_preserves_well_typed[OF linkC c_wt linkLI li_wt linkB setB] .
 
   \<comment> \<open>The face-2 ElabEnv union is well-formed over b's env: each dep delta
      transfers from c's env, and the interface's own delta from li's.\<close>
@@ -1047,42 +1044,54 @@ proof -
     have \<sigma>_eq: "\<sigma> = CM_TypeSubst implMod"
       using merge_substs_empties_snoc[OF merge' b_inputs_subst idemI] .
 
-    \<comment> \<open>The two runtime-relevant env fields of link_result agree with envG.\<close>
+    \<comment> \<open>The env fields the runtime check reads agree between the normalized
+       link_result of the list and the fold's final state env: the runtime
+       type variables, and the four tables the ghost set is computed from
+       (the same union over b's inputs plus implMod, with the same
+       substitution applied; cf. conclusion (x) below).\<close>
     have rtv_b: "TE_RuntimeTypeVars (CM_TyEnv b)
                    = funion_list (map (\<lambda>x. TE_RuntimeTypeVars (CM_TyEnv x)) ?Bs)"
       using bF(6) unfolding b_subst by simp
-    have gd_b: "TE_GhostDatatypes (CM_TyEnv b)
-                  = funion_list (map (\<lambda>x. TE_GhostDatatypes (CM_TyEnv x)) ?Bs)"
-      using bF(16) .
     have splitRT: "funion_list (map (\<lambda>x. TE_RuntimeTypeVars (CM_TyEnv x)) ?Ps)
                      = funion_list (map (\<lambda>x. TE_RuntimeTypeVars (CM_TyEnv x)) ?Bs)
                        |\<union>| TE_RuntimeTypeVars (CM_TyEnv implMod)"
       unfolding Ps_snoc by (rule funion_list_map_snoc)
-    have splitGD: "funion_list (map (\<lambda>x. TE_GhostDatatypes (CM_TyEnv x)) ?Ps)
-                     = funion_list (map (\<lambda>x. TE_GhostDatatypes (CM_TyEnv x)) ?Bs)
-                       |\<union>| TE_GhostDatatypes (CM_TyEnv implMod)"
-      unfolding Ps_snoc by (rule funion_list_map_snoc)
-    have gd_P: "TE_GhostDatatypes (CM_TyEnv (link_result ?Ps \<sigma>))
-                  = funion_list (map (\<lambda>x. TE_GhostDatatypes (CM_TyEnv x)) ?Ps)"
-     and rtv_P: "TE_RuntimeTypeVars (CM_TyEnv (link_result ?Ps \<sigma>))
+    have rtv_P: "TE_RuntimeTypeVars (CM_TyEnv (link_result ?Ps \<sigma>))
                   = funion_list (map (\<lambda>x. TE_RuntimeTypeVars (CM_TyEnv x)) ?Ps)
                     |-| fmdom \<sigma>"
-      unfolding link_result_def by simp_all
-    have gd_G: "TE_GhostDatatypes envG
-                  = TE_GhostDatatypes (CM_TyEnv b)
-                    |\<union>| TE_GhostDatatypes (CM_TyEnv implMod)"
-      unfolding envG_eq module_context_env_def apply_subst_to_tyenv_def by simp
+      unfolding link_result_def by simp
     have rtv_G: "TE_RuntimeTypeVars envG
                    = (TE_RuntimeTypeVars (CM_TyEnv b)
                       |\<union>| TE_RuntimeTypeVars (CM_TyEnv implMod))
                      |-| fmdom (CM_TypeSubst implMod)"
       unfolding envG_eq by (rule module_context_env_tyvar_fields(2))
-    have gd_eq: "TE_GhostDatatypes (CM_TyEnv (link_result ?Ps \<sigma>))
-                   = TE_GhostDatatypes envG"
-      unfolding gd_P splitGD gd_G gd_b ..
     have rtv_eq: "TE_RuntimeTypeVars (CM_TyEnv (link_result ?Ps \<sigma>))
                     = TE_RuntimeTypeVars envG"
       using \<sigma>_eq rtv_G rtv_P rtv_b splitRT by presburger
+    let ?L = "link_result ?Ps \<sigma>"
+    have rtv_N: "TE_RuntimeTypeVars (CM_TyEnv (normalize_module ?L))
+                   = TE_RuntimeTypeVars envG"
+      using rtv_eq by (simp add: normalize_module_def apply_subst_to_tyenv_def)
+    have dt_b: "TE_Datatypes (CM_TyEnv b)
+                  = fmlist_union (map (\<lambda>x. TE_Datatypes (CM_TyEnv x)) ?Bs)"
+      using bF(13) .
+    have dc_b: "TE_DataCtors (CM_TyEnv b)
+                  = fmlist_union (map (\<lambda>x. TE_DataCtors (CM_TyEnv x)) ?Bs)"
+      using bF(14) .
+    have bt_b: "TE_DataCtorsByType (CM_TyEnv b)
+                  = fmlist_union (map (\<lambda>x. TE_DataCtorsByType (CM_TyEnv x)) ?Bs)"
+      using bF(15) .
+    have lv_b: "TE_AbstractAllocLevels (CM_TyEnv b)
+                  = fmlist_union (map (\<lambda>x. TE_AbstractAllocLevels (CM_TyEnv x)) ?Bs)"
+      using bF(19) unfolding b_subst by simp
+    have fields: "alloc_fields_eq (CM_TyEnv (normalize_module ?L)) envG"
+      unfolding alloc_fields_eq_def envG_eq module_context_env_def
+                apply_subst_to_tyenv_def link_result_def normalize_module_def
+      by (simp add: fmlist_union_append fmlist_union_Cons dt_b dc_b bt_b lv_b \<sigma>_eq)
+    have rt_cong: "\<And>ty. is_runtime_type (CM_TyEnv (normalize_module ?L)) ty
+                          = is_runtime_type envG ty"
+      using fields rtv_N unfolding alloc_fields_eq_def
+      by (intro is_runtime_type_cong_fields) blast+
 
     show ?thesis
       unfolding link_runtime_ok_def
@@ -1112,9 +1121,10 @@ proof -
         using splitRT rtv_b n_not_impl by auto
       have rt_G: "is_runtime_type envG ty"
         using rtokG lk n_b unfolding subst_runtime_ok_def by blast
-      have "is_runtime_type (CM_TyEnv (link_result ?Ps \<sigma>)) ty"
-        using rt_G is_runtime_type_cong_env[OF gd_eq rtv_eq] by blast
-      then show "is_runtime_type (CM_TyEnv (link_result ?Ps \<sigma>)) (the (fmlookup \<sigma> n))"
+      have "is_runtime_type (CM_TyEnv (normalize_module ?L)) ty"
+        using rt_G rt_cong by blast
+      then show "is_runtime_type (CM_TyEnv (normalize_module (link_result ?Ps \<sigma>)))
+                   (the (fmlookup \<sigma> n))"
         unfolding \<sigma>_eq using lk by simp
     qed
   qed
@@ -1154,7 +1164,7 @@ proof -
       using bF(15) .
     have lv_b: "TE_AbstractAllocLevels (CM_TyEnv b)
                   = fmlist_union (map (\<lambda>x. TE_AbstractAllocLevels (CM_TyEnv x)) ?Bs)"
-      using bF(20) unfolding b_subst by simp
+      using bF(19) unfolding b_subst by simp
     let ?L = "link_result ?Ps \<sigma>"
     \<comment> \<open>Both sides normalize to the same left-nested union of the inputs'
        tables (fmlist_union_append / fmlist_union_Cons split the input lists;
