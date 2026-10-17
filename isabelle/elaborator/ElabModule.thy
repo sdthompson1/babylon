@@ -53,25 +53,35 @@ fun is_term_decl :: "BabDeclaration \<Rightarrow> bool" where
 (* Module error checks                                                        *)
 (* ========================================================================== *)
 
-(* A term-namespace name (constant or function) *defined* in the interface must
-   not be declared again in the implementation. This must be checked at module
-   level: ElabDecl works on flat declaration lists and records definedness only
-   in the face-local CoreModule, so when elaborating the implementation it
-   cannot distinguish a name the interface merely declared - where a definition
-   is legitimate (the declare-then-define pattern) - from a name the interface
-   already defined. Only the term namespace is affected: type-namespace
-   definitions are fully visible in the typing env, so ElabDecl rejects their
-   cross-face duplicates itself.
+(* Structural checks needed on a module:
 
-   The other face-structure rules need no check here: declaration-only forms in
-   the implementation are rejected by check_impl_definitions, and two
-   declarations of the same name in the same namespace within one face
-   (including a declaration plus a definition) are rejected by
-   sort_declarations' duplicate-name check.
+    - A name cannot be declared or defined more than once in the *same* face
+      of a module. This would be caught by the DepErr_DuplicateName check in
+      sort_declarations.
 
-   Names are compared without regard to const-vs-function kind or ghostness:
-   the mismatched pairs are caught by ElabDecl anyway (via term_name_in_scope);
-   this check merely fires earlier with the same error. *)
+    - If the same name is declared/defined in *both* faces of a module, then
+      it must be a declaration in the interface, and a definition in the
+      implementation (the declare-then-define pattern).
+       - For type names, this is checked by ElabDecl (which can see all type-
+         namespace definitions in the typing env).
+       - For term names, this is checked by check_cross_face_duplicates below
+         (it can't be done in ElabDecl; the latter records "definedness" only
+         in the face-local CoreModule, so it can't distinguish between a name
+         that was defined in the implementation, vs. one that was only declared
+         there).
+
+    - Only definitions, not declarations, are allowed in the implementation
+      face. This is checked by check_impl_definitions, below.
+
+    - Every declaration in the interface must have a corresponding definition
+      in the implementation. This is checked by check_completeness, below.
+
+    - In the declare-then-define pattern, ghostness, function argument types,
+      etc., must match between declaration and definition. This is checked by
+      ElabDecl on a case-by-case basis.
+*)
+
+(* This is the cross-face duplicates check for term names, as described above. *)
 definition check_cross_face_duplicates ::
   "BabDeclaration list \<Rightarrow> BabDeclaration list \<Rightarrow> TypeError list" where
   "check_cross_face_duplicates intf impl =
@@ -82,7 +92,8 @@ definition check_cross_face_duplicates ::
            then [TyErr_DuplicateName (bab_declaration_location d) (get_decl_name d)]
            else []) impl))"
 
-(* The implementation must contain only definitions, not declarations *)
+(* This is the check that the implementation contains only definitions, not
+   declarations, as described above. *)
 definition check_impl_definitions :: "BabDeclaration list \<Rightarrow> TypeError list" where
   "check_impl_definitions impl =
      concat (map (\<lambda>d. if is_decl_only d
@@ -91,8 +102,8 @@ definition check_impl_definitions :: "BabDeclaration list \<Rightarrow> TypeErro
                       else [])
                  impl)"
 
-(* Every declaration in the interface must have a corresponding definition in the
-   implementation *)
+(* This is the check that every declaration has a corresponding definition, as
+   described above. It runs after the CoreModules have been produced. *)
 definition check_completeness ::
   "BabDeclaration list \<Rightarrow> CoreModule \<Rightarrow> CoreModule \<Rightarrow> TypeError list" where
   "check_completeness intf intMod implMod =
@@ -128,138 +139,148 @@ definition check_completeness ::
 (* Declaration dependency sorting                                             *)
 (* ========================================================================== *)
 
-(* The dependency graph (analyze_dependencies_generic) is keyed by plain
-   strings, but Babylon names live in two namespaces, and a term and a type
-   of the same name must get distinct graph nodes. So NsRefs are flattened
-   to graph keys by prefixing a fixed-length namespace tag. The tagging is
-   injective: two equal tagged names have the same first character, hence
-   the same tag, hence the same namespace and the same underlying name. *)
+(* Map NsRef to a graph key, by prepending a tag ("V:" for term names, "T:" for types). *)
 fun tag_ref :: "NsRef \<Rightarrow> string" where
   "tag_ref (NsRef_Term n) = ''V:'' @ n"
 | "tag_ref (NsRef_Type n) = ''T:'' @ n"
 
-(* The namespace-classified name that a declaration defines. *)
+(* Get the name of a BabDeclaration, as an NsRef. *)
 definition decl_ref :: "BabDeclaration \<Rightarrow> NsRef" where
   "decl_ref d = (if is_term_decl d then NsRef_Term (get_decl_name d)
                  else NsRef_Type (get_decl_name d))"
 
-(* The tagged dependency-graph key of a declaration. *)
+(* Get the name of a BabDeclaration, as a graph key. *)
 definition tagged_decl_name :: "BabDeclaration \<Rightarrow> string" where
   "tagged_decl_name d = tag_ref (decl_ref d)"
 
-(* The type variables occurring in the context-declared type(s) of a
-   referenced name: for a term-namespace reference, the declared type of a
-   global, the argument/return types of a function, or the payload type of
-   a data constructor; for a type-namespace reference, the target of a
-   typedef. These are the abstract types a use of the name depends on.
-   Returns bare (untagged) type names; the caller tags them. *)
-definition ctx_declared_type_tyvars :: "CoreTyEnv \<Rightarrow> ElabEnv \<Rightarrow> NsRef \<Rightarrow> string list" where
-  "ctx_declared_type_tyvars env elabEnv r =
+(* Extract all the data ctor names being defined by a list of declarations,
+   each paired with its datatype name. *)
+definition decl_ctor_owners :: "BabDeclaration list \<Rightarrow> (string \<times> string) list" where
+  "decl_ctor_owners ds =
+     concat (map (\<lambda>d. case d of
+                        BabDecl_Datatype dd \<Rightarrow> map (\<lambda>(_, cn, _). (cn, DD_Name dd)) (DD_Ctors dd)
+                      | _ \<Rightarrow> []) ds)"
+
+(* Given a name (NsRef) found in the program text, find the graph key of the
+   BabDeclaration that originally defined that name.
+   For data constructors, this returns the corresponding datatype name (looked up in the
+   "owners" list); for anything else, the name is returned directly. *)
+definition ref_key :: "(string \<times> string) list \<Rightarrow> NsRef \<Rightarrow> string" where
+  "ref_key owners r =
      (case r of
-        NsRef_Term n \<Rightarrow>
-          (case fmlookup (TE_GlobalVars env) n of
-             Some ty \<Rightarrow> type_tyvars_list ty | None \<Rightarrow> [])
-          @ (case fmlookup (TE_Functions env) n of
-               Some info \<Rightarrow> concat (map (type_tyvars_list \<circ> fst) (FI_TmArgs info))
-                            @ type_tyvars_list (FI_ReturnType info)
-             | None \<Rightarrow> [])
-          @ (case fmlookup (TE_DataCtors env) n of
-               Some (_, _, payload) \<Rightarrow> type_tyvars_list payload | None \<Rightarrow> [])
-      | NsRef_Type n \<Rightarrow>
-          (case fmlookup (EE_Typedefs elabEnv) n of
-             Some (_, target) \<Rightarrow> type_tyvars_list target | None \<Rightarrow> []))"
+        NsRef_Term n \<Rightarrow> (case map_of owners n of
+                           Some dt \<Rightarrow> tag_ref (NsRef_Type dt)
+                         | None \<Rightarrow> tag_ref r)
+      | NsRef_Type _ \<Rightarrow> tag_ref r)"
 
-(* The dependencies of a declaration, filtered to the names declared in the
-   same list (declNames): the names it syntactically references, plus the
-   *realization-visibility* edges. A declaration can depend on a realization
-   without mentioning the realized name: "const b: i32 = x;" references only
-   x, yet elaborates correctly only once x's declared type T has been
-   realized. So the declaration also depends on the abstract types occurring
-   in the context-declared types of the names it references - and of the name
-   it itself defines, when it defines a previously-declared name ("const x:
-   i32 = 100;" against interface "const x: T;" references nothing at all, yet
-   its must-match-the-declaration check needs T realized). One level
-   suffices: a realization's own target references the next type name,
-   ordering the realizations among themselves. For names declared in the same
-   list the context lookups return nothing, and ordinary reference edges plus
-   transitivity cover the same ground.
-
-   The declaration's own graph key is excluded from the realization-visibility
-   edges: for a realization "type T = ...", the context lookup of T itself
-   finds T's own typedef entry ([], CoreTy_Var T), whose type variable is T -
-   a spurious self-edge that would make every realization look recursive.
-   (The exclusion compares tagged keys, so a *term* declaration X genuinely
-   depending on an abstract *type* X keeps its edge.) Genuine self-recursion
-   is still detected, through the *syntactic* references (a self-referential
-   declaration necessarily mentions its own name).
-
-   The result is a list of tagged graph keys (see tag_ref); the
-   realization-visibility edges are all type-namespace. *)
+(* Scan a BabDeclaration to find its dependencies, as a list of graph keys.
+   The results are filtered to only those in the given "declNames" set (which is itself
+   a set of graph keys). *)
 definition decl_deps ::
-  "CoreTyEnv \<Rightarrow> ElabEnv \<Rightarrow> string fset \<Rightarrow> BabDeclaration \<Rightarrow> string list" where
-  "decl_deps env elabEnv declNames d =
-     (let refs = bab_declaration_names d;
-          realizationDeps =
-            filter (\<lambda>t. t \<noteq> tagged_decl_name d)
-              (map (tag_ref \<circ> NsRef_Type)
-                (concat (map (ctx_declared_type_tyvars env elabEnv) (decl_ref d # refs))))
-      in filter (\<lambda>n. n |\<in>| declNames) (map tag_ref refs @ realizationDeps))"
+  "(string \<times> string) list \<Rightarrow> string fset \<Rightarrow> BabDeclaration \<Rightarrow> string list" where
+  "decl_deps owners declNames d =
+     filter (\<lambda>n. n |\<in>| declNames) (map (ref_key owners) (bab_declaration_names d))"
+
+(* Helper function used by sort_declarations. This takes the ctxDecls and decls lists
+   from that function, and returns a combined list, containing (True, d) for items from
+   decls, and (False, d) for items from ctxDecls that are not also in decls. The idea
+   is that (in "implementation" mode) the dependency graph should also contain nodes
+   from the interface, but those nodes are tagged False so that they can be filtered
+   out later. *)
+definition sort_items ::
+  "BabDeclaration list \<Rightarrow> BabDeclaration list \<Rightarrow> (bool \<times> BabDeclaration) list" where
+  "sort_items ctxDecls decls =
+     (let ownNames = set (map tagged_decl_name decls)
+      in map (Pair True) decls
+         @ map (Pair False) (filter (\<lambda>c. tagged_decl_name c \<notin> ownNames) ctxDecls))"
+
+(* Given a graph item (bool \<times> BabDeclaration, see sort_items), this calculates its
+   dependencies, as a list of graph keys.
+
+   A "decls" item also gets the dependencies of its corresponding "ctxDecls" item
+   (e.g. if we have "const x: i32 = y;" in the impl, and "const x: T;" in the interface,
+   then "x" depends on both "y", from the implementation, and "T", from the interface). *)
+definition item_deps ::
+  "(string \<times> string) list \<Rightarrow> string fset \<Rightarrow> BabDeclaration list
+   \<Rightarrow> bool \<times> BabDeclaration \<Rightarrow> string list" where
+  "item_deps owners declNames ctxDecls item =
+     (let deps = decl_deps owners declNames;
+          (own, d) = item
+      in deps d
+         @ (if own
+            then concat (map deps (filter (\<lambda>c. tagged_decl_name c = tagged_decl_name d) ctxDecls))
+            else []))"
+
+(* The errors of a result (none, if it is a success). *)
+fun result_errors :: "'e list + 'a \<Rightarrow> 'e list" where
+  "result_errors (Inl errs) = errs"
+| "result_errors (Inr _) = []"
 
 (* This goes through the SCCs (from Kosaraju) and fishes out the declarations in
-   dependency order. Errors are checked for:
+   dependency order. Only the items tagged True are kept (see sort_items).
+   Errors are checked:
     - A non-singleton SCC is always an error (mutual recursion).
     - A singleton SCC is an error if the name depends upon itself (self-recursion). *)
 fun check_sccs ::
-  "(BabDeclaration \<Rightarrow> string list) \<Rightarrow> BabDeclaration list list
+  "((bool \<times> BabDeclaration) \<Rightarrow> string list) \<Rightarrow> (bool \<times> BabDeclaration) list list
    \<Rightarrow> TypeError list + BabDeclaration list" where
   "check_sccs deps [] = Inr []"
 | "check_sccs deps ([] # rest) = check_sccs deps rest"
-| "check_sccs deps ([d] # rest) =
-    (if tagged_decl_name d \<in> set (deps d)
-     then Inl [TyErr_RecursiveDeclarations (bab_declaration_location d) [get_decl_name d]]
+| "check_sccs deps ([(own, d)] # rest) =
+    (if tagged_decl_name d \<in> set (deps (own, d))
+     then Inl (TyErr_RecursiveDeclarations (bab_declaration_location d) [get_decl_name d]
+               # result_errors (check_sccs deps rest))
      else (case check_sccs deps rest of
              Inl errs \<Rightarrow> Inl errs
-           | Inr ds \<Rightarrow> Inr (d # ds)))"
+           | Inr ds \<Rightarrow> Inr (if own then d # ds else ds)))"
 | "check_sccs deps (scc # rest) =
-    Inl [TyErr_RecursiveDeclarations (bab_declaration_location (hd scc))
-           (map get_decl_name scc)]"
+    Inl (TyErr_RecursiveDeclarations
+           (bab_declaration_location
+              (case find fst scc of Some (_, d) \<Rightarrow> d | None \<Rightarrow> snd (hd scc)))
+           (map (get_decl_name \<circ> snd) scc)
+         # result_errors (check_sccs deps rest))"
 
-(* The main function to sort the BabDeclarations into dependency order.
+(* The main function to sort BabDeclarations into dependency order.
    Calls analyze_dependencies_generic (which itself calls Kosaraju) to find SCCs, then
    uses check_sccs to rule out dependency cycles (recursive declarations are not currently
    permitted).
 
-   This is also where duplicate names within a face are detected: the dependency
-   graph is keyed by namespace-tagged declaration name (tagged_decl_name), so
-   analyze_dependencies_generic reports DepErr_DuplicateName for any name
-   declared twice in the same namespace in the list. A term and a type of the
-   same name (e.g. "datatype X" + "const X") get distinct graph keys and are
-   accepted. *)
+   This is called twice per module: once for the interface, and once for the implementation.
+   In "interface" mode, ctxDecls is empty and decls contains the interface declarations.
+   In "implementation" mode, ctxDecls contains the interface declarations, and decls the
+   implementation ones.
+   This allows cycles through both faces to be detected, e.g. "type T; datatype D = D(T);"
+   in the interface, with "type T = D;" in the implementation.
+   Note that only the declarations from decls will be returned.
+
+   As was mentioned above, this is also where duplicate names within the same face are
+   detected. *)
 definition sort_declarations ::
-  "CoreTyEnv \<Rightarrow> ElabEnv \<Rightarrow> BabDeclaration list
-   \<Rightarrow> TypeError list + BabDeclaration list" where
-  "sort_declarations env elabEnv decls =
+  "BabDeclaration list \<Rightarrow> BabDeclaration list \<Rightarrow> TypeError list + BabDeclaration list" where
+  "sort_declarations ctxDecls decls =
      (case decls of
         [] \<Rightarrow> Inr []
       | d0 # _ \<Rightarrow>
-          (let declNames = fset_of_list (map tagged_decl_name decls);
-               deps = decl_deps env elabEnv declNames
-           in case analyze_dependencies_generic decls tagged_decl_name deps of
+          (let items = sort_items ctxDecls decls;
+               declNames = fset_of_list (map (tagged_decl_name \<circ> snd) items);
+               owners = decl_ctor_owners (map snd items);
+               deps = item_deps owners declNames ctxDecls
+           in case analyze_dependencies_generic items (tagged_decl_name \<circ> snd) deps of
                 Inl (DepErr_DuplicateName dup) \<Rightarrow>
-                  \<comment> \<open>The find cannot fail: the duplicate (tagged) name comes from decls itself.
-                     The error reports the untagged name.\<close>
-                  (let d = the (find (\<lambda>d. tagged_decl_name d = dup) decls)
+                  \<comment> \<open>The find cannot fail: the duplicate (tagged) name comes from the items
+                     themselves. The error reports the untagged name.\<close>
+                  (let d = the (find (\<lambda>d. tagged_decl_name d = dup) (map snd items))
                    in Inl [TyErr_DuplicateName (bab_declaration_location d) (get_decl_name d)])
               | Inl (DepErr_DependencyNotFound _ _) \<Rightarrow>
                   \<comment> \<open>Shouldn't happen: decl_deps filters its result to declNames\<close>
                   Inl [TyErr_DependencyAnalysisUnexpectedFailure (bab_declaration_location d0)]
               | Inr sccs \<Rightarrow> check_sccs deps sccs))"
 
-(* check_sccs returns exactly the declarations of its SCC list, concatenated
-   in topological order: the multiset is preserved. *)
+(* check_sccs returns exactly the True-tagged declarations of its SCC list,
+   concatenated in topological order: the multiset is preserved. *)
 lemma check_sccs_mset:
   assumes "check_sccs deps sccs = Inr ds"
-  shows "mset ds = mset (concat sccs)"
+  shows "mset ds = mset (map snd (filter fst (concat sccs)))"
   using assms
 proof (induction deps sccs arbitrary: ds rule: check_sccs.induct)
   case 1
@@ -268,25 +289,32 @@ next
   case (2 deps rest)
   then show ?case by simp
 next
-  case (3 deps d rest)
-  from "3.prems" have cond: "tagged_decl_name d \<notin> set (deps d)"
+  case (3 deps own d rest)
+  from "3.prems" have cond: "tagged_decl_name d \<notin> set (deps (own, d))"
     by (auto split: if_splits)
   from "3.prems" cond obtain ds' where
-    rest_ok: "check_sccs deps rest = Inr ds'" and ds_eq: "ds = d # ds'"
+    rest_ok: "check_sccs deps rest = Inr ds'" and ds_eq: "ds = (if own then d # ds' else ds')"
     by (auto split: sum.splits)
+  have ih: "mset ds' = mset (map snd (filter fst (concat rest)))"
+    using "3.IH" cond rest_ok by blast
   show ?case
-    using "3.IH"[OF cond rest_ok] by (simp add: ds_eq)
+    using ih by (cases own) (simp_all add: ds_eq)
 next
   case 4
   then show ?case by auto
 qed
 
-(* Hence sort_declarations returns a permutation of its input: the dependency
-   analysis emits every input declaration exactly once across its SCCs
+(* The True-tagged items of sort_items are exactly decls. *)
+lemma sort_items_own:
+  "map snd (filter fst (sort_items ctxDecls decls)) = decls"
+  by (simp add: sort_items_def Let_def filter_map comp_def)
+
+(* Hence sort_declarations returns a permutation of decls: the dependency
+   analysis emits every item exactly once across its SCCs
    (analyze_dependencies_generic_permutation), and check_sccs concatenates
-   them. *)
+   the True-tagged ones, which are exactly decls (sort_items_own). *)
 lemma sort_declarations_mset:
-  assumes ok: "sort_declarations env elabEnv decls = Inr sortedDecls"
+  assumes ok: "sort_declarations ctxDecls decls = Inr sortedDecls"
   shows "mset sortedDecls = mset decls"
 proof (cases decls)
   case Nil
@@ -295,16 +323,20 @@ proof (cases decls)
   then show ?thesis using Nil by simp
 next
   case (Cons d ds)
-  let ?deps = "decl_deps env elabEnv (fset_of_list (map tagged_decl_name decls))"
+  let ?items = "sort_items ctxDecls decls"
+  let ?deps = "item_deps (decl_ctor_owners (map snd ?items))
+                 (fset_of_list (map (tagged_decl_name \<circ> snd) ?items)) ctxDecls"
   obtain sccs where
-    ana: "analyze_dependencies_generic decls tagged_decl_name ?deps = Inr sccs" and
+    ana: "analyze_dependencies_generic ?items (tagged_decl_name \<circ> snd) ?deps = Inr sccs" and
     chk: "check_sccs ?deps sccs = Inr sortedDecls"
     using ok unfolding sort_declarations_def Let_def
     by (auto simp: Cons split: sum.splits DependencyError.splits)
-  have "mset sortedDecls = mset (concat sccs)"
+  have "mset sortedDecls = mset (map snd (filter fst (concat sccs)))"
     by (rule check_sccs_mset[OF chk])
+  also have "\<dots> = mset (map snd (filter fst ?items))"
+    by (simp only: mset_map mset_filter analyze_dependencies_generic_permutation[OF ana])
   also have "\<dots> = mset decls"
-    by (rule analyze_dependencies_generic_permutation[OF ana])
+    by (simp only: sort_items_own)
   finally show ?thesis .
 qed
 
@@ -386,14 +418,14 @@ datatype ElabModuleError =
    declarations into dependency order, elaborate them (see ElabDecl.thy),
    and return the face's unlinked CoreModule paired with its delta ElabEnv. *)
 definition elab_face ::
-  "CompiledModule list \<Rightarrow> string fset \<Rightarrow> BabDeclaration list
+  "CompiledModule list \<Rightarrow> string fset \<Rightarrow> BabDeclaration list \<Rightarrow> BabDeclaration list
    \<Rightarrow> ElabModuleError + CompiledModule" where
-  "elab_face deps ownAbstract decls =
+  "elab_face deps ownAbstract ctxDecls decls =
      (case link_modules (map fst deps) of
         Inl le \<Rightarrow> Inl (EM_LinkError le)
       | Inr ctx \<Rightarrow>
           (let e = elabenv_union (map snd deps)
-           in case sort_declarations (CM_TyEnv ctx) e decls of
+           in case sort_declarations ctxDecls decls of
                 Inl errs \<Rightarrow> Inl (EM_TypeErrors errs)
               | Inr sortedDecls \<Rightarrow>
                   (case elab_declarations (CM_TyEnv ctx) e ownAbstract
@@ -409,12 +441,12 @@ definition elab_module ::
     (let checkErrs = check_cross_face_duplicates (Mod_Interface bm) (Mod_Implementation bm)
                      @ check_impl_definitions (Mod_Implementation bm)
      in if checkErrs \<noteq> [] then Inl (EM_TypeErrors checkErrs)
-        else case elab_face intDeps {||} (Mod_Interface bm) of
+        else case elab_face intDeps {||} [] (Mod_Interface bm) of
                Inl err \<Rightarrow> Inl err
              | Inr (intMod, intEE) \<Rightarrow>
                  (case elab_face (intDeps @ implDeps @ [(intMod, intEE)])
                          (TE_TypeVars (CM_TyEnv intMod))
-                         (Mod_Implementation bm) of
+                         (Mod_Interface bm) (Mod_Implementation bm) of
                     Inl err \<Rightarrow> Inl err
                   | Inr (implMod, implEE) \<Rightarrow>
                       (let compErrs = check_completeness (Mod_Interface bm) intMod implMod

@@ -552,11 +552,10 @@ qed
    sorted declaration list and the fold result, and states the defining
    equation of the returned ElabEnv delta. *)
 lemma elab_face_Inr_elim:
-  assumes ok: "elab_face deps ownAbstract decls = Inr (m, ee)"
+  assumes ok: "elab_face deps ownAbstract ctxDecls decls = Inr (m, ee)"
   obtains ctx sortedDecls foldEnv where
     "link_modules (map fst deps) = Inr ctx"
-    "sort_declarations (CM_TyEnv ctx) (elabenv_union (map snd deps)) decls
-       = Inr sortedDecls"
+    "sort_declarations ctxDecls decls = Inr sortedDecls"
     "elab_declarations (CM_TyEnv ctx) (elabenv_union (map snd deps))
        ownAbstract (CM_GlobalVars ctx) sortedDecls = Inr (m, foldEnv)"
     "ee = elabenv_delta (elabenv_union (map snd deps)) foldEnv"
@@ -575,15 +574,12 @@ lemma elab_module_Inr_elim:
     "check_impl_definitions (Mod_Implementation bm) = []"
     "check_completeness (Mod_Interface bm) intMod implMod = []"
     "link_modules (map fst intDeps) = Inr a"
-    "sort_declarations (CM_TyEnv a) (elabenv_union (map snd intDeps)) (Mod_Interface bm)
-       = Inr sortedInt"
+    "sort_declarations [] (Mod_Interface bm) = Inr sortedInt"
     "elab_declarations (CM_TyEnv a) (elabenv_union (map snd intDeps)) {||}
        (CM_GlobalVars a) sortedInt = Inr (intMod, intFoldEnv)"
     "intEE = elabenv_delta (elabenv_union (map snd intDeps)) intFoldEnv"
     "link_modules (map fst intDeps @ map fst implDeps @ [intMod]) = Inr b"
-    "sort_declarations (CM_TyEnv b)
-       (elabenv_union (map snd intDeps @ map snd implDeps @ [intEE]))
-       (Mod_Implementation bm) = Inr sortedImpl"
+    "sort_declarations (Mod_Interface bm) (Mod_Implementation bm) = Inr sortedImpl"
     "elab_declarations (CM_TyEnv b)
        (elabenv_union (map snd intDeps @ map snd implDeps @ [intEE]))
        (TE_TypeVars (CM_TyEnv intMod)) (CM_GlobalVars b) sortedImpl
@@ -700,15 +696,13 @@ proof -
     implDefs: "check_impl_definitions (Mod_Implementation bm) = []" and
     complete: "check_completeness (Mod_Interface bm) intMod implMod = []" and
     linkA: "link_modules (map fst intDeps) = Inr a" and
-    sortInt: "sort_declarations (CM_TyEnv a) (elabenv_union (map snd intDeps))
-                (Mod_Interface bm) = Inr sortedInt" and
+    sortInt: "sort_declarations [] (Mod_Interface bm) = Inr sortedInt" and
     elabInt: "elab_declarations (CM_TyEnv a) (elabenv_union (map snd intDeps))
                 {||} (CM_GlobalVars a) sortedInt = Inr (intMod, intFoldEnv)" and
     intEE_eq: "intEE = elabenv_delta (elabenv_union (map snd intDeps)) intFoldEnv" and
     linkB: "link_modules (map fst intDeps @ map fst implDeps @ [intMod]) = Inr b" and
-    sortImpl: "sort_declarations (CM_TyEnv b)
-                 (elabenv_union (map snd intDeps @ map snd implDeps @ [intEE]))
-                 (Mod_Implementation bm) = Inr sortedImpl" and
+    sortImpl: "sort_declarations (Mod_Interface bm) (Mod_Implementation bm)
+                 = Inr sortedImpl" and
     elabImpl: "elab_declarations (CM_TyEnv b)
                  (elabenv_union (map snd intDeps @ map snd implDeps @ [intEE]))
                  (TE_TypeVars (CM_TyEnv intMod)) (CM_GlobalVars b) sortedImpl
@@ -1373,15 +1367,13 @@ proof -
     implDefs: "check_impl_definitions (Mod_Implementation bm) = []" and
     complete: "check_completeness (Mod_Interface bm) intMod implMod = []" and
     linkA: "link_modules (map fst intDeps) = Inr a" and
-    sortInt: "sort_declarations (CM_TyEnv a) (elabenv_union (map snd intDeps))
-                (Mod_Interface bm) = Inr sortedInt" and
+    sortInt: "sort_declarations [] (Mod_Interface bm) = Inr sortedInt" and
     elabInt: "elab_declarations (CM_TyEnv a) (elabenv_union (map snd intDeps))
                 {||} (CM_GlobalVars a) sortedInt = Inr (intMod, intFoldEnv)" and
     intEE_eq: "intEE = elabenv_delta (elabenv_union (map snd intDeps)) intFoldEnv" and
     linkB: "link_modules (map fst intDeps @ map fst implDeps @ [intMod]) = Inr b" and
-    sortImpl: "sort_declarations (CM_TyEnv b)
-                 (elabenv_union (map snd intDeps @ map snd implDeps @ [intEE]))
-                 (Mod_Implementation bm) = Inr sortedImpl" and
+    sortImpl: "sort_declarations (Mod_Interface bm) (Mod_Implementation bm)
+                 = Inr sortedImpl" and
     elabImpl: "elab_declarations (CM_TyEnv b)
                  (elabenv_union (map snd intDeps @ map snd implDeps @ [intEE]))
                  (TE_TypeVars (CM_TyEnv intMod)) (CM_GlobalVars b) sortedImpl
