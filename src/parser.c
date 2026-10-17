@@ -1225,9 +1225,12 @@ static struct Term * parse_atomic_expr(struct ParserState *state, bool allow_lbr
                 return NULL;
             }
             advance(state);
+            // Save and restore the flag, so that in a nested term such as
+            // old(old(x) + y), y is still treated as being inside 'old'.
+            bool saved_old = state->old;
             state->old = true;
             struct Term *term = parse_paren_term(state);
-            state->old = false;
+            state->old = saved_old;
             return term;
         }
 
