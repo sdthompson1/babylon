@@ -1,5 +1,5 @@
 theory BabLoader
-  imports Main "HOL-Library.Char_ord" "HOL-Library.FSet" "../bab/Location" "../bab/BabSyntax" "BabLexer" "BabParser"
+  imports "HOL-Library.FSet" "../bab/Location" "../bab/BabSyntax" "BabLexer" "BabParser"
 begin
 
 (*-----------------------------------------------------------------------------*)
@@ -21,7 +21,6 @@ datatype LoaderError =
   | LoaderError_WrongModuleName string string  (* modname in RawPackage list, modname in parsed module *)
   | LoaderError_LexError Location
   | LoaderError_ParseError Location
-  | LoaderError_PostParseError Location PostParseError
   | LoaderError_ImportNotFound Location string   (* loc, name of the module that wasn't found *)
   | LoaderError_AmbiguousImport Location string "string list"  (* loc, imported module, list of packages containing the module *)
 
@@ -104,17 +103,12 @@ fun parse_module_text :: "string \<Rightarrow> string \<Rightarrow> string \<Rig
       | LR_Success tokens \<Rightarrow>
         (case run_parser parse_module (pkgName @ '':'' @ modName @ ''.b'') tokens of
           PR_Success module _ _ \<Rightarrow>
-            (let postParseErrors = map (\<lambda>(loc, ppe). LoaderError_PostParseError loc ppe) (post_parse_module module);
-                 wrongModNameError = if Mod_Name module \<noteq> modName then
-                                       [LoaderError_WrongModuleName modName (Mod_Name module)]
-                                     else [];
-                 allErrors = postParseErrors @ wrongModNameError
-             in if allErrors = [] then
-                  let fullModName = pkgName @ '':'' @ modName;
-                      renamedModule = module \<lparr> Mod_Name := fullModName \<rparr>
-                  in Inr renamedModule
-                else
-                  Inl allErrors)
+            (if Mod_Name module \<noteq> modName then
+               Inl [LoaderError_WrongModuleName modName (Mod_Name module)]
+             else
+               let fullModName = pkgName @ '':'' @ modName;
+                   renamedModule = module \<lparr> Mod_Name := fullModName \<rparr>
+               in Inr renamedModule)
           | PR_Error parseLoc \<Rightarrow> Inl [LoaderError_ParseError parseLoc]))"
 
 (*-----------------------------------------------------------------------------*)

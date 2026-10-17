@@ -1,5 +1,5 @@
 theory BabRenamer
-  imports Main "HOL-Library.Char_ord" "HOL-Library.List_Lexorder" "HOL-Library.FSet" "HOL-Library.Finite_Map" "../bab/Location" "../bab/BabSyntax"
+  imports "HOL-Library.List_Lexorder" "HOL-Library.FSet" "HOL-Library.Finite_Map" "../bab/Location" "../bab/BabSyntax"
 begin
 
 (*-----------------------------------------------------------------------------*)
@@ -16,6 +16,9 @@ datatype RenameError =
   | RenameError_DuplicateDefinition Location string  (* variable 'x' is already defined in this scope *)
   | RenameError_ReturnVarOutsidePostcond Location  (* 'return' used as variable, outside postcondition *)
   | RenameError_ReturnVarVoidFunction Location  (* 'return' used as variable, in postcondition of void function *)
+  | RenameError_OldOutsidePostcond Location  (* 'old' used outside a postcondition *)
+  | RenameError_OldUsedWithReturn Location  (* 'return' used inside 'old' *)
+  | RenameError_DataCtorNotCapitalized Location string  (* data constructor name doesn't begin with a capital letter *)
 
 
 (*-----------------------------------------------------------------------------*)
@@ -34,6 +37,7 @@ record RenameEnv =
   RE_GlobalTypeNames :: "(string, string list) fmap"
   RE_GlobalTermNames :: "(string, string list) fmap"
   RE_InPostcondition :: bool
+  RE_InOld :: bool
   RE_CurrentFunctionReturnType :: "BabType option"
 
 
@@ -226,6 +230,7 @@ definition empty_renamer_env :: RenameEnv
                                RE_GlobalTypeNames = fmempty,
                                RE_GlobalTermNames = fmempty,
                                RE_InPostcondition = False,
+                               RE_InOld = False,
                                RE_CurrentFunctionReturnType = None \<rparr>"
 
 (* GlobalName construction function *)
@@ -472,6 +477,8 @@ and rename_dimension :: "RenameEnv \<Rightarrow> BabDimension \<Rightarrow>
     (if name = ''return'' then
       (if \<not> RE_InPostcondition env then
         ([RenameError_ReturnVarOutsidePostcond loc], BabTm_Name loc ''#Error'' [])
+      else if RE_InOld env then
+        ([RenameError_OldUsedWithReturn loc], BabTm_Name loc ''#Error'' [])
       else if RE_CurrentFunctionReturnType env = None then
         ([RenameError_ReturnVarVoidFunction loc], BabTm_Name loc ''#Error'' [])
       else
@@ -588,9 +595,11 @@ and rename_dimension :: "RenameEnv \<Rightarrow> BabDimension \<Rightarrow>
       (errs, newTm) \<Rightarrow>
         (errs, BabTm_Allocated loc newTm))"
 | "rename_term env (BabTm_Old loc tm) =
-    (case rename_term env tm of
+    (case rename_term (env \<lparr> RE_InOld := True \<rparr>) tm of
       (errs, newTm) \<Rightarrow>
-        (errs, BabTm_Old loc newTm))"
+        (if RE_InPostcondition env then errs
+         else RenameError_OldOutsidePostcond loc # errs,
+         BabTm_Old loc newTm))"
 
 (* Rename an attribute. Return errors and a renamed attribute. *)
 fun rename_attribute :: "RenameEnv \<Rightarrow> BabAttribute \<Rightarrow>
@@ -775,11 +784,13 @@ fun rename_declaration :: "string \<Rightarrow> RenameEnv \<Rightarrow> BabDecla
          (tyArgErrs, newEnv) = add_local_type_names loc tyArgNames env;
 
          ctorResults = map (\<lambda>(loc, name, optTy).
-                             let newCtorName = fullModName @ ''.'' @ name
+                             let newCtorName = fullModName @ ''.'' @ name;
+                                 caseErrs = (if begins_with_capital name then []
+                                             else [RenameError_DataCtorNotCapitalized loc name])
                              in case optTy of
-                               None \<Rightarrow> ([], (loc, newCtorName, None))
+                               None \<Rightarrow> (caseErrs, (loc, newCtorName, None))
                                | Some ty \<Rightarrow> let (errs, newTy) = rename_type newEnv ty
-                                            in (errs, (loc, newCtorName, Some newTy))) (DD_Ctors dd);
+                                            in (caseErrs @ errs, (loc, newCtorName, Some newTy))) (DD_Ctors dd);
          ctorErrs = concat (map fst ctorResults);
          newCtors = map snd ctorResults;
 

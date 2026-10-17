@@ -1,5 +1,6 @@
 theory BabSyntax
   imports "../util/IntRange" "../util/Quantifier" Location "HOL-Library.Finite_Map"
+    "HOL-Library.Char_ord"
 begin
 
 (* Abstract syntax for the Babylon language *)
@@ -243,10 +244,6 @@ fun bab_declaration_location :: "BabDeclaration \<Rightarrow> Location" where
 | "bab_declaration_location (BabDecl_Datatype dd) = DD_Location dd"
 | "bab_declaration_location (BabDecl_Typedef dt) = DT_Location dt"
 
-fun array_dim_terms :: "BabDimension \<Rightarrow> BabTerm list" where
-  "array_dim_terms (BabDim_Fixed tm) = [tm]"
-| "array_dim_terms _ = []"
-
 fun get_decl_name :: "BabDeclaration \<Rightarrow> string"
   where
 "get_decl_name (BabDecl_Const dc) = DC_Name dc"
@@ -260,6 +257,12 @@ fun is_type_decl :: "BabDeclaration \<Rightarrow> bool"
 | "is_type_decl (BabDecl_Function _) = False"
 | "is_type_decl (BabDecl_Datatype _) = True"
 | "is_type_decl (BabDecl_Typedef _) = True"
+
+(* Data constructor names must begin with a capital letter. (The parser relies on this to tell
+   constructor patterns apart from variable patterns.) *)
+fun begins_with_capital :: "string \<Rightarrow> bool" where
+  "begins_with_capital [] = False"
+| "begins_with_capital (c # cs) = (CHR ''A'' \<le> c \<and> c \<le> CHR ''Z'')"
 
 
 (* Size functions *)
@@ -332,49 +335,6 @@ lemma bab_pattern_smaller_than_list:
 lemma bab_pattern_smaller_than_fieldlist:
   "(name, p) \<in> set field_pats \<Longrightarrow> bab_pattern_size p < Suc (sum_list (map (bab_pattern_size \<circ> snd) field_pats))"
   by (induction field_pats, auto)
-
-lemma bab_type_smaller_than_list:
-  "ty \<in> set types \<Longrightarrow> bab_type_size ty < Suc (sum_list (map bab_type_size types))"
-  by (induction types, auto)
-
-lemma bab_type_smaller_than_fieldlist:
-  "(name, ty) \<in> set fieldTypes \<Longrightarrow> 
-    bab_type_size ty < Suc (sum_list (map (bab_type_size \<circ> snd) fieldTypes))"
-  by (induction fieldTypes, auto)
-
-lemma bab_term_smaller_than_list:
-  "tm \<in> set terms \<Longrightarrow> bab_term_size tm < Suc (sum_list (map bab_term_size terms))"
-  by (induction terms, auto)
-
-lemma bab_term_smaller_than_fieldlist:
-  "(name, tm) \<in> set flds \<Longrightarrow>
-    bab_term_size tm < Suc (sum_list (map (bab_term_size \<circ> snd) flds))"
-  by (induction flds, auto)
-
-lemma bab_term_smaller_than_arraydim:
-  assumes "dim \<in> set dims"
-    and "tm \<in> set (array_dim_terms dim)"
-  shows "bab_term_size tm < Suc (sum_list (map bab_dimension_size dims))"
-using assms
-proof (induction dims)
-  case Nil
-  then show ?case by auto
-next
-  case (Cons dim1 dimRest)
-  then show ?case proof (cases "dim = dim1")
-    case True
-    have "array_dim_terms dim = [tm]" using assms(2)
-      by (metis array_dim_terms.elims distinct.simps(2) distinct_singleton set_ConsD)
-    hence "bab_dimension_size dim1 = 1 + bab_term_size tm"
-      by (metis True array_dim_terms.elims bab_dimension_size.simps(1) list.inject
-          not_Cons_self2)
-    thus ?thesis
-      by simp
-  next
-    case False
-    then show ?thesis using Cons by auto
-  qed
-qed
 
 
 end

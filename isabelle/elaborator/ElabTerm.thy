@@ -1238,7 +1238,7 @@ where
          if \<not> is_complete_type tmTy then Inl [TyErr_IncompleteArrayType loc]
          else Inr (CoreTm_Allocated tmTy newTm, CoreTy_Bool, next_mv'))"
 
-  (* Old: never reached. The parser allows `old` only in postconditions, and
+  (* Old: never reached. The renamer allows `old` only in postconditions, and
      BabContractRename removes it from those before they are elaborated. *)
 | "elab_term env elabEnv ghost (BabTm_Old loc tm) next_mv =
     Inl [TyErr_UnexpectedOld loc]"

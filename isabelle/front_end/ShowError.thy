@@ -117,16 +117,6 @@ fun binop_to_string :: "BabBinop \<Rightarrow> string" where
 (* Front-end (loader and renamer) errors *)
 (*-----------------------------------------------------------------------------*)
 
-fun post_parse_error_to_string :: "PostParseError \<Rightarrow> string" where
-  "post_parse_error_to_string PPE_MixedArrayDimension =
-     ''array dimensions must be all fixed, all unsized, or all allocatable''"
-| "post_parse_error_to_string PPE_OldOutsidePostcondition =
-     quote ''old'' @ '' used outside a postcondition''"
-| "post_parse_error_to_string PPE_OldUsedWithReturn =
-     quote ''old'' @ '' cannot be applied to '' @ quote ''return''"
-| "post_parse_error_to_string PPE_DataCtorWrongCase =
-     ''data constructor name has incorrect case''"
-
 fun loader_error_to_string :: "LoaderError \<Rightarrow> string" where
   "loader_error_to_string (LoaderError_RootModuleNotFound pkgName modName) =
      ''root module '' @ quote modName @ '' not found in package '' @ quote pkgName"
@@ -141,8 +131,6 @@ fun loader_error_to_string :: "LoaderError \<Rightarrow> string" where
      loc_prefix loc @ ''lexical error''"
 | "loader_error_to_string (LoaderError_ParseError loc) =
      loc_prefix loc @ ''parse error''"
-| "loader_error_to_string (LoaderError_PostParseError loc err) =
-     loc_prefix loc @ post_parse_error_to_string err"
 | "loader_error_to_string (LoaderError_ImportNotFound loc modName) =
      loc_prefix loc @ ''imported module '' @ quote modName @ '' not found''"
 | "loader_error_to_string (LoaderError_AmbiguousImport loc modName pkgNames) =
@@ -172,6 +160,13 @@ fun rename_error_to_string :: "RenameError \<Rightarrow> string" where
 | "rename_error_to_string (RenameError_ReturnVarVoidFunction loc) =
      loc_prefix loc @ quote ''return''
        @ '' used as a variable in the postcondition of a function with no return value''"
+| "rename_error_to_string (RenameError_OldOutsidePostcond loc) =
+     loc_prefix loc @ quote ''old'' @ '' used outside a postcondition''"
+| "rename_error_to_string (RenameError_OldUsedWithReturn loc) =
+     loc_prefix loc @ quote ''old'' @ '' cannot be applied to '' @ quote ''return''"
+| "rename_error_to_string (RenameError_DataCtorNotCapitalized loc name) =
+     loc_prefix loc @ ''data constructor name '' @ quote name
+       @ '' must begin with an uppercase letter''"
 
 fun frontend_error_to_string :: "FrontEndError \<Rightarrow> string" where
   "frontend_error_to_string (FrontEndError_Loader err) = loader_error_to_string err"
