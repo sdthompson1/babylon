@@ -573,9 +573,8 @@ proof -
     qed
   qed
   have cap_am: "link_capture_ok [a, m]"
-    unfolding link_capture_ok_def
-  proof (intro conjI)
-    show "funion_list (map (\<lambda>x. subst_names (CM_TypeSubst x)) [a, m])
+  proof -
+    have "funion_list (map (\<lambda>x. subst_names (CM_TypeSubst x)) [a, m])
             |\<inter>| funion_list (map module_bound_tyvars [a, m]) = {||}"
     proof (rule fset_eqI)
       fix n
@@ -607,7 +606,7 @@ proof -
         then show "n |\<in>| {||}" ..
       qed simp
     qed
-    show "funion_list (map (\<lambda>x. TE_AbstractTypes (CM_TyEnv x)) [a, m])
+    moreover have "funion_list (map (\<lambda>x. TE_AbstractTypes (CM_TyEnv x)) [a, m])
             |\<inter>| funion_list (map module_bound_tyvars [a, m]) = {||}"
     proof (rule fset_eqI)
       fix n
@@ -635,6 +634,7 @@ proof -
         then show "n |\<in>| {||}" ..
       qed simp
     qed
+    ultimately show ?thesis by (simp add: inf_sup_distrib2 link_capture_ok_def)
   qed
 
   \<comment> \<open>(4) The substitution merge of the pair yields the same \<sigma>.\<close>
@@ -855,7 +855,7 @@ proof -
     using funion_list_map_mono[OF set_sub] by fastforce+
   have cap: "link_capture_ok as"
     using cap_ms abs_sub bound_sub unfolding link_capture_ok_def
-    by (simp add: names_empty) blast
+    by (auto simp: names_empty)
   \<comment> \<open>The substitution merge: the union of empty substitutions is empty, whose
      dependency relation is empty and whose closure is itself.\<close>
   have u_empty: "fmlist_union (map CM_TypeSubst as) = fmempty"

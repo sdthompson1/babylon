@@ -328,9 +328,8 @@ qed
    over the unions, so it depends only on the set of inputs. *)
 definition link_capture_ok :: "CoreModule list \<Rightarrow> bool" where
   "link_capture_ok ms =
-     (funion_list (map (\<lambda>x. subst_names (CM_TypeSubst x)) ms)
-      |\<inter>| funion_list (map module_bound_tyvars ms) = {||}
-      \<and> funion_list (map (\<lambda>x. TE_AbstractTypes (CM_TyEnv x)) ms)
+     ((funion_list (map (\<lambda>x. subst_names (CM_TypeSubst x)) ms)
+         |\<union>| funion_list (map (\<lambda>x. TE_AbstractTypes (CM_TyEnv x)) ms))
         |\<inter>| funion_list (map module_bound_tyvars ms) = {||})"
 
 (* The colliding names, for the LinkCapture payload. Purely diagnostic. *)
@@ -1012,7 +1011,7 @@ proof -
         qed
       qed simp
     qed
-    ultimately show ?thesis unfolding link_capture_ok_def by simp
+    ultimately show ?thesis unfolding link_capture_ok_def by (simp add: inf_sup_distrib2)
   qed
 
   \<comment> \<open>The runtime-resolution check is vacuous on a single module: the
