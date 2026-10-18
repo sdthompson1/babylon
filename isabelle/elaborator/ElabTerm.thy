@@ -84,7 +84,13 @@ definition resolve_callee_function ::
                   expArgTypes = map (\<lambda>(ty, _). apply_subst subst ty) (FI_TmArgs funInfo);
                   retType = apply_subst subst (FI_ReturnType funInfo)
               in Inr (name, expArgTypes, CI_Function name newTyArgs retType, next_mv'))
-    | None \<Rightarrow> Inl [TyErr_NameNotFound loc name])"
+    | None \<Rightarrow>
+        \<comment> \<open>The name wasn't a function. (Nor was it a data ctor, because this function isn't
+           called for data ctors; resolve_callee_data_ctor is used instead.)
+           Therefore, we're either calling a non-function value, or we're calling something
+           that doesn't exist at all; both are errors.\<close>
+        if tyenv_lookup_var env name \<noteq> None then Inl [TyErr_CalleeNotFunction loc]
+        else Inl [TyErr_NameNotFound loc name])"
 
 
 (* Resolve a data constructor callee. Checks ghost, rejects payload-less
@@ -900,7 +906,12 @@ where
               | Inr (newTyArgs, next_mv') \<Rightarrow>
                     Inr (CoreTm_VariantCtor name newTyArgs (CoreTm_Record []),
                          CoreTy_Datatype dtName newTyArgs, next_mv'))
-        | None \<Rightarrow> Inl [TyErr_NameNotFound loc name]))"
+        | None \<Rightarrow>
+            \<comment> \<open>At this point, the name must either refer to a function, or not be defined
+               at all; both are errors. (Ghost constants, which are also in TE_Functions,
+               were handled above.)\<close>
+            if name |\<in>| fmdom (TE_Functions env) then Inl [TyErr_FunctionUsedAsValue loc name]
+            else Inl [TyErr_NameNotFound loc name]))"
 
   (* Casts *)
 | "elab_term env elabEnv ghost (BabTm_Cast loc targetTy operand) next_mv = 

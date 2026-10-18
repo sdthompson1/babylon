@@ -477,7 +477,13 @@ definition elab_call_statement ::
             BabTm_Name nloc name calleeTyArgs \<Rightarrow>
               if name |\<in>| fmdom (TE_DataCtors env)
                  \<or> name |\<notin>| fmdom (TE_Functions env)
-              then Inl [TyErr_CalleeNotFunction nloc]
+              then
+                \<comment> \<open>name is either a data ctor (which can't be called without assigning the
+                   result to something), or a non-function variable, or nothing at all.
+                   All of these are errors, but the exact error message differs in each case.\<close>
+                (if name |\<notin>| fmdom (TE_DataCtors env) \<and> tyenv_lookup_var env name = None
+                 then Inl [TyErr_NameNotFound nloc name]
+                 else Inl [TyErr_CalleeNotFunction nloc])
               else
                 (let bodyEnv = env \<lparr> TE_ProofTopLevel := False \<rparr>
                  in case elab_impure_call_term bodyEnv elabEnv ghost True cloc

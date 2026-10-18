@@ -277,6 +277,8 @@ definition type_error_to_string :: "TypeError \<Rightarrow> string" where
         loc_prefix loc @ ''function '' @ quote name @ '' does not return a value''
     | TyErr_DataCtorHasPayload loc name \<Rightarrow>
         loc_prefix loc @ ''data constructor '' @ quote name @ '' requires a payload''
+    | TyErr_FunctionUsedAsValue loc name \<Rightarrow>
+        loc_prefix loc @ ''function '' @ quote name @ '' cannot be used as a value''
     | TyErr_DataCtorNotCallable loc name \<Rightarrow>
         loc_prefix loc @ ''data constructor '' @ quote name @ '' does not take a payload''
     | TyErr_DuplicateFieldName loc name \<Rightarrow>

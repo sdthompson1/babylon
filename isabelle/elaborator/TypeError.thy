@@ -36,6 +36,7 @@ datatype (plugins del: size "quickcheck" transfer lifting) TypeError =
   | TyErr_FunctionNoReturnType Location string
   | TyErr_DataCtorHasPayload Location string  (* For non-nullary constructors used without args *)
   | TyErr_DataCtorNotCallable Location string  (* For payload-less constructors used with call syntax *)
+  | TyErr_FunctionUsedAsValue Location string  (* a function name used as a value rather than called *)
 
   (* Record/tuple errors *)
   | TyErr_DuplicateFieldName Location string
