@@ -2754,7 +2754,7 @@ next
 next
   \<comment> \<open>ShowHide: next_mv unchanged.\<close>
   case (14 env elabEnv ghost loc sh name next_mv)
-  from "14.prems" show ?case by simp
+  from "14.prems" show ?case by (simp split: if_splits)
 next
   \<comment> \<open>Ghost wrapper: re-elaborates inner in Ghost mode; next_mv advances per the IH.\<close>
   case (15 env elabEnv ghost loc inner next_mv)
@@ -2953,7 +2953,7 @@ next
 next
   \<comment> \<open>ShowHide: env unchanged.\<close>
   case (14 env elabEnv ghost loc sh name next_mv)
-  from "14.prems"(1) show ?case by simp
+  from "14.prems"(1) show ?case by (simp split: if_splits)
 next
   \<comment> \<open>Ghost wrapper: re-elaborates inner in Ghost mode (same env).\<close>
   case (15 env elabEnv ghost loc inner next_mv)
@@ -3167,7 +3167,7 @@ next
 next
   \<comment> \<open>ShowHide: env unchanged.\<close>
   case (14 env elabEnv ghost loc sh name next_mv)
-  from "14.prems"(1) have "env' = env" by simp
+  from "14.prems"(1) have "env' = env" by (simp split: if_splits)
   thus ?case using "14.prems"(2) by simp
 next
   \<comment> \<open>Ghost wrapper: re-elaborates inner in Ghost mode (same env).\<close>
@@ -3422,7 +3422,7 @@ next
 next
   \<comment> \<open>ShowHide: env unchanged.\<close>
   case (14 env elabEnv ghost loc sh name next_mv)
-  from "14.prems"(1) have "env' = env" by simp
+  from "14.prems"(1) have "env' = env" by (simp split: if_splits)
   thus ?case using "14.prems"(2) by simp
 next
   \<comment> \<open>Ghost wrapper: re-elaborates inner in Ghost mode (same env).\<close>
@@ -5040,12 +5040,13 @@ next
     unfolding finalize_match_stmt_facts(1)[OF fin_stmt] env'_eq
     using block_body_typed by simp
 next
-  \<comment> \<open>ShowHide: env unchanged.\<close>
+  \<comment> \<open>ShowHide: env unchanged; the elaborator has checked that the name is a function.\<close>
   case (14 env elabEnv ghost loc sh name next_mv)
   from "14.prems"(1) have cs_eq: "coreStmt = CoreStmt_ShowHide sh name"
     and env'_eq: "env' = env"
-    by auto
-  show ?case by (simp add: cs_eq env'_eq)
+    and fn: "name |\<in>| fmdom (TE_Functions env)"
+    by (auto split: if_splits)
+  show ?case by (simp add: cs_eq env'_eq fn)
 next
   \<comment> \<open>Ghost wrapper: the inner statement is elaborated in Ghost mode, so the IH
       gives a Ghost-mode typing. If the ambient is already Ghost we are done; if

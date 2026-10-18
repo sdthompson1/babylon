@@ -2368,7 +2368,7 @@ next
       next
         case (CoreStmt_ShowHide showOrHide name)
         \<comment> \<open>ShowHide is a runtime no-op: Inr (Continue state), and env' = env.\<close>
-        from typing CoreStmt_ShowHide have env'_eq: "env' = env" by simp
+        from typing CoreStmt_ShowHide have env'_eq: "env' = env" by (simp split: if_splits)
         have interp_eq: "interp_statement d (Suc fuel) state (CoreStmt_ShowHide showOrHide name)
                         = Inr (Continue state)"
           by simp

@@ -233,8 +233,10 @@ where
      then Some env
      else None)"
 
-  (* ShowHide: no-op. (TODO: should check that the name is in scope) *)
-| "core_statement_type env ghost (CoreStmt_ShowHide _ _) = Some env"
+  (* ShowHide: the name must refer to a function. (Shadowing of function names
+     by local variable names is ignored for the purposes of this statement.) *)
+| "core_statement_type env ghost (CoreStmt_ShowHide _ name) =
+    (if name |\<in>| fmdom (TE_Functions env) then Some env else None)"
 
   (* Pattern match.
      The scrutinee must typecheck. Each pattern must be compatible with the
@@ -865,7 +867,7 @@ next
   thus ?thesis by (simp add: tyenv_fixed_eq_refl)
 next
   case (CoreStmt_ShowHide _ _)
-  with assms have "env' = env" by simp
+  with assms have "env' = env" by (simp split: if_splits)
   thus ?thesis by (simp add: tyenv_fixed_eq_refl)
 next
   case (CoreStmt_Block _)
@@ -1186,7 +1188,7 @@ next
   with assms show ?thesis by simp
 next
   case (CoreStmt_ShowHide _ _)
-  with assms have "env' = env" by simp
+  with assms have "env' = env" by (simp split: if_splits)
   with assms show ?thesis by simp
 next
   case (CoreStmt_Block _)
@@ -1499,9 +1501,10 @@ next
     using tm core_term_type_irrelevant_tyvar by blast
   from tm' show ?case by (simp add: env'_eq)
 next
-  \<comment> \<open>ShowHide: env unchanged, no embedded checks.\<close>
+  \<comment> \<open>ShowHide: env unchanged; TE_Functions is untouched by ?ext.\<close>
   case (10 env ghost sh name)
-  from "10.prems" have "env' = env" by simp
+  from "10.prems" have "env' = env" and "name |\<in>| fmdom (TE_Functions env)"
+    by (simp_all split: if_splits)
   thus ?case by simp
 next
   \<comment> \<open>Match: env unchanged; pattern_compatible depends only on TE_DataCtors, and

@@ -3613,7 +3613,11 @@ static void typecheck_show_hide_stmt(struct TypecheckContext *tc_context,
         fatal_error("missing type for variable, this is unexpected");
     }
 
-    if (entry->type->tag == TY_FUNCTION) {
+    if (entry->constructor) {
+        // Data constructors with a payload have function type, but are not functions
+        report_can_only_show_hide_functions(stmt->location);
+        ++tc_context->num_errors;
+    } else if (entry->type->tag == TY_FUNCTION) {
         // ok
     } else if (entry->type->tag == TY_FORALL && entry->type->forall_data.type->tag == TY_FUNCTION) {
         // ok

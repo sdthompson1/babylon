@@ -1,3 +1,8 @@
 src/ShowHide.b:8:5: Attempting to show or hide non-function value
 src/ShowHide.b:9:5: Attempting to show or hide non-function value
 src/ShowHide.b:14:17: Type mismatch
+src/ShowHide.b:25:5: Attempting to show or hide non-function value
+src/ShowHide.b:26:5: Attempting to show or hide non-function value
+src/ShowHide.b:27:5: Attempting to show or hide non-function value
+src/ShowHide.b:28:5: Attempting to show or hide non-function value
+src/ShowHide.b:29:5: Attempting to show or hide non-function value

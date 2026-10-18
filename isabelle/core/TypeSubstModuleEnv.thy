@@ -2440,9 +2440,11 @@ next
   show ?case
     using tm_subst out_eq by simp
 next
-  \<comment> \<open>ShowHide: no checks, statement unchanged by substitution.\<close>
+  \<comment> \<open>ShowHide: statement unchanged by substitution, and substitution preserves
+      the domain of TE_Functions.\<close>
   case (10 env ghost sh name)
-  from "10.prems"(1) have "envOut = env" by simp
+  from "10.prems"(1) have "envOut = env" and "name |\<in>| fmdom (TE_Functions env)"
+    by (simp_all split: if_splits)
   then show ?case by simp
 next
   \<comment> \<open>Match: patterns are untouched by substitution; their compatibility

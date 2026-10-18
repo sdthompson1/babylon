@@ -1056,10 +1056,17 @@ where
                            Inl errs \<Rightarrow> Inl errs
                          | Inr coreStmt \<Rightarrow> Inr (coreStmt, env, mv3))))))"
 
-  (* ShowHide: show or hide a name from the verifier. Has no effect on typechecking.
-     TODO: We should at least check that the name is in scope. *)
+  (* ShowHide: show or hide a function's definition from the verifier. The name must
+     refer to a function, not a variable, constant (including a ghost constant, which
+     is desugared to a nullary ghost function) or data constructor. *)
 | "elab_statement env elabEnv ghost (BabStmt_ShowHide loc sh name) next_mv =
-    Inr (CoreStmt_ShowHide sh name, env, next_mv)"
+    (if tyenv_lookup_var env name = None
+        \<and> name |\<notin>| fmdom (TE_DataCtors env)
+        \<and> name |\<notin>| EE_GhostConstants elabEnv
+     then (if name |\<in>| fmdom (TE_Functions env)
+           then Inr (CoreStmt_ShowHide sh name, env, next_mv)
+           else Inl [TyErr_NameNotFound loc name])
+     else Inl [TyErr_ShowHideNonFunction loc name])"
 
   (* Ghost: This is just a marker to say that the inner statements should be typechecked
      in Ghost mode. It does not create a separate nested scope. *)

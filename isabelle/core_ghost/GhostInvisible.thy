@@ -1267,7 +1267,7 @@ next
         qed
       next
         case (CoreStmt_ShowHide _ _)
-        from T CoreStmt_ShowHide have env'_eq: "env' = env" by simp
+        from T CoreStmt_ShowHide have env'_eq: "env' = env" by (simp split: if_splits)
         from H CoreStmt_ShowHide have res_eq: "res = Continue full" by simp
         show ?thesis unfolding env'_eq by (rule ghost_resultI[OF res_eq rel])
       next
@@ -1455,7 +1455,7 @@ next
   from T show ?thesis unfolding CoreStmt_Match g_eq by simp
 next
   case (CoreStmt_ShowHide sh name)
-  with T show ?thesis by simp
+  with T show ?thesis by (simp split: if_splits)
 next
   case (CoreStmt_Block body)
   with er show ?thesis by simp

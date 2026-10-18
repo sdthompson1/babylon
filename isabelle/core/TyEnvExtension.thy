@@ -1178,10 +1178,19 @@ next
     using tm2 by simp
   from res ext show ?case using out_eq by blast
 next
-  \<comment> \<open>ShowHide: no checks.\<close>
+  \<comment> \<open>ShowHide: env unchanged; old function entries survive.\<close>
   case (10 env ghost sh name)
-  from "10.prems"(1) have "envOut = env" by simp
-  then show ?case using "10.prems"(2) by auto
+  note ext = "10.prems"(2)
+  from "10.prems"(1) have out_eq: "envOut = env"
+    and fn: "name |\<in>| fmdom (TE_Functions env)"
+    by (simp_all split: if_splits)
+  from fn obtain info where "fmlookup (TE_Functions env) name = Some info"
+    by (auto simp: fmlookup_dom_iff)
+  with ext have "name |\<in>| fmdom (TE_Functions env2)"
+    unfolding tyenv_extends_def by (auto simp: fmlookup_dom_iff)
+  hence res: "core_statement_type env2 ghost (CoreStmt_ShowHide sh name) = Some env2"
+    by simp
+  from res ext show ?case using out_eq by blast
 next
   \<comment> \<open>Match: env unchanged; arm bodies checked under TE_ProofTopLevel := False.\<close>
   case (11 env ghost matchGhost scrut arms)

@@ -85,6 +85,7 @@ datatype (plugins del: size "quickcheck" transfer lifting) TypeError =
   | TyErr_FixNotAtProofTopLevel Location  (* `fix x` nested inside a match/while in a proof body *)
   | TyErr_UseNoExistsGoal Location  (* `use e` with no enclosing existentially-quantified proof goal *)
   | TyErr_UseNotAtProofTopLevel Location  (* `use e` nested inside a match/while in a proof body *)
+  | TyErr_ShowHideNonFunction Location string  (* `show x` / `hide x` where x is not a function (e.g. a variable, constant or data constructor) *)
 
   (* Pattern errors *)
   | TyErr_DuplicateVarInPattern Location string  (* variable name bound twice in one pattern *)

@@ -831,7 +831,7 @@ next
   qed
 next
   case (CoreStmt_ShowHide sh name)
-  from CoreStmt_ShowHide.prems(1) have "env' = env" by simp
+  from CoreStmt_ShowHide.prems(1) have "env' = env" by (simp split: if_splits)
   thus ?case using CoreStmt_ShowHide.prems(3) by simp
 next
   case (CoreStmt_Block body)

@@ -360,6 +360,8 @@ definition type_error_to_string :: "TypeError \<Rightarrow> string" where
           @ quote ''exists'' @ '' proof goal''
     | TyErr_UseNotAtProofTopLevel loc \<Rightarrow>
         loc_prefix loc @ quote ''use'' @ '' must appear at the top level of a proof''
+    | TyErr_ShowHideNonFunction loc name \<Rightarrow>
+        loc_prefix loc @ ''cannot show or hide '' @ quote name @ '', as it is not a function''
     | TyErr_DuplicateVarInPattern loc name \<Rightarrow>
         loc_prefix loc @ ''variable '' @ quote name @ '' is bound more than once in this pattern''
     | TyErr_RefPatternInTermContext loc name \<Rightarrow>
