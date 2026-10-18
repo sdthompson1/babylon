@@ -32,6 +32,12 @@ unmakeChar (Char b0 b1 b2 b3 b4 b5 b6 b7) =
 toIsabelleString :: Prelude.String -> [Str.Char]
 toIsabelleString = map makeChar
 
+-- Read a source file as raw bytes, one Char (0-255) per byte, with no
+-- character-set decoding. (readFile would decode using the locale encoding,
+-- producing code points above 255 that makeChar would then truncate.)
+readBinaryFile :: FilePath -> IO Prelude.String
+readBinaryFile path = openBinaryFile path ReadMode >>= hGetContents
+
 fromIsabelleString :: [Str.Char] -> Prelude.String
 fromIsabelleString = map unmakeChar
 
@@ -76,7 +82,7 @@ realMain = do
       exitWith (ExitFailure 2)
     _ -> do
       let namedFiles = map parseArg args
-      contents <- mapM (readFile . snd) namedFiles
+      contents <- mapM (readBinaryFile . snd) namedFiles
       let modules = zipWith (\(n, _) c -> (toIsabelleString n,
                                            toIsabelleString c))
                             namedFiles contents
