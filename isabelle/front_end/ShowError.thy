@@ -253,8 +253,9 @@ definition type_error_to_string :: "TypeError \<Rightarrow> string" where
           @ '' cannot be applied to '' @ quote_type ty1 @ '' and '' @ quote_type ty2
     | TyErr_EqualityRequiresBoolOrNumeric loc \<Rightarrow>
         loc_prefix loc @ ''equality comparison requires boolean or numeric operands''
-    | TyErr_MixedOperatorsInChain loc \<Rightarrow>
-        loc_prefix loc @ ''cannot mix equality and ordering operators in an operator chain''
+    | TyErr_MixedImpliesInChain loc \<Rightarrow>
+        loc_prefix loc @ ''cannot mix '' @ quote ''==>'' @ '' and '' @ quote ''<==''
+          @ '' in an operator chain (use parentheses to disambiguate)''
     | TyErr_MixedDirectionsInChain loc \<Rightarrow>
         loc_prefix loc @ ''cannot mix comparison directions in an operator chain''
     | TyErr_CalleeNotFunction loc \<Rightarrow>

@@ -715,7 +715,7 @@ fun process_binop_chain :: "(string \<Rightarrow> bool) \<Rightarrow> Location \
        \<comment> \<open>Implies chains: validate all ops, then right-associate\<close>
        if check_implies_chain ops
        then fold_implies_right is_flex loc ghost lhsTm lhsTy ops
-       else Inl [TyErr_MixedOperatorsInChain loc]
+       else Inl [TyErr_MixedImpliesInChain loc]
      else if is_comparison_bab_binop firstOp \<and> length ops > 1 then
        \<comment> \<open>Comparison chains: validate directions, then chain\<close>
        if check_comparison_chain_directions ops ChainNeutral

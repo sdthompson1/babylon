@@ -22,7 +22,7 @@ datatype (plugins del: size "quickcheck" transfer lifting) TypeError =
   (* Binary operator errors *)
   | TyErr_BinopCannotCombineTypes Location BabBinop CoreType CoreType
   | TyErr_EqualityRequiresBoolOrNumeric Location
-  | TyErr_MixedOperatorsInChain Location
+  | TyErr_MixedImpliesInChain Location
   | TyErr_MixedDirectionsInChain Location
 
   (* Function/data-constructor call errors *)
