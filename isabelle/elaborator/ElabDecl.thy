@@ -777,6 +777,20 @@ definition elab_function_decl ::
 (* Datatypes                                                                  *)
 (* ========================================================================== *)
 
+(* Elaborate a data constructor's payload type (unit if there is none).
+   Payload types must be complete, even in ghost datatypes. *)
+definition elab_ctor_payload ::
+  "CoreTyEnv \<Rightarrow> ElabEnv \<Rightarrow> BabType option \<Rightarrow> TypeError list + CoreType" where
+  "elab_ctor_payload env elabEnv payloadOpt =
+    (case payloadOpt of
+       None \<Rightarrow> Inr (CoreTy_Record [])
+     | Some ty \<Rightarrow>
+         (case elab_type env elabEnv Ghost ty of
+            Inl errs \<Rightarrow> Inl errs
+          | Inr payloadTy \<Rightarrow>
+              if is_complete_type payloadTy then Inr payloadTy
+              else Inl [TyErr_IncompleteArrayType (bab_type_location ty)]))"
+
 (* Elaborate a list of data constructors.
    Returns, for each ctor, a tuple of: name, Core payload type, nullary flag.
    (For nullary ctors, the Core payload type is unit.) *)
@@ -785,9 +799,7 @@ fun elab_data_ctors ::
    \<Rightarrow> TypeError list + (string \<times> CoreType \<times> bool) list" where
   "elab_data_ctors env elabEnv [] = Inr []"
 | "elab_data_ctors env elabEnv ((cloc, cname, payloadOpt) # rest) =
-    (case (case payloadOpt of
-             None \<Rightarrow> Inr (CoreTy_Record [])
-           | Some ty \<Rightarrow> elab_type env elabEnv Ghost ty) of
+    (case elab_ctor_payload env elabEnv payloadOpt of
        Inl errs \<Rightarrow> Inl errs
      | Inr payloadTy \<Rightarrow>
          (case elab_data_ctors env elabEnv rest of

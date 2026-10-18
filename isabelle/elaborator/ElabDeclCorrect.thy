@@ -7631,6 +7631,27 @@ lemma module_context_env_add_datatype:
 (* Correctness of the constructor elaboration                                 *)
 (* -------------------------------------------------------------------------- *)
 
+(* An elaborated constructor payload is well-kinded and complete; a constructor
+   declared without a payload gets the unit payload CoreTy_Record []. *)
+lemma elab_ctor_payload_correct:
+  assumes wf: "tyenv_well_formed penv"
+      and td: "typedefs_well_formed penv (EE_Typedefs pee)"
+      and ep: "elab_ctor_payload penv pee payloadOpt = Inr payloadTy"
+  shows "is_well_kinded penv payloadTy
+         \<and> is_complete_type payloadTy
+         \<and> (payloadOpt = None \<longrightarrow> payloadTy = CoreTy_Record [])"
+proof (cases payloadOpt)
+  case None
+  then show ?thesis using ep by (auto simp: elab_ctor_payload_def)
+next
+  case (Some ty)
+  then obtain pty where et: "elab_type penv pee Ghost ty = Inr pty"
+      and cp: "is_complete_type pty" and eq: "payloadTy = pty"
+    using ep by (auto simp: elab_ctor_payload_def split: sum.splits if_splits)
+  then show ?thesis
+    using elab_type_is_well_kinded(1)[OF td wf et] Some by simp
+qed
+
 (* elab_data_ctors returns the declared constructor names in order, and each
    payload type is well-kinded (in the env it elaborated in); a constructor
    declared without a payload (isNullary) gets the unit payload CoreTy_Record []
@@ -7652,10 +7673,8 @@ next
   obtain cloc cname payloadOpt where dc_eq: "dc = (cloc, cname, payloadOpt)"
     by (cases dc) auto
   \<comment> \<open>Peel the two scrutinees of the Cons clause, one at a time.\<close>
-  have "\<exists>p. (case payloadOpt of None \<Rightarrow> Inr (CoreTy_Record [])
-             | Some ty \<Rightarrow> elab_type penv pee Ghost ty) = Inr p"
-  proof (cases "(case payloadOpt of None \<Rightarrow> Inr (CoreTy_Record [])
-                 | Some ty \<Rightarrow> elab_type penv pee Ghost ty)")
+  have "\<exists>p. elab_ctor_payload penv pee payloadOpt = Inr p"
+  proof (cases "elab_ctor_payload penv pee payloadOpt")
     case (Inl errs)
     then have "elab_data_ctors penv pee (dc # rest) = Inl errs"
       by (simp add: dc_eq)
@@ -7665,8 +7684,7 @@ next
     then show ?thesis by blast
   qed
   then obtain payloadTy where
-    pt: "(case payloadOpt of None \<Rightarrow> Inr (CoreTy_Record [])
-          | Some ty \<Rightarrow> elab_type penv pee Ghost ty) = Inr payloadTy"
+    pt: "elab_ctor_payload penv pee payloadOpt = Inr payloadTy"
     by blast
   have "\<exists>r. elab_data_ctors penv pee rest = Inr r"
   proof (cases "elab_data_ctors penv pee rest")
@@ -7688,20 +7706,11 @@ next
                     is_well_kinded penv pay
                     \<and> (isNullary \<longrightarrow> pay = CoreTy_Record [])"
     using Cons.IH[OF er] by blast+
-  \<comment> \<open>The head payload is well-kinded.\<close>
+  \<comment> \<open>The head payload is well-kinded, and a payload-less declaration elaborates
+     to the unit payload.\<close>
   have head_wk: "is_well_kinded penv payloadTy"
-  proof (cases payloadOpt)
-    case None
-    then have "payloadTy = CoreTy_Record []" using pt by simp
-    then show ?thesis by simp
-  next
-    case (Some ty)
-    then have "elab_type penv pee Ghost ty = Inr payloadTy" using pt by simp
-    then show ?thesis using elab_type_is_well_kinded(1)[OF td wf] by blast
-  qed
-  \<comment> \<open>A payload-less declaration elaborates to the unit payload.\<close>
-  have head_shape: "payloadOpt = None \<longrightarrow> payloadTy = CoreTy_Record []"
-    using pt by (cases payloadOpt) auto
+   and head_shape: "payloadOpt = None \<longrightarrow> payloadTy = CoreTy_Record []"
+    using elab_ctor_payload_correct[OF wf td pt] by blast+
   show ?case
   proof (rule conjI)
     show "map fst ctorInfo = map (\<lambda>(_, n, _). n) (dc # rest)"

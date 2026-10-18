@@ -56,7 +56,7 @@ datatype (plugins del: size "quickcheck" transfer lifting) TypeError =
   | TyErr_InvalidCast Location
 
   (* Incomplete array types (T[]) *)
-  | TyErr_IncompleteArrayType Location  (* storing, assigning, swapping or returning a value of incomplete type in executable code *)
+  | TyErr_IncompleteArrayType Location  (* storing, assigning, swapping or returning a value of incomplete type in executable code; or an incomplete datatype payload type *)
   | TyErr_IncompleteTypeArgument Location  (* a type argument (written or inferred) is not a complete type *)
 
   (* Type inference failure *)
