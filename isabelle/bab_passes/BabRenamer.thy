@@ -353,7 +353,8 @@ fun build_projection_chain :: "Location \<Rightarrow> string \<Rightarrow> strin
 
 (* Rename a term name, considering field projection interpretations.
    If tyargs is non-empty, only try standard name resolution.
-   If tyargs is empty, try all possible dot-splits and report ambiguity if multiple succeed. *)
+   If tyargs is empty and the first dot-component is a local variable, it wins outright.
+   Otherwise try all possible dot-splits and report ambiguity if multiple succeed. *)
 fun rename_term_name_with_projections :: "RenameEnv \<Rightarrow> Location \<Rightarrow> string \<Rightarrow> BabType list \<Rightarrow>
                                          (RenameError list * BabTerm)"
   where
@@ -363,22 +364,28 @@ fun rename_term_name_with_projections :: "RenameEnv \<Rightarrow> Location \<Rig
       (errs, newName) \<Rightarrow> (errs, BabTm_Name loc newName tyargs))
   else
     (let splits = all_dot_splits name;
-         attempts = map (\<lambda>(base, flds).
-                          case rename_term_name env loc base of
-                            ([], resolvedBase) \<Rightarrow> Some (resolvedBase, flds)
-                            | (errs, _) \<Rightarrow> None) splits;
-         successes = List.map_filter id attempts
-     in case successes of
-       [] \<Rightarrow>
-         (case rename_term_name env loc name of (errs, _) \<Rightarrow> (errs, BabTm_Name loc ''#Error'' []))
-       | [(resolvedBase, flds)] \<Rightarrow>
-         ([], build_projection_chain loc resolvedBase flds)
-       | multiple \<Rightarrow>
-         (let descriptions = map (\<lambda>(base, flds).
-                                   if flds = [] then base
-                                   else base @ '' (with field projections)'') multiple
-          in ([RenameError_AmbiguousTerm loc name descriptions],
-              BabTm_Name loc ''#Error'' []))))"
+         (firstComponent, firstFlds) = last splits
+     in if firstComponent |\<in>| RE_LocalTermNames env then
+          \<comment> \<open>A local variable shadows all other interpretations (including
+             module-qualified names), because it is in an inner scope\<close>
+          ([], build_projection_chain loc firstComponent firstFlds)
+        else
+         (let attempts = map (\<lambda>(base, flds).
+                               case rename_term_name env loc base of
+                                 ([], resolvedBase) \<Rightarrow> Some (resolvedBase, flds)
+                                 | (errs, _) \<Rightarrow> None) splits;
+              successes = List.map_filter id attempts
+          in case successes of
+            [] \<Rightarrow>
+              (case rename_term_name env loc name of (errs, _) \<Rightarrow> (errs, BabTm_Name loc ''#Error'' []))
+            | [(resolvedBase, flds)] \<Rightarrow>
+              ([], build_projection_chain loc resolvedBase flds)
+            | multiple \<Rightarrow>
+              (let descriptions = map (\<lambda>(base, flds).
+                                        if flds = [] then base
+                                        else base @ '' (with field projections)'') multiple
+               in ([RenameError_AmbiguousTerm loc name descriptions],
+                   BabTm_Name loc ''#Error'' [])))))"
 
 
 (*-----------------------------------------------------------------------------*)
