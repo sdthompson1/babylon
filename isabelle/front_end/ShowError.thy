@@ -334,7 +334,7 @@ definition type_error_to_string :: "TypeError \<Rightarrow> string" where
     | TyErr_RefDeclNeedsLvalue loc \<Rightarrow>
         loc_prefix loc @ ''ref declaration requires an lvalue initializer''
     | TyErr_NotWritableLvalue loc \<Rightarrow>
-        loc_prefix loc @ ''left-hand side of assignment is not a writable lvalue''
+        loc_prefix loc @ ''expression is not a writable lvalue''
     | TyErr_VoidReturnWithValue loc \<Rightarrow>
         loc_prefix loc @ ''cannot return a value from a function with no return type''
     | TyErr_NonVoidReturnNeedsValue loc \<Rightarrow>
@@ -395,7 +395,7 @@ definition type_error_to_string :: "TypeError \<Rightarrow> string" where
           @ ''constant initializer mentions an abstract type, so it cannot be evaluated at compile time''
     | TyErr_InvalidFunctionAttribute loc \<Rightarrow>
         loc_prefix loc @ ''invalid function attribute: only '' @ quote ''requires''
-          @ '', '' @ quote ''ensures'' @ '' and '' @ quote ''decreases'' @ '' are allowed''
+          @ '' and '' @ quote ''ensures'' @ '' are allowed''
     | TyErr_FunctionSignatureMismatch loc name \<Rightarrow>
         loc_prefix loc @ ''definition of function '' @ quote name
           @ '' does not match its earlier declaration''
