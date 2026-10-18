@@ -19,6 +19,7 @@ datatype RenameError =
   | RenameError_OldOutsidePostcond Location  (* 'old' used outside a postcondition *)
   | RenameError_OldUsedWithReturn Location  (* 'return' used inside 'old' *)
   | RenameError_DataCtorNotCapitalized Location string  (* data constructor name doesn't begin with a capital letter *)
+  | RenameError_RequiresAfterEnsures Location  (* 'requires' attribute after an 'ensures' attribute *)
 
 
 (*-----------------------------------------------------------------------------*)
@@ -601,6 +602,18 @@ and rename_dimension :: "RenameEnv \<Rightarrow> BabDimension \<Rightarrow>
          else RenameError_OldOutsidePostcond loc # errs,
          BabTm_Old loc newTm))"
 
+(* All of a function's 'requires' attributes must come before its 'ensures'
+   attributes. Returns an error for each 'requires' that follows an 'ensures'
+   (seen: an 'ensures' has already been passed). *)
+fun misplaced_requires_errors :: "bool \<Rightarrow> BabAttribute list \<Rightarrow> RenameError list" where
+  "misplaced_requires_errors seen [] = []"
+| "misplaced_requires_errors seen (BabAttr_Requires loc _ # rest) =
+    (if seen then [RenameError_RequiresAfterEnsures loc] else [])
+      @ misplaced_requires_errors seen rest"
+| "misplaced_requires_errors seen (BabAttr_Ensures _ _ # rest) =
+    misplaced_requires_errors True rest"
+| "misplaced_requires_errors seen (_ # rest) = misplaced_requires_errors seen rest"
+
 (* Rename an attribute. Return errors and a renamed attribute. *)
 fun rename_attribute :: "RenameEnv \<Rightarrow> BabAttribute \<Rightarrow>
                          RenameError list * BabAttribute"
@@ -769,6 +782,7 @@ fun rename_declaration :: "string \<Rightarrow> RenameEnv \<Rightarrow> BabDecla
 
          attrResults = map (rename_attribute newEnvWithRetTy) (DF_Attributes df);
          attrErrs = concat (map fst attrResults);
+         attrOrderErrs = misplaced_requires_errors False (DF_Attributes df);
          newAttrs = map snd attrResults;
 
          newDf = df \<lparr> DF_Name := newName,
@@ -776,7 +790,8 @@ fun rename_declaration :: "string \<Rightarrow> RenameEnv \<Rightarrow> BabDecla
                      DF_ReturnType := newRetTy,
                      DF_Body := newBody,
                      DF_Attributes := newAttrs \<rparr>
-     in (tyArgNameErrs @ tmArgNameErrs @ tmArgErrs @ retTyErrs @ bodyErrs @ attrErrs, BabDecl_Function newDf))"
+     in (tyArgNameErrs @ tmArgNameErrs @ tmArgErrs @ retTyErrs @ bodyErrs @ attrErrs
+           @ attrOrderErrs, BabDecl_Function newDf))"
 | "rename_declaration fullModName env (BabDecl_Datatype dd) =
     (let newName = fullModName @ ''.'' @ DD_Name dd;
          loc = DD_Location dd;

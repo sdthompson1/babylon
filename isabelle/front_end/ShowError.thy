@@ -167,6 +167,8 @@ fun rename_error_to_string :: "RenameError \<Rightarrow> string" where
 | "rename_error_to_string (RenameError_DataCtorNotCapitalized loc name) =
      loc_prefix loc @ ''data constructor name '' @ quote name
        @ '' must begin with an uppercase letter''"
+| "rename_error_to_string (RenameError_RequiresAfterEnsures loc) =
+     loc_prefix loc @ quote ''requires'' @ '' must come before '' @ quote ''ensures''"
 
 fun frontend_error_to_string :: "FrontEndError \<Rightarrow> string" where
   "frontend_error_to_string (FrontEndError_Loader err) = loader_error_to_string err"
