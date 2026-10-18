@@ -588,7 +588,7 @@ proof -
     using is_numeric_type_apply_subst by auto
 qed
 
-(* Valid decreases-types are fully concrete (Bool, integers, or records of
+(* Valid decreases-types are fully concrete (Bool, integers, or tuples of
    valid decreases-types), so substitution is a no-op. *)
 lemma is_valid_decreases_type_apply_subst:
   "is_valid_decreases_type ty \<Longrightarrow> apply_subst subst ty = ty"

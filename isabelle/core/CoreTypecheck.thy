@@ -67,9 +67,10 @@ fun pattern_compatible :: "CoreTyEnv \<Rightarrow> CorePattern \<Rightarrow> Cor
 (* Valid decreases-term types                                                  *)
 (* A decreases term (used in while-loop decreases clauses and, eventually,    *)
 (* recursive functions) must have a type that admits a well-founded order.   *)
-(* We allow: any integer type, Bool (ordered False < True), or a record      *)
-(* whose fields are all themselves valid decreases types. Records are        *)
-(* compared lexicographically.                                                *)
+(* We allow: any integer type, Bool (ordered False < True), or a tuple (a    *)
+(* record with field names 0, 1, ...) whose fields are all themselves valid  *)
+(* decreases types. Tuples are compared lexicographically. Records with      *)
+(* named fields are not allowed.                                              *)
 (* ========================================================================== *)
 
 fun is_valid_decreases_type :: "CoreType \<Rightarrow> bool" where
@@ -77,7 +78,8 @@ fun is_valid_decreases_type :: "CoreType \<Rightarrow> bool" where
 | "is_valid_decreases_type (CoreTy_FiniteInt _ _) = True"
 | "is_valid_decreases_type CoreTy_MathInt = True"
 | "is_valid_decreases_type (CoreTy_Record flds) =
-     list_all (\<lambda>(_, ty). is_valid_decreases_type ty) flds"
+     (map fst flds = tuple_field_names (length flds) \<and>
+      list_all (\<lambda>(_, ty). is_valid_decreases_type ty) flds)"
 | "is_valid_decreases_type _ = False"
 
 
