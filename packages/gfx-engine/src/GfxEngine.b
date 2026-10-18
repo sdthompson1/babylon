@@ -61,7 +61,7 @@ interface {
         window_open: bool
     };
 
-    ghost function engine_state(g: GfxEngine): EngineState;
+    extern ghost function engine_state(g: GfxEngine): EngineState;
         requires allocated(g);
 
     ghost function valid_engine_state(s: EngineState): bool

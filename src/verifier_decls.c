@@ -160,7 +160,7 @@ static void verify_function_attributes(struct VContext *context,
         attr = attr->next;
     }
 
-    // If need_alloc_check (currently true for 'extern' functions) and
+    // If need_alloc_check (currently true for non-ghost 'extern' functions) and
     // the function returns a value, then we verify that the return
     // value is not allocated (given the preconditions and
     // postconditions).
@@ -454,7 +454,7 @@ static void verify_function_decl(struct VContext *context,
                                decl->location,
                                decl->attributes,
                                data->return_type,
-                               data->is_extern, // need_alloc_check
+                               data->is_extern && !decl->ghost, // need_alloc_check
                                &precond_tail,
                                &postcond_tail);
 
