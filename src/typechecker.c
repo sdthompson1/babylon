@@ -4186,11 +4186,16 @@ static void typecheck_datatype_decl(struct TypecheckContext *tc_context,
         entry->read_only = true;
     }
 
-    // kindcheck the payload types
+    // kindcheck the payload types, and check they are complete
     for (struct DataCtor *ctor = decl->datatype_data.ctors; ctor; ctor = ctor->next) {
         if (ctor->payload) {
             if (!kindcheck_type(tc_context, &ctor->payload)) {
                 kinds_ok = false;
+            } else {
+                struct TypeFlags flags = { .must_be_complete = true };
+                if (!ensure_type_meets_flags(tc_context, &flags, ctor->payload, &ctor->payload->location)) {
+                    kinds_ok = false;
+                }
             }
         }
     }

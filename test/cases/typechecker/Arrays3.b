@@ -152,16 +152,6 @@ function incomplete_array_tuple(x: i32[], y: i32[]): {i32[], i32[]}
     return {x, y};  // error: returning an incomplete type not allowed (yet?)
 }
 
-datatype Foo = Foo(i32[]);
-
-function incomplete_datatype(a: i32[])
-{
-    var x: Foo;     // error: putting incomplete array type into a variable
-    var y = Foo(a); // error: putting incomplete array type into a variable
-    ghost var gx: Foo;      // ok, ghost code
-    ghost var gy = Foo(a);  // ok, ghost code
-}
-
 function array_of_incomplete_arrays(ref x: (i32[])[10], ref y: (i32[])[10])
 {
     x = y;   // error: assigning incomplete arrays not allowed

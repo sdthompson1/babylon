@@ -5,8 +5,6 @@ module AllocatedIncomplete
 
 interface {}
 
-datatype D = A(i32[]) | B;
-
 datatype E = C(i32[*]) | F(i32[3]);
 
 ghost function g0(a: i32[]): bool
@@ -17,11 +15,6 @@ ghost function g0(a: i32[]): bool
 ghost function g1(p: {i32[], i32}): bool
 {
     return allocated(p);    // Error
-}
-
-ghost function g2(d: D): bool
-{
-    return allocated(d);    // Error
 }
 
 function f10(p: {i32[], i32})

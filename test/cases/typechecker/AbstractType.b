@@ -85,7 +85,7 @@ function h(x: Type2): Type2
 type BadAbstractType;  // error - not allowed in implementation
 
 
-type Abs1 = {x: i32[], y: bool};  // Illegal, can't incomplete type to implement an abstract type.
+type Abs1 = {x: i32[], y: bool};  // Illegal, can't use an incomplete type to implement an abstract type.
 
 type Abs2 = i32[*];   // Illegal, can't use allocatable type when wasn't declared in the interface.
 
@@ -95,7 +95,7 @@ type Abs3 = AlwaysAlloc;  // Error, does not match "allocated" declaration in in
 type Abs4 = i32;   // This is fine, the interface is "conservative" but that's ok.
 
 
-datatype Abs5 = Abs5Ctor(i32[]);  // Error, incomplete type disguised inside data-constructor.
+datatype Abs5 = Abs5Ctor(i32[]);  // Error, datatype payloads must be complete types.
 
 datatype Abs6 = Abs6Ctor((bool[*])[10]);   // Error, this is allocated_if_not_default but interface says not allocated.
 

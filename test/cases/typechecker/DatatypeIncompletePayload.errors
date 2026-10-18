@@ -1,0 +1,6 @@
+src/DatatypeIncompletePayload.b:10:18: Can't use an incomplete array type here
+src/DatatypeIncompletePayload.b:11:18: Can't use an incomplete array type here
+src/DatatypeIncompletePayload.b:12:18: Can't use an incomplete array type here
+src/DatatypeIncompletePayload.b:13:18: Can't use an incomplete array type here
+src/DatatypeIncompletePayload.b:14:19: Can't use an incomplete array type here
+src/DatatypeIncompletePayload.b:14:32: Can't use an incomplete array type here

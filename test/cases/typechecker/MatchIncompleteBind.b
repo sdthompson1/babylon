@@ -15,8 +15,6 @@ module MatchIncompleteBind
 
 interface {}
 
-datatype Foo = Foo(i32[]);
-
 function nonlvalue_scrutinee(c: bool, ref r: i32[], ref s: i32[]): u64
 {
     match (if c then r else s) {      // error: non-lvalue scrutinee with incomplete type
@@ -31,10 +29,10 @@ function byvalue_pattern_var(ref r: i32[]): u64
     }
 }
 
-function byvalue_payload(f: Foo): u64
+function byvalue_field(ref p: {i32[], i32}): u64
 {
-    match f {
-    case Foo(x) => return sizeof(x);  // error: non-ref variable x with incomplete type
+    match p {
+    case {x, _} => return sizeof(x);  // error: non-ref variable x with incomplete type
     }
 }
 
@@ -45,10 +43,10 @@ function ref_pattern_var(ref r: i32[]): u64
     }
 }
 
-function ref_payload(f: Foo): u64
+function ref_field(ref p: {i32[], i32}): u64
 {
-    match f {
-    case Foo(ref x) => return sizeof(x);   // ok (scrutinee lvalue, and x is "ref")
+    match p {
+    case {ref x, _} => return sizeof(x);   // ok (scrutinee lvalue, and x is "ref")
     }
 }
 

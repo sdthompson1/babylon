@@ -30,7 +30,5 @@ src/Arrays3.b:135:20: Type mismatch (expected bool or numeric)
 src/Arrays3.b:142:24: Type mismatch
 src/Arrays3.b:147:19: Can't use an incomplete array type here
 src/Arrays3.b:150:54: Can't use an incomplete array type here
-src/Arrays3.b:159:12: Can't use an incomplete array type here
-src/Arrays3.b:160:13: Can't use an incomplete array type here
-src/Arrays3.b:167:5: Can't use an incomplete array type here
-src/Arrays3.b:168:10: Can't use an incomplete array type here
+src/Arrays3.b:157:5: Can't use an incomplete array type here
+src/Arrays3.b:158:10: Can't use an incomplete array type here
