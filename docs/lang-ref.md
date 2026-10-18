@@ -2187,6 +2187,9 @@ implementation. The same is true in reverse, except that the datatype
 can be declared abstract in the interface if desired (see "Abstract
 types" above).
 
+Datatype payloads must always be complete types. For example,
+`datatype D = D(i32[])` is not valid, although `D(i32[*])` is.
+
 
 ## Constant declarations
 
