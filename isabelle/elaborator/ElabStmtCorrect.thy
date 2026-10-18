@@ -507,7 +507,7 @@ lemma resolve_type_args_next_mv:
 
 (* resolve_impure_callee only advances the counter through resolve_type_args. *)
 lemma resolve_impure_callee_next_mv:
-  "resolve_impure_callee env elabEnv ghost allowVoid callee next_mv
+  "resolve_impure_callee env elabEnv ghost ignoreResult callee next_mv
      = Inr (name, newTyArgs, expArgTypes, varOrRefs, argModes, retType0, next_mv')
      \<Longrightarrow> next_mv \<le> next_mv'"
   by (auto simp: resolve_impure_callee_def Let_def
@@ -519,11 +519,11 @@ lemma resolve_impure_callee_next_mv:
    the special arguments in Ghost mode, the arguments are type-checked
    (unify_impure_call_args), and the Ref arguments are checked. *)
 lemma elab_impure_call_term_elim:
-  assumes "elab_impure_call_term env elabEnv ghost allowVoid loc callee args next_mv
+  assumes "elab_impure_call_term env elabEnv ghost ignoreResult loc callee args next_mv
              = Inr (fnName, finalTyArgs, finalArgTms, retTy, next_mv')"
   obtains newTyArgs expArgTypes varOrRefs argModes retType0 next_mv1
           plainTms plainTys next_mvP specialTms specialTys finalActualTys finalSubst where
-    "resolve_impure_callee env elabEnv ghost allowVoid callee next_mv
+    "resolve_impure_callee env elabEnv ghost ignoreResult callee next_mv
        = Inr (fnName, newTyArgs, expArgTypes, varOrRefs, argModes, retType0, next_mv1)"
     "length args = length expArgTypes"
     "elab_term_list env elabEnv ghost
@@ -547,13 +547,13 @@ lemma elab_impure_call_term_elim:
    two calls of elab_term_list (the type-checking of the arguments and
    check_ref_args do not allocate). *)
 lemma elab_impure_call_term_next_mv:
-  assumes elab: "elab_impure_call_term env elabEnv ghost allowVoid loc callee args next_mv
+  assumes elab: "elab_impure_call_term env elabEnv ghost ignoreResult loc callee args next_mv
                    = Inr (fnName, tyArgs, argTms, retTy, next_mv')"
   shows "next_mv \<le> next_mv'"
 proof -
   obtain newTyArgs expArgTypes varOrRefs argModes retType0 next_mv1
          plainTms plainTys next_mvP specialTms specialTys where
-    rc: "resolve_impure_callee env elabEnv ghost allowVoid callee next_mv
+    rc: "resolve_impure_callee env elabEnv ghost ignoreResult callee next_mv
            = Inr (fnName, newTyArgs, expArgTypes, varOrRefs, argModes, retType0, next_mv1)" and
     elab_plain: "elab_term_list env elabEnv ghost
                    (plain_args (map (\<lambda>mode. mode \<noteq> ghost) argModes) args) next_mv1
@@ -581,7 +581,7 @@ qed
    and (for the substitution-composition step) the signature's tyvars are
    distinct and its component types only mention those tyvars. *)
 lemma resolve_impure_callee_correct:
-  assumes rc: "resolve_impure_callee env elabEnv ghost allowVoid callee next_mv
+  assumes rc: "resolve_impure_callee env elabEnv ghost ignoreResult callee next_mv
                  = Inr (fnName, newTyArgs, expArgTypes, varOrRefs, argModes, retType0, next_mv')"
     and wf: "tyenv_well_formed env"
     and ee_wf: "elabenv_well_formed env elabEnv"
@@ -759,7 +759,7 @@ qed (simp_all)
 (* Main correctness of elab_impure_call_term: its output is accepted by
    core_impure_call_type in the env extended with the fresh tyvar interval. *)
 lemma elab_impure_call_term_correct:
-  assumes elab: "elab_impure_call_term env elabEnv ghost allowVoid loc callee args next_mv
+  assumes elab: "elab_impure_call_term env elabEnv ghost ignoreResult loc callee args next_mv
                    = Inr (fnName, finalTyArgs, finalArgTms, retTy, next_mv')"
     and wf: "tyenv_well_formed env"
     and ee_wf: "elabenv_well_formed env elabEnv"
@@ -774,7 +774,7 @@ proof -
   \<comment> \<open>The steps of the elaboration.\<close>
   obtain newTyArgs expArgTypes varOrRefs argModes retType0 next_mv1
          plainTms plainTys next_mvP specialTms specialTys finalActualTys finalSubst where
-    rc: "resolve_impure_callee env elabEnv ghost allowVoid callee next_mv
+    rc: "resolve_impure_callee env elabEnv ghost ignoreResult callee next_mv
            = Inr (fnName, newTyArgs, expArgTypes, varOrRefs, argModes, retType0, next_mv1)" and
     len_args: "length args = length expArgTypes" and
     elab_plain: "elab_term_list env elabEnv ghost
@@ -1197,7 +1197,7 @@ qed
    (not just in the fresh-tyvar extension), and its return type is well-kinded
    (runtime in NotGhost) in env. *)
 lemma elab_impure_call_term_inferred:
-  assumes elab: "elab_impure_call_term env elabEnv ghost allowVoid loc callee args next_mv
+  assumes elab: "elab_impure_call_term env elabEnv ghost ignoreResult loc callee args next_mv
                    = Inr (fnName, finalTyArgs, finalArgTms, retTy, next_mv')"
     and wf: "tyenv_well_formed env"
     and ee_wf: "elabenv_well_formed env elabEnv"

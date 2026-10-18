@@ -34,6 +34,7 @@ datatype (plugins del: size "quickcheck" transfer lifting) TypeError =
   | TyErr_RefArgInTermContext Location string
   | TyErr_WrongNumberOfArgs Location string nat nat  (* name, expected, actual *)
   | TyErr_FunctionNoReturnType Location string
+  | TyErr_ReturnValueIgnored Location string  (* a non-void function called as a statement *)
   | TyErr_DataCtorHasPayload Location string  (* For non-nullary constructors used without args *)
   | TyErr_DataCtorNotCallable Location string  (* For payload-less constructors used with call syntax *)
   | TyErr_FunctionUsedAsValue Location string  (* a function name used as a value rather than called *)

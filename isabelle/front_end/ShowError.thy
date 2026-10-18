@@ -277,6 +277,8 @@ definition type_error_to_string :: "TypeError \<Rightarrow> string" where
           @ '' argument(s) but '' @ nat_to_string actual @ '' were given''
     | TyErr_FunctionNoReturnType loc name \<Rightarrow>
         loc_prefix loc @ ''function '' @ quote name @ '' does not return a value''
+    | TyErr_ReturnValueIgnored loc name \<Rightarrow>
+        loc_prefix loc @ ''return value of function '' @ quote name @ '' is being ignored''
     | TyErr_DataCtorHasPayload loc name \<Rightarrow>
         loc_prefix loc @ ''data constructor '' @ quote name @ '' requires a payload''
     | TyErr_FunctionUsedAsValue loc name \<Rightarrow>

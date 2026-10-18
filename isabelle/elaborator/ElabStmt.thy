@@ -43,8 +43,10 @@ definition is_impure_call :: "CoreTyEnv \<Rightarrow> ElabEnv \<Rightarrow> BabT
    (allocating fresh metavariables when omitted);
    and computes the per-argument expected types, Var/Ref markers and
    checking modes (Ghost for a ghost parameter, the ambient mode otherwise), plus
-   the substituted return type. Void functions are rejected unless allowVoid is set
-   (statement-position calls allow them; their Core return type is unit). Returns:
+   the substituted return type.
+   If ignoreResult is set (a statement-position call) the callee must be a void function
+   (listed in EE_VoidFunctions); otherwise it must not be.
+   Returns:
      (fnName, newTyArgs, expArgTypes, varOrRefs, argModes, retType0, next_mv').
    The data-constructor / arg-count checks are left to the caller. *)
 definition resolve_impure_callee ::
@@ -52,7 +54,7 @@ definition resolve_impure_callee ::
    \<Rightarrow> TypeError list
       + (string \<times> CoreType list \<times> CoreType list \<times> VarOrRef list \<times> GhostOrNot list
          \<times> CoreType \<times> nat)" where
-  "resolve_impure_callee env elabEnv ghost allowVoid callee next_mv =
+  "resolve_impure_callee env elabEnv ghost ignoreResult callee next_mv =
     (case callee of
        BabTm_Name nloc name tyArgs \<Rightarrow>
          (case fmlookup (TE_Functions env) name of
@@ -62,8 +64,10 @@ definition resolve_impure_callee ::
                   not a function).\<close>
               if name |\<in>| EE_GhostConstants elabEnv then
                 Inl [TyErr_CalleeNotFunction nloc]
-              else if \<not> allowVoid \<and> name |\<in>| EE_VoidFunctions elabEnv then
+              else if \<not> ignoreResult \<and> name |\<in>| EE_VoidFunctions elabEnv then
                 Inl [TyErr_FunctionNoReturnType nloc name]
+              else if ignoreResult \<and> name |\<notin>| EE_VoidFunctions elabEnv then
+                Inl [TyErr_ReturnValueIgnored nloc name]
               else if ghost = NotGhost \<and> FI_Ghost funInfo = Ghost then
                 Inl [TyErr_GhostFunctionInNonGhost nloc name]
               \<comment> \<open>An impure function can be called only from executable code, and
@@ -157,8 +161,8 @@ definition unify_impure_call_args ::
 definition elab_impure_call_term ::
   "CoreTyEnv \<Rightarrow> ElabEnv \<Rightarrow> GhostOrNot \<Rightarrow> bool \<Rightarrow> Location \<Rightarrow> BabTerm \<Rightarrow> BabTerm list \<Rightarrow> nat
    \<Rightarrow> TypeError list + (string \<times> CoreType list \<times> CoreTerm list \<times> CoreType \<times> nat)" where
-  "elab_impure_call_term env elabEnv ghost allowVoid loc callee args next_mv =
-    (case resolve_impure_callee env elabEnv ghost allowVoid callee next_mv of
+  "elab_impure_call_term env elabEnv ghost ignoreResult loc callee args next_mv =
+    (case resolve_impure_callee env elabEnv ghost ignoreResult callee next_mv of
        Inl errs \<Rightarrow> Inl errs
      | Inr (name, newTyArgs, expArgTypes, varOrRefs, argModes, retType0, next_mv1) \<Rightarrow>
          if length args \<noteq> length expArgTypes then
@@ -454,10 +458,9 @@ definition elab_swap ::
 
 (* ----- Call branch helper ----- *)
 
-(* Call statement: call a function and discard its return value. The callee must be
-   a named function (not a data constructor or other term); it may be pure (in which
-   case the statement is a no-op) or impure, and void functions are allowed (their
-   discarded Core return value is unit). 
+(* Call statement: call a function that returns no value. The callee must be a named
+   void function (not a data constructor or other term); it may be pure (in which
+   case the statement is a no-op) or impure. Its Core return type is unit.
 
    Since Core has no discard-call statement, this elaborates to a block containing a
    single VarDeclCall binding the result to a synthesised call@@tmp variable that 
