@@ -4,9 +4,9 @@ session Babylon = "HOL-Library" +
     "bab_loader"
     "bab_passes"
     "core"
-    "core_ghost"
     "core_passes"
     "elaborator"
+    "ghost_erasure"
     "graph"
     "interpreter"
     "util"
@@ -72,18 +72,6 @@ session Babylon = "HOL-Library" +
     "core/TypeSubstStmt"
     "core/TypeSubstTerm"
 
-    (* core_ghost *)
-    "core_ghost/EraseGhost"
-    "core_ghost/EraseGhostModuleTyping"
-    "core_ghost/EraseGhostSimulation"
-    "core_ghost/EraseGhostStmtTyping"
-    "core_ghost/EraseGhostTyping"
-    "core_ghost/ErasedIsGhostFree"
-    "core_ghost/ErasedState"
-    "core_ghost/ErasedSteps"
-    "core_ghost/GhostFree"
-    "core_ghost/GhostInvisible"
-
     (* core_passes *)
     "core_passes/MatchCompile"
     "core_passes/MatchCompileFlat"
@@ -117,6 +105,18 @@ session Babylon = "HOL-Library" +
     "elaborator/Unify"
     "elaborator/Unify2"
     "elaborator/Unify3"
+
+    (* ghost_erasure *)
+    "ghost_erasure/EraseGhost"
+    "ghost_erasure/EraseGhostModuleTyping"
+    "ghost_erasure/EraseGhostSimulation"
+    "ghost_erasure/EraseGhostStmtTyping"
+    "ghost_erasure/EraseGhostTyping"
+    "ghost_erasure/ErasedIsGhostFree"
+    "ghost_erasure/ErasedState"
+    "ghost_erasure/ErasedSteps"
+    "ghost_erasure/GhostFree"
+    "ghost_erasure/GhostInvisible"
 
     (* graph *)
     "graph/Dependency"
