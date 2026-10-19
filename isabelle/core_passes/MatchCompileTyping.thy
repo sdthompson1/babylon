@@ -1,5 +1,5 @@
 theory MatchCompileTyping
-  imports MatchCompileFlat "../core/CoreTypecheck"
+  imports MatchCompileFlat "../core/CoreTypecheckLemmas"
 begin
 
 (* Type-preservation results for the Core-to-Core match-compilation pass.

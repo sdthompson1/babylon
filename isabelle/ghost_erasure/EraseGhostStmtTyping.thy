@@ -1,5 +1,5 @@
 theory EraseGhostStmtTyping
-  imports EraseGhostTyping "../core/CoreStmtTypecheck"
+  imports EraseGhostTyping "../core/CoreStmtTypecheckLemmas"
 begin
 
 (* Typing after ghost erasure: statements.

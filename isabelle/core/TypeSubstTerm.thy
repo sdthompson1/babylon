@@ -1,5 +1,5 @@
 theory TypeSubstTerm
-  imports TypeSubst CoreFreeVars CoreTypecheck
+  imports TypeSubst CoreFreeVars CoreTypecheckLemmas
 begin
 
 (* ========================================================================== *)

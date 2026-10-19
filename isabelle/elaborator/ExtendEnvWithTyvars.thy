@@ -1,5 +1,5 @@
 theory ExtendEnvWithTyvars
-  imports "../core/CoreStmtTypecheck" MetavarName
+  imports "../core/CoreStmtTypecheckLemmas" MetavarName
 begin
 
 (* Extend a type environment with a half-open range of type metavariables

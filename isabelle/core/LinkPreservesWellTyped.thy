@@ -1,6 +1,6 @@
 theory LinkPreservesWellTyped
   imports LinkSubstRanges TypeSubstModuleEnv TyEnvExtension CoreModuleTypecheck
-          CoreValueTransfer AllocLevelSubst
+          CoreStmtTypecheckLemmas CoreValueTransfer AllocLevelSubst
 begin
 
 (* The whole-program "linking preserves well-typedness" theorem:

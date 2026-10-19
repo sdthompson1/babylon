@@ -1,5 +1,5 @@
 theory StateMatchesEnv
-  imports CoreInterp "../core/CoreStmtTypecheck" "../core/CoreTermTypeMode"
+  imports CoreInterp "../core/CoreStmtTypecheckLemmas"
           "../core/ModuleBodyEnv" "../core/CoreContractTypecheck"
 begin
 

@@ -1,5 +1,5 @@
 theory TypeSubstModuleEnv
-  imports TypeSubstEnv TypeSubstStmt CoreStmtTypecheck
+  imports TypeSubstEnv TypeSubstStmt CoreStmtTypecheckLemmas
 begin
 
 (* The module-level substitution engine.

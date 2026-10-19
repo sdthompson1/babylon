@@ -1,5 +1,5 @@
 theory TypeSubstPreservation
-  imports TypeSubstHelpers CoreStmtTypecheck
+  imports TypeSubstHelpers CoreStmtTypecheckLemmas
 begin
 
 (* ========================================================================== *)

@@ -1,5 +1,5 @@
 theory TyEnvExtension
-  imports CoreStmtTypecheck
+  imports CoreStmtTypecheckLemmas
 begin
 
 (* ========================================================================== *)
