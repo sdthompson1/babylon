@@ -56,6 +56,14 @@ definition scc_completeness_inv :: "('a::linorder) Graph \<Rightarrow> 'a fset \
     (\<forall>v. has_vertex graph v \<and> reachable graph start v \<and> v |\<notin>| scc_visited state \<longrightarrow>
          (\<exists>w. List.member (scc_stack state) w \<and> unvisited_path graph (scc_visited state) w v))"
 
+(* All of the above invariants together *)
+definition scc_inv :: "('a::linorder) Graph \<Rightarrow> 'a fset \<Rightarrow> 'a \<Rightarrow> 'a scc_state \<Rightarrow> bool" where
+  "scc_inv graph initial_visited start state \<longleftrightarrow>
+    scc_state_valid graph initial_visited start state \<and>
+    scc_reachability_inv graph initial_visited start state \<and>
+    scc_soundness_inv graph initial_visited start state \<and>
+    scc_completeness_inv graph initial_visited start state"
+
 (*-----------------------------------------------------------------------------*)
 (* Single Step of SCC Collection *)
 (*-----------------------------------------------------------------------------*)
@@ -76,55 +84,37 @@ fun collect_scc_step :: "('a::linorder) Graph \<Rightarrow> 'a scc_state \<Right
                       scc_stack := neighbors @ rest \<rparr>)
     )"
 
-(*-----------------------------------------------------------------------------*)
-(* Basic Lemmas about collect_scc_step *)
-(*-----------------------------------------------------------------------------*)
-
-(* Lemma: visited set never shrinks during collect_scc_step *)
-lemma collect_scc_step_visited_monotonic:
-  "scc_visited state |\<subseteq>| scc_visited (collect_scc_step graph state)"
+(* The possible outcomes of collect_scc_step, when all stack vertices are in the graph *)
+lemma collect_scc_step_cases:
+  assumes "\<forall>v. List.member (scc_stack state) v \<longrightarrow> has_vertex graph v"
+  obtains (empty) "scc_stack state = []" "collect_scc_step graph state = state"
+  | (skip) v rest where "scc_stack state = v # rest" "v |\<in>| scc_visited state"
+      "collect_scc_step graph state = state \<lparr> scc_stack := rest \<rparr>"
+  | (visit) v rest neighbors where "scc_stack state = v # rest" "v |\<notin>| scc_visited state"
+      "fmlookup graph v = Some neighbors"
+      "collect_scc_step graph state =
+         state \<lparr> scc_visited := finsert v (scc_visited state),
+                 scc_component := v # scc_component state,
+                 scc_stack := neighbors @ rest \<rparr>"
 proof (cases "scc_stack state")
   case Nil
-  then show ?thesis by simp
+  show ?thesis
+    by (rule empty) (simp_all add: Nil)
 next
   case (Cons v rest)
-  then show ?thesis
+  show ?thesis
   proof (cases "v |\<in>| scc_visited state")
-    case True
-    then show ?thesis using Cons by auto
+    case visited: True
+    show ?thesis
+      by (rule skip[OF Cons visited]) (simp add: Cons visited)
   next
-    case False
-    then show ?thesis proof (cases "fmlookup graph v")
-      case None
-      then show ?thesis using False Cons by auto
-    next
-      case (Some a)
-      then show ?thesis using False Cons by auto
-    qed
-  qed
-qed
-
-(* Lemma: current component never shrinks during collect_scc_step *)
-lemma collect_scc_step_current_grows:
-  "set (scc_component state) \<subseteq> set (scc_component (collect_scc_step graph state))"
-proof (cases "scc_stack state")
-  case Nil
-  then show ?thesis by simp
-next
-  case (Cons v rest)
-  then show ?thesis
-  proof (cases "v |\<in>| scc_visited state")
-    case True
-    then show ?thesis using Cons by auto
-  next
-    case False
-    then show ?thesis proof (cases "fmlookup graph v")
-      case None
-      then show ?thesis using Cons False by auto
-    next
-      case (Some a)
-      then show ?thesis using Cons False by auto
-    qed
+    case unvisited: False
+    have "has_vertex graph v"
+      using Cons assms by (simp add: member_rec(1))
+    then obtain neighbors where nb: "fmlookup graph v = Some neighbors"
+      by (auto simp: fmlookup_dom_iff)
+    show ?thesis
+      by (rule visit[OF Cons unvisited nb]) (simp add: Cons unvisited nb)
   qed
 qed
 
@@ -136,270 +126,119 @@ qed
 lemma collect_scc_step_preserves_valid:
   assumes "valid_graph graph"
     and "scc_state_valid graph initial_visited start state"
-    and "scc_reachability_inv graph initial_visited start state"
   shows "scc_state_valid graph initial_visited start (collect_scc_step graph state)"
 proof -
-  define state' where "state' = collect_scc_step graph state"
-
-  (* We need to show all seven parts of scc_state_valid *)
-  have "(\<forall>v. v |\<in>| scc_visited state' \<longrightarrow> has_vertex graph v) \<and>
-        (\<forall>v. List.member (scc_component state') v \<longrightarrow> v |\<in>| scc_visited state') \<and>
-        (\<forall>v. List.member (scc_stack state') v \<longrightarrow> has_vertex graph v) \<and>
-        (initial_visited |\<subseteq>| scc_visited state') \<and>
-        (\<forall>v. List.member (scc_component state') v \<longrightarrow> v |\<notin>| initial_visited) \<and>
-        (\<forall>v. v |\<in>| scc_visited state' \<and> v |\<notin>| initial_visited \<longrightarrow> List.member (scc_component state') v) \<and>
-        distinct (scc_component state')"
-  proof (cases "scc_stack state")
-    case Nil
-    (* Empty stack: state unchanged *)
-    then have "state' = state"
-      using state'_def by simp
-    then show ?thesis
-      using assms(2) unfolding scc_state_valid_def by blast
+  (* Note: conjuncts 2 and 6 of scc_state_valid, used together as conditional rewrite
+     rules, make simp loop; so each new conjunct is proved from just the facts it needs *)
+  have visited_vertices: "\<forall>v. v |\<in>| scc_visited state \<longrightarrow> has_vertex graph v"
+    and comp_visited: "\<forall>v. List.member (scc_component state) v \<longrightarrow> v |\<in>| scc_visited state"
+    and stack_vertices: "\<forall>v. List.member (scc_stack state) v \<longrightarrow> has_vertex graph v"
+    and initial_sub: "initial_visited |\<subseteq>| scc_visited state"
+    and comp_new: "\<forall>v. List.member (scc_component state) v \<longrightarrow> v |\<notin>| initial_visited"
+    and new_comp: "\<forall>v. v |\<in>| scc_visited state \<and> v |\<notin>| initial_visited \<longrightarrow>
+                        List.member (scc_component state) v"
+    and comp_distinct: "distinct (scc_component state)"
+    using assms(2) unfolding scc_state_valid_def by blast+
+  show ?thesis
+  proof (cases rule: collect_scc_step_cases[OF stack_vertices, case_names empty skip visit])
+    case empty
+    then show ?thesis using assms(2) by simp
   next
-    case (Cons v rest)
+    case (skip v rest)
+    have fields: "scc_visited (collect_scc_step graph state) = scc_visited state"
+      "scc_component (collect_scc_step graph state) = scc_component state"
+      "scc_stack (collect_scc_step graph state) = rest"
+      using skip(3) by simp_all
+    have "\<forall>u. List.member rest u \<longrightarrow> has_vertex graph u"
+      using skip(1) stack_vertices by (simp add: member_rec(1))
     then show ?thesis
-    proof (cases "v |\<in>| scc_visited state")
-      case True
-      (* v already visited: just pop stack *)
-      then have "state' = state \<lparr> scc_stack := rest \<rparr>"
-        using state'_def Cons by simp
-      then show ?thesis
-        using assms(2) unfolding scc_state_valid_def
-        by (metis (no_types, lifting) local.Cons member_rec(1) scc_state.ext_inject
-            scc_state.surjective scc_state.update_convs(3))
-    next
-      case False
-      (* v not visited *)
-      (* First show that v must be in the graph *)
-      have v_on_stack: "List.member (scc_stack state) v"
-        using Cons by (simp add: member_rec(1))
-
-      have v_in_graph: "has_vertex graph v"
-        using assms(2) v_on_stack unfolding scc_state_valid_def
-        by blast 
-
-      (* Therefore fmlookup graph v must be Some neighbors *)
-      then obtain neighbors where neighbors_def: "fmlookup graph v = Some neighbors"
-        by (metis fmdom_notI has_vertex.elims(2) not_None_eq)
-
-      (* v in graph: visit it *)
-      have state'_eq: "state' = state \<lparr> scc_visited := finsert v (scc_visited state),
-                                        scc_component := v # (scc_component state),
-                                        scc_stack := neighbors @ rest \<rparr>"
-        using state'_def Cons False neighbors_def by simp
-
-      (* Extract properties from assumptions *)
-      have stack_valid: "\<forall>u. List.member (scc_stack state) u \<longrightarrow> has_vertex graph u"
-        using assms(2) unfolding scc_state_valid_def by blast
-
-      have neighbors_valid: "\<forall>u. List.member neighbors u \<longrightarrow> has_vertex graph u"
-        using assms(1) neighbors_def v_in_graph by (metis has_edge.simps option.simps(5) valid_graph.simps)
-
-      (* Now prove each part *)
-      have part1: "\<forall>u. u |\<in>| scc_visited state' \<longrightarrow> has_vertex graph u"
-      proof (intro allI impI)
-        fix u assume "u |\<in>| scc_visited state'"
-        then have "u = v \<or> u |\<in>| scc_visited state"
-          using state'_eq by auto
-        then show "has_vertex graph u"
-          using v_in_graph assms(2) unfolding scc_state_valid_def by blast
-      qed
-
-      have part2: "\<forall>u. List.member (scc_component state') u \<longrightarrow> u |\<in>| scc_visited state'"
-      proof (intro allI impI)
-        fix u assume "List.member (scc_component state') u"
-        then have "u = v \<or> List.member (scc_component state) u"
-          using state'_eq
-          by (metis member_rec(1) scc_state.select_convs(2) scc_state.surjective
-              scc_state.update_convs(2,3)) 
-        then show "u |\<in>| scc_visited state'"
-          using state'_eq assms(2) unfolding scc_state_valid_def
-          by (metis collect_scc_step_visited_monotonic finsertI1 fsubsetD scc_state.select_convs(1)
-              scc_state.surjective scc_state.update_convs(1,2,3) state'_def)
-      qed
-
-      have part3: "\<forall>u. List.member (scc_stack state') u \<longrightarrow> has_vertex graph u"
-      proof (intro allI impI)
-        fix u assume "List.member (scc_stack state') u"
-        then have "List.member neighbors u \<or> List.member rest u"
-          using state'_eq
-          by (metis list_membership_lemma scc_state.select_convs(3) scc_state.surjective
-              scc_state.update_convs(3)) 
-        then show "has_vertex graph u"
-          using neighbors_valid stack_valid Cons
-          by (metis member_rec(1))
-      qed
-
-      have part4: "initial_visited |\<subseteq>| scc_visited state'"
-        using state'_eq assms(2) unfolding scc_state_valid_def by auto
-
-      have part5: "\<forall>u. List.member (scc_component state') u \<longrightarrow> u |\<notin>| initial_visited"
-      proof (intro allI impI)
-        fix u assume "List.member (scc_component state') u"
-        then have "u = v \<or> List.member (scc_component state) u"
-          using state'_eq
-          by (metis member_rec(1) scc_state.select_convs(2) scc_state.surjective
-              scc_state.update_convs(2,3))
-        then show "u |\<notin>| initial_visited"
-        proof
-          assume "u = v"
-          then show "u |\<notin>| initial_visited"
-            using False assms(2) unfolding scc_state_valid_def by blast
-        next
-          assume "List.member (scc_component state) u"
-          then show "u |\<notin>| initial_visited"
-            using assms(2) unfolding scc_state_valid_def by blast
-        qed
-      qed
-
-      have part6: "\<forall>u. u |\<in>| scc_visited state' \<and> u |\<notin>| initial_visited \<longrightarrow> List.member (scc_component state') u"
-      proof (intro allI impI)
-        fix u assume "u |\<in>| scc_visited state' \<and> u |\<notin>| initial_visited"
-        then have u_visited: "u |\<in>| scc_visited state'" and u_not_initial: "u |\<notin>| initial_visited" by auto
-        then have "u = v \<or> u |\<in>| scc_visited state"
-          using state'_eq by auto
-        then show "List.member (scc_component state') u"
-        proof
-          assume "u = v"
-          then show "List.member (scc_component state') u"
-            using state'_eq by (simp add: member_rec(1))
-        next
-          assume "u |\<in>| scc_visited state"
-          then have "List.member (scc_component state) u"
-            using u_not_initial assms(2) unfolding scc_state_valid_def by auto
-          then show "List.member (scc_component state') u"
-            using state'_eq
-            by (metis collect_scc_step_current_grows in_set_member state'_def subsetD)
-        qed
-      qed
-
-      have part7: "distinct (scc_component state')"
-      proof -
-        have "distinct (scc_component state)"
-          using assms(2) unfolding scc_state_valid_def by simp
-        moreover have "v \<notin> set (scc_component state)"
-          using False assms(2) unfolding scc_state_valid_def
-          by (metis in_set_member)
-        ultimately show ?thesis
-          using state'_eq by simp
-      qed
-
-      then show ?thesis
-        using part1 part2 part3 part4 part5 part6 part7
-        by (meson assms(2) scc_state_valid_def) 
+      using visited_vertices comp_visited initial_sub comp_new new_comp comp_distinct
+      unfolding scc_state_valid_def fields by blast
+  next
+    case (visit v rest neighbors)
+    have fields: "scc_visited (collect_scc_step graph state) = finsert v (scc_visited state)"
+      "scc_component (collect_scc_step graph state) = v # scc_component state"
+      "scc_stack (collect_scc_step graph state) = neighbors @ rest"
+      using visit(4) by simp_all
+    have v_vertex: "has_vertex graph v"
+      using visit(1) stack_vertices by (simp add: member_rec(1))
+    have neighbors_vertices: "\<forall>u. List.member neighbors u \<longrightarrow> has_vertex graph u"
+      using assms(1) visit(3) v_vertex by (metis has_edge.simps option.simps(5) valid_graph.simps)
+    have v_not_comp: "\<not> List.member (scc_component state) v"
+      using comp_visited visit(2) by blast
+    have v_not_initial: "v |\<notin>| initial_visited"
+      using initial_sub visit(2) by blast
+    show ?thesis
+      unfolding scc_state_valid_def fields
+    proof (intro conjI)
+      show "\<forall>u. u |\<in>| finsert v (scc_visited state) \<longrightarrow> has_vertex graph u"
+        using visited_vertices v_vertex by auto
+      show "\<forall>u. List.member (v # scc_component state) u \<longrightarrow> u |\<in>| finsert v (scc_visited state)"
+        using comp_visited by (auto simp: member_rec(1))
+      show "\<forall>u. List.member (neighbors @ rest) u \<longrightarrow> has_vertex graph u"
+        using visit(1) stack_vertices neighbors_vertices by (auto simp: member_def)
+      show "initial_visited |\<subseteq>| finsert v (scc_visited state)"
+        using initial_sub by auto
+      show "\<forall>u. List.member (v # scc_component state) u \<longrightarrow> u |\<notin>| initial_visited"
+        using comp_new v_not_initial by (auto simp: member_rec(1))
+      show "\<forall>u. u |\<in>| finsert v (scc_visited state) \<and> u |\<notin>| initial_visited \<longrightarrow>
+                List.member (v # scc_component state) u"
+        using new_comp by (auto simp: member_rec(1))
+      show "distinct (v # scc_component state)"
+        using comp_distinct v_not_comp by (simp add: in_set_member)
     qed
   qed
-
-  then show ?thesis
-    using scc_state_valid_def state'_def by blast
 qed
 
 (* Lemma: collect_scc_step preserves reachability invariant *)
 lemma collect_scc_step_preserves_reachability:
-  assumes "valid_graph graph"
-    and "scc_state_valid graph initial_visited start state"
+  assumes "scc_state_valid graph initial_visited start state"
     and "scc_reachability_inv graph initial_visited start state"
   shows "scc_reachability_inv graph initial_visited start (collect_scc_step graph state)"
 proof -
-  define state' where "state' = collect_scc_step graph state"
-
-  (* We need to show both parts of scc_reachability_inv *)
-  have "(\<forall>v. List.member (scc_component state') v \<longrightarrow> reachable graph start v) \<and>
-        (\<forall>v. List.member (scc_stack state') v \<longrightarrow> reachable graph start v)"
-  proof (cases "scc_stack state")
-    case Nil
-    (* Empty stack: state unchanged *)
-    then have "state' = state"
-      using state'_def by simp
-    then show ?thesis
-      using assms(3) unfolding scc_reachability_inv_def by simp
+  have stack_vertices: "\<forall>v. List.member (scc_stack state) v \<longrightarrow> has_vertex graph v"
+    using assms(1) unfolding scc_state_valid_def by blast
+  show ?thesis
+  proof (cases rule: collect_scc_step_cases[OF stack_vertices, case_names empty skip visit])
+    case empty
+    then show ?thesis using assms(2) by simp
   next
-    case (Cons v rest)
+    case (skip v rest)
     then show ?thesis
-    proof (cases "v |\<in>| scc_visited state")
-      case True
-      (* v already visited: just pop stack *)
-      then have "state' = state \<lparr> scc_stack := rest \<rparr>"
-        using state'_def Cons by simp
-      then show ?thesis
-        using assms(3) unfolding scc_reachability_inv_def
-        by (simp add: local.Cons member_rec(1))
-    next
-      case False
-      (* v not visited *)
-      (* First show that v must be in the graph *)
-      have v_on_stack: "List.member (scc_stack state) v"
-        using Cons by (simp add: member_rec(1))
-
-      have v_in_graph: "has_vertex graph v"
-        using assms(2) v_on_stack unfolding scc_state_valid_def by blast
-
-      (* Therefore fmlookup graph v must be Some neighbors *)
-      then obtain neighbors where neighbors_def: "fmlookup graph v = Some neighbors"
-        by (metis fmdom_notI has_vertex.elims(2) not_None_eq)
-
-      (* v in graph: visit it *)
-      have state'_eq: "state' = state \<lparr> scc_visited := finsert v (scc_visited state),
-                                        scc_component := v # (scc_component state),
-                                        scc_stack := neighbors @ rest \<rparr>"
-        using state'_def Cons False neighbors_def by simp
-
-      (* v is reachable from start (by reachability inv) *)
-      have v_reachable: "reachable graph start v"
-        using assms(3) v_on_stack unfolding scc_reachability_inv_def by simp
-
-      (* All neighbors of v are reachable from start via v *)
-      have neighbors_reachable: "\<forall>u. List.member neighbors u \<longrightarrow> reachable graph start u"
-      proof (intro allI impI)
-        fix u assume "List.member neighbors u"
-        then have "has_edge graph v u"
-          using neighbors_def by simp
-        then show "reachable graph start u"
-          using v_reachable by (simp add: reachable.reachable_step)
-      qed
-
-      (* All elements of rest are reachable from start (by reachability inv) *)
-      have rest_reachable: "\<forall>u. List.member rest u \<longrightarrow> reachable graph start u"
-        using assms(3) Cons unfolding scc_reachability_inv_def
-        by (simp add: member_rec(1))
-
-      (* Now prove both parts *)
-      have part1: "\<forall>u. List.member (scc_component state') u \<longrightarrow> reachable graph start u"
-      proof (intro allI impI)
-        fix u assume "List.member (scc_component state') u"
-        then have "u = v \<or> List.member (scc_component state) u"
-          using state'_eq
-          by (metis member_rec(1) scc_state.select_convs(2) scc_state.surjective
-              scc_state.update_convs(2,3))
-        then show "reachable graph start u"
-          using v_reachable assms(3) unfolding scc_reachability_inv_def by auto
-      qed
-
-      have part2: "\<forall>u. List.member (scc_stack state') u \<longrightarrow> reachable graph start u"
-      proof (intro allI impI)
-        fix u assume "List.member (scc_stack state') u"
-        then have "List.member neighbors u \<or> List.member rest u"
-          using state'_eq
-          by (metis list_membership_lemma scc_state.select_convs(3) scc_state.surjective
-              scc_state.update_convs(3))
-        then show "reachable graph start u"
-          using neighbors_reachable rest_reachable by blast
-      qed
-
-      show ?thesis
-        using part1 part2 by blast
+      using assms(2) unfolding scc_reachability_inv_def by (auto simp: member_def)
+  next
+    case (visit v rest neighbors)
+    have v_reachable: "reachable graph start v"
+      using assms(2) visit(1) unfolding scc_reachability_inv_def by (simp add: member_rec(1))
+    (* All neighbors of v are reachable from start via v *)
+    have neighbors_reachable: "\<forall>u. List.member neighbors u \<longrightarrow> reachable graph start u"
+    proof (intro allI impI)
+      fix u
+      assume "List.member neighbors u"
+      then have "has_edge graph v u"
+        using visit(3) by simp
+      then show "reachable graph start u"
+        using v_reachable by (simp add: reachable.reachable_step)
+    qed
+    have fields: "scc_component (collect_scc_step graph state) = v # scc_component state"
+      "scc_stack (collect_scc_step graph state) = neighbors @ rest"
+      using visit(4) by simp_all
+    show ?thesis
+      unfolding scc_reachability_inv_def fields
+    proof (intro conjI)
+      show "\<forall>u. List.member (v # scc_component state) u \<longrightarrow> reachable graph start u"
+        using assms(2) v_reachable unfolding scc_reachability_inv_def
+        by (auto simp: member_rec(1))
+      show "\<forall>u. List.member (neighbors @ rest) u \<longrightarrow> reachable graph start u"
+        using visit(1) assms(2) neighbors_reachable unfolding scc_reachability_inv_def
+        by (auto simp: member_def)
     qed
   qed
-
-  then show ?thesis
-    using state'_def unfolding scc_reachability_inv_def by simp
 qed
 
 (* Lemma: collect_scc_step preserves soundness invariant *)
 lemma collect_scc_step_preserves_soundness:
-  assumes "valid_graph graph"
-    and "scc_state_valid graph initial_visited start state"
+  assumes "scc_state_valid graph initial_visited start state"
     and "scc_reachability_inv graph initial_visited start state"
     and "scc_soundness_inv graph initial_visited start state"
     and downstream_visited:
@@ -407,281 +246,120 @@ lemma collect_scc_step_preserves_soundness:
               w |\<in>| initial_visited)"
   shows "scc_soundness_inv graph initial_visited start (collect_scc_step graph state)"
 proof -
-  define state' where "state' = collect_scc_step graph state"
-
-  (* We need to show all newly visited vertices are in the same SCC as start *)
-  have "\<forall>v. v |\<in>| scc_visited state' \<and> v |\<notin>| initial_visited \<longrightarrow> in_same_scc graph v start"
-  proof (cases "scc_stack state")
-    case Nil
-    (* Empty stack: state unchanged *)
-    then have "state' = state"
-      using state'_def by simp
-    then show ?thesis
-      using assms(4) unfolding scc_soundness_inv_def by simp
+  have stack_vertices: "\<forall>v. List.member (scc_stack state) v \<longrightarrow> has_vertex graph v"
+    using assms(1) unfolding scc_state_valid_def by blast
+  show ?thesis
+  proof (cases rule: collect_scc_step_cases[OF stack_vertices, case_names empty skip visit])
+    case empty
+    then show ?thesis using assms(3) by simp
   next
-    case (Cons v rest)
+    case (skip v rest)
     then show ?thesis
-    proof (cases "v |\<in>| scc_visited state")
-      case True
-      (* v already visited: just pop stack *)
-      then have "state' = state \<lparr> scc_stack := rest \<rparr>"
-        using state'_def Cons by simp
-      then show ?thesis
-        using assms(4) unfolding scc_soundness_inv_def by simp
-    next
-      case False
-      (* v not visited *)
-      (* First show that v must be in the graph *)
-      have v_on_stack: "List.member (scc_stack state) v"
-        using Cons by (simp add: member_rec(1))
-
-      have v_in_graph: "has_vertex graph v"
-        using assms(2) v_on_stack unfolding scc_state_valid_def by blast
-
-      (* Therefore fmlookup graph v must be Some neighbors *)
-      then obtain neighbors where neighbors_def: "fmlookup graph v = Some neighbors"
-        by (metis fmdom_notI has_vertex.elims(2) not_None_eq)
-
-      (* v in graph: visit it *)
-      have state'_eq: "state' = state \<lparr> scc_visited := finsert v (scc_visited state),
-                                        scc_component := v # (scc_component state),
-                                        scc_stack := neighbors @ rest \<rparr>"
-        using state'_def Cons False neighbors_def by simp
-
-      (* v is reachable from start (by reachability inv) *)
-      have v_reachable: "reachable graph start v"
-        using assms(3) v_on_stack unfolding scc_reachability_inv_def by simp
-
-      (* The key: show that v is in the same SCC as start *)
-      have v_same_scc: "in_same_scc graph v start"
-      proof -
-        (* v is reachable from start, so we need to show start is reachable from v *)
-        (* We know v is not in initial_visited (since it's not visited at all) *)
-        have "v |\<notin>| initial_visited"
-          using False assms(2) unfolding scc_state_valid_def by blast
-
-        (* If v is not in the same SCC as start, then by downstream_visited,
-           v would be in initial_visited - contradiction *)
-        have "v |\<notin>| initial_visited \<and> reachable graph start v \<and> has_vertex graph v"
-          using \<open>v |\<notin>| initial_visited\<close> v_reachable v_in_graph by simp
-
-        then show "in_same_scc graph v start"
-          using downstream_visited by blast
-      qed
-
-      (* Now show the invariant holds for state' *)
-      show ?thesis
-      proof (intro allI impI)
-        fix u
-        assume u_visited: "u |\<in>| scc_visited state' \<and> u |\<notin>| initial_visited"
-
-        (* u is either v (newly visited) or was visited before *)
-        have "u = v \<or> u |\<in>| scc_visited state"
-          using u_visited state'_eq by auto
-
-        then show "in_same_scc graph u start"
-        proof
-          assume "u = v"
-          then show "in_same_scc graph u start"
-            using v_same_scc by simp
-        next
-          assume "u |\<in>| scc_visited state"
-          then show "in_same_scc graph u start"
-            using u_visited assms(4) unfolding scc_soundness_inv_def by simp
-        qed
-      qed
-    qed
+      using assms(3) unfolding scc_soundness_inv_def by simp
+  next
+    case (visit v rest neighbors)
+    (* The newly visited v is reachable from start but not initially visited,
+       so by downstream_visited it must be in the same SCC as start *)
+    have "has_vertex graph v"
+      using stack_vertices visit(1) by (simp add: member_rec(1))
+    moreover have "reachable graph start v"
+      using assms(2) visit(1) unfolding scc_reachability_inv_def by (simp add: member_rec(1))
+    moreover have "v |\<notin>| initial_visited"
+      using assms(1) visit(2) unfolding scc_state_valid_def by blast
+    ultimately have "in_same_scc graph v start"
+      using downstream_visited by blast
+    then show ?thesis
+      using assms(3) visit(4) unfolding scc_soundness_inv_def by auto
   qed
-
-  then show ?thesis
-    using state'_def unfolding scc_soundness_inv_def by simp
 qed
 
 (* Lemma: collect_scc_step preserves completeness invariant *)
 lemma collect_scc_step_preserves_completeness:
-  assumes "valid_graph graph"
-    and "scc_state_valid graph initial_visited start state"
-    and "scc_reachability_inv graph initial_visited start state"
+  assumes "scc_state_valid graph initial_visited start state"
     and "scc_completeness_inv graph initial_visited start state"
   shows "scc_completeness_inv graph initial_visited start (collect_scc_step graph state)"
 proof -
-  define state' where "state' = collect_scc_step graph state"
-
-  (* We need to show all unvisited reachable vertices have unvisited paths from stack *)
-  have "\<forall>v. has_vertex graph v \<and> reachable graph start v \<and> v |\<notin>| scc_visited state' \<longrightarrow>
-             (\<exists>w. List.member (scc_stack state') w \<and> unvisited_path graph (scc_visited state') w v)"
-  proof (cases "scc_stack state")
-    case Nil
-    (* Empty stack: state unchanged *)
-    then have "state' = state"
-      using state'_def by simp
-    then show ?thesis
-      using assms(4) unfolding scc_completeness_inv_def by simp
+  have stack_vertices: "\<forall>v. List.member (scc_stack state) v \<longrightarrow> has_vertex graph v"
+    using assms(1) unfolding scc_state_valid_def by blast
+  show ?thesis
+  proof (cases rule: collect_scc_step_cases[OF stack_vertices, case_names empty skip visit])
+    case empty
+    then show ?thesis using assms(2) by simp
   next
-    case (Cons u rest)
-    then show ?thesis
-    proof (cases "u |\<in>| scc_visited state")
-      case u_visited: True
-      (* u already visited: just pop stack *)
-      then have "state' = state \<lparr> scc_stack := rest \<rparr>"
-        using state'_def Cons by simp
-
-      (* Show completeness still holds *)
-      show ?thesis
-      proof (intro allI impI)
-        fix v
-        assume v_props: "has_vertex graph v \<and> reachable graph start v \<and> v |\<notin>| scc_visited state'"
-        (* v is still unvisited, so by old completeness, there's a path from old stack *)
-        have "v |\<notin>| scc_visited state"
-          using v_props \<open>state' = state \<lparr> scc_stack := rest \<rparr>\<close> by simp
-        then have "\<exists>w. List.member (scc_stack state) w \<and> unvisited_path graph (scc_visited state) w v"
-          using assms(4) v_props unfolding scc_completeness_inv_def by simp
-        then obtain w where w_props: "List.member (scc_stack state) w"
-                                      "unvisited_path graph (scc_visited state) w v"
-          by auto
-        (* w is not u, so w is in rest, and the path still works *)
-        have "w \<noteq> u"
-          using u_visited unvisited_path.simps w_props(2) by blast
+    case (skip v rest)
+    show ?thesis
+      unfolding scc_completeness_inv_def
+    proof (intro allI impI)
+      fix x
+      assume "has_vertex graph x \<and> reachable graph start x \<and>
+              x |\<notin>| scc_visited (collect_scc_step graph state)"
+      then obtain w where w_stack: "List.member (scc_stack state) w"
+        and w_path: "unvisited_path graph (scc_visited state) w x"
+        using assms(2) skip(3) unfolding scc_completeness_inv_def by auto
+      (* w is unvisited, so it is not the (visited) v that was popped *)
+      have "w \<noteq> v"
+        using unvisited_path_start_unvisited[OF w_path] skip(2) by blast
+      then have "List.member rest w"
+        using w_stack skip(1) by (simp add: member_rec(1))
+      then show "\<exists>w. List.member (scc_stack (collect_scc_step graph state)) w \<and>
+                     unvisited_path graph (scc_visited (collect_scc_step graph state)) w x"
+        using w_path skip(3) by auto
+    qed
+  next
+    case (visit v rest neighbors)
+    show ?thesis
+      unfolding scc_completeness_inv_def
+    proof (intro allI impI)
+      fix x
+      assume x_props: "has_vertex graph x \<and> reachable graph start x \<and>
+                       x |\<notin>| scc_visited (collect_scc_step graph state)"
+      then have x_unvisited: "x |\<notin>| finsert v (scc_visited state)"
+        using visit(4) by simp
+      then obtain w where w_stack: "List.member (scc_stack state) w"
+        and w_path: "unvisited_path graph (scc_visited state) w x"
+        using x_props assms(2) unfolding scc_completeness_inv_def by auto
+      have "x \<noteq> v"
+        using x_unvisited by simp
+      (* Either the path from w avoids v, or its part after v starts at a neighbor of v *)
+      from unvisited_path_finsert[OF w_path this]
+      show "\<exists>w. List.member (scc_stack (collect_scc_step graph state)) w \<and>
+                unvisited_path graph (scc_visited (collect_scc_step graph state)) w x"
+      proof
+        assume path: "unvisited_path graph (finsert v (scc_visited state)) w x"
+        have "w \<noteq> v"
+          using unvisited_path_start_unvisited[OF path] by simp
         then have "List.member rest w"
-          using w_props(1) Cons by (simp add: member_rec(1))
-        moreover have "unvisited_path graph (scc_visited state') w v"
-          using w_props(2) \<open>state' = state \<lparr> scc_stack := rest \<rparr>\<close> by simp
-        ultimately show "(\<exists>w. List.member (scc_stack state') w 
-                            \<and> unvisited_path graph (scc_visited state') w v)"
-          using \<open>state' = state\<lparr>scc_stack := rest\<rparr>\<close> by auto
-      qed
-
-    next
-      case u_unvisited: False
-      (* u not visited - visit it and add neighbors *)
-      have u_on_stack: "List.member (scc_stack state) u"
-        using Cons by (simp add: member_rec(1))
-
-      have u_in_graph: "has_vertex graph u"
-        using assms(2) u_on_stack unfolding scc_state_valid_def by blast
-
-      then obtain neighbors where neighbors_def: "fmlookup graph u = Some neighbors"
-        by (metis fmdom_notI has_vertex.elims(2) not_None_eq)
-
-      have state'_eq: "state' = state \<lparr> scc_visited := finsert u (scc_visited state),
-                                        scc_component := u # (scc_component state),
-                                        scc_stack := neighbors @ rest \<rparr>"
-        using state'_def Cons u_unvisited neighbors_def by simp
-
-      (* Show completeness holds for state' *)
-      show ?thesis
-      proof (intro allI impI)
-
-        (* Take any v reachable from start, that is unvisited in new state.
-           We need to show that there is some w on the new stack, that can
-           reach v by an unviisted path. *)
-        fix v
-        assume v_props: "has_vertex graph v 
-              \<and> reachable graph start v 
-              \<and> v |\<notin>| scc_visited state'"
-
-        then have "v |\<notin>| scc_visited state"
-          using state'_eq by auto
-
-        (* v can't be u, because u is now visited, but v is unvisited *)
-        have "v \<noteq> u"
-          using v_props state'_eq by auto
-
-        (* By old completeness, there's a path from some w in old stack *)
-        have "\<exists>w. List.member (scc_stack state) w \<and> unvisited_path graph (scc_visited state) w v"
-          using assms(4) v_props \<open>v |\<notin>| scc_visited state\<close> unfolding scc_completeness_inv_def by simp
-
-        then obtain w where w_props: "List.member (scc_stack state) w"
-                                      "unvisited_path graph (scc_visited state) w v"
-          by auto
-
-        (* Obtain an explicit path starting on w *)
-        obtain path :: "'a list" where
-          path_props: "valid_path graph path \<and>
-                       path_start path = w \<and>
-                       path_end path = v \<and>
-                       all_unvisited (scc_visited state) path"
-          using unvisited_path_implies_valid_path
-          using assms(1) w_props(2) by blast
-
-        (* Either this path contains the newly visited u, or it doesn't *)
-        show "(\<exists>w. List.member (scc_stack state') w
-                \<and> unvisited_path graph (scc_visited state') w v)"
-        proof (cases "List.member path u")
-          case path_contains_u: True
-
-          (* The path goes through u, which is now visited *)
-          (* Use path_through_v_has_next to get a suffix starting from a neighbor of u *)
-          have "\<exists>nxt suffix.
-                 has_edge graph u nxt \<and>
-                 valid_path graph (nxt # suffix) \<and>
-                 path_end (nxt # suffix) = v \<and>
-                 \<not>List.member (nxt # suffix) u \<and>
-                 (\<forall>x. List.member (nxt # suffix) x \<longrightarrow> List.member path x)"
-            using \<open>v \<noteq> u\<close> path_contains_u path_props path_through_v_has_next by blast
-
-          then obtain nxt suffix where nxt_props:
-            "has_edge graph u nxt"
-            "valid_path graph (nxt # suffix)"
-            "path_end (nxt # suffix) = v"
-            "\<not>List.member (nxt # suffix) u"
-            "(\<forall>x. List.member (nxt # suffix) x \<longrightarrow> List.member path x)"
-            by auto
-
-          (* nxt is a neighbor of u, so it's on the new stack *)
-          have "List.member neighbors nxt"
-            using nxt_props(1) neighbors_def by simp
-          then have "List.member (neighbors @ rest) nxt"
-            by (simp add: list_membership_lemma_2)
-          then have "List.member (scc_stack state') nxt"
-            using state'_eq by simp
-
-          (* The path (nxt # suffix) doesn't go through u, so it's still unvisited *)
-          have "all_unvisited (scc_visited state') (nxt # suffix)"
-          proof -
-            have "all_unvisited (scc_visited state) (nxt # suffix)"
-              using nxt_props(5) path_props by auto
-            moreover have "\<not>List.member (nxt # suffix) u"
-              using nxt_props(4) by simp
-            ultimately show ?thesis
-              using all_unvisited_preserved_without_v state'_eq by auto
-          qed
-
-          then have "unvisited_path graph (scc_visited state') nxt v"
-            by (metis assms(1) nxt_props(2,3) path_start.simps(2)
-                valid_path_implies_unvisited_path)
-
-          then show ?thesis
-            using \<open>List.member (scc_stack state') nxt\<close> by auto
-
-        next
-          case path_doesnt_contain_u: False
-          (* The path doesn't contain u so it is still a valid path for the new stack *)
-          then have "all_unvisited (scc_visited state') path"
-            using all_unvisited_preserved_without_v path_doesnt_contain_u
-            using path_props state'_eq by auto 
-          then have "unvisited_path graph (scc_visited state') w v"
-            using assms(1) path_props valid_path_implies_unvisited_path by blast
-          moreover have "List.member (scc_stack state') w"
-          proof -
-            have "List.member rest w"
-              by (metis local.Cons member_rec(1) path_doesnt_contain_u path_props path_start.elims
-                  valid_path.simps(1) w_props(1))
-            moreover have "scc_stack state' = neighbors @ rest"
-              using state'_eq by simp
-            ultimately show ?thesis
-              by (metis fset_of_list.rep_eq funionCI in_set_member set_append union_fset)
-          qed
-          ultimately show ?thesis
-            by auto
-        qed
+          using w_stack visit(1) by (simp add: member_rec(1))
+        then show ?thesis
+          using path visit(4) by (auto simp: member_def)
+      next
+        assume "\<exists>n. has_edge graph v n \<and> unvisited_path graph (finsert v (scc_visited state)) n x"
+        then obtain n where edge: "has_edge graph v n"
+          and path: "unvisited_path graph (finsert v (scc_visited state)) n x"
+          by blast
+        have "List.member neighbors n"
+          using visit(3) edge by simp
+        then show ?thesis
+          using path visit(4) by (auto simp: member_def)
       qed
     qed
   qed
-
-  then show ?thesis
-    using state'_def unfolding scc_completeness_inv_def by simp
 qed
+
+(* Lemma: collect_scc_step preserves all the invariants *)
+lemma collect_scc_step_preserves_inv:
+  assumes "valid_graph graph"
+    and downstream_visited:
+        "(\<forall>w. has_vertex graph w \<and> reachable graph start w \<and> \<not>(in_same_scc graph w start) \<longrightarrow>
+              w |\<in>| initial_visited)"
+    and "scc_inv graph initial_visited start state"
+  shows "scc_inv graph initial_visited start (collect_scc_step graph state)"
+  using assms(3)
+    collect_scc_step_preserves_valid[OF assms(1)]
+    collect_scc_step_preserves_reachability
+    collect_scc_step_preserves_soundness[OF _ _ _ downstream_visited]
+    collect_scc_step_preserves_completeness
+  unfolding scc_inv_def by blast
 
 
 (*-----------------------------------------------------------------------------*)
@@ -705,79 +383,32 @@ proof (relation "measures [\<lambda>(graph,state). fcard (fmdom graph |-| scc_vi
     by auto
 next
   fix graph :: "('a::linorder) Graph" and state :: "'a scc_state"
-  assume stack_nonempty: "\<not> scc_stack state = []"
-
-  (* We need to show the measure decreases after one step *)
+  assume "\<not> scc_stack state = []"
+  then obtain v rest where stack: "scc_stack state = v # rest"
+    by (cases "scc_stack state") auto
   show "((graph, collect_scc_step graph state), (graph, state))
         \<in> measures [\<lambda>(graph,state). fcard (fmdom graph |-| scc_visited state),
                     \<lambda>(graph,state). length (scc_stack state)]"
-  proof -
-    define state' where "state' = collect_scc_step graph state"
-
-    (* Analyze what collect_scc_step does based on the stack *)
-    obtain v rest where stack_decomp: "scc_stack state = v # rest"
-      using stack_nonempty by (cases "scc_stack state") auto
-
+  proof (cases "v |\<in>| scc_visited state")
+    case True
+    (* v already visited - the stack shrinks *)
+    then show ?thesis using stack by simp
+  next
+    case False
     show ?thesis
-    proof (cases "v |\<in>| scc_visited state")
-      case True
-      (* v already visited - just pop the stack *)
-      have new_state: "state' = state \<lparr> scc_stack := rest \<rparr>"
-        using state'_def stack_decomp True by auto
-      hence "length (scc_stack state') < length (scc_stack state)"
-        using stack_decomp by simp
-      moreover have "scc_visited state' = scc_visited state"
-        using new_state by simp
-      ultimately show ?thesis
-        using state'_def by auto
+    proof (cases "fmlookup graph v")
+      case None
+      (* v not in graph - the stack is cleared *)
+      then show ?thesis using stack False by simp
     next
-      case False
-      (* v not visited - visit it and add neighbors *)
-      show ?thesis proof (cases "fmlookup graph v")
-        (* This case arises when scc_step is called with an invalid graph *)
-        (* scc_step just bails out and clears the stack in this case *)
-        case None
-        then have new_state: "state' = state \<lparr> scc_stack := [] \<rparr>" 
-          using state'_def stack_decomp False by auto
-        hence "length (scc_stack state') < length (scc_stack state)"
-          using stack_decomp by simp
-        moreover have "scc_visited state' = scc_visited state"
-          using new_state by simp
-        ultimately show ?thesis
-          using state'_def by auto
-      next
-        case (Some neighbors)
-        have new_state: "state' = state \<lparr> scc_visited := finsert v (scc_visited state),
-                                          scc_component := v # (scc_component state),
-                                          scc_stack := neighbors @ rest \<rparr>"
-        using state'_def stack_decomp False Some by auto
-
-        hence visited_grows: "scc_visited state' = finsert v (scc_visited state)"
-          and stack_new: "scc_stack state' = neighbors @ rest"
-          by auto
-
-        (* The key: v was unvisited, now it's visited *)
-        have "v |\<notin>| scc_visited state" using False by simp
-        have "v |\<in>| scc_visited state'" using visited_grows by simp
-
-        have "fcard (fmdom graph |-| scc_visited state')
-            < fcard (fmdom graph |-| scc_visited state)"
-        proof -
-          have "v |\<in>| fmdom graph |-| scc_visited state"
-            using Some \<open>v |\<notin>| scc_visited state\<close>
-            by (simp add: fmlookup_dom_iff) 
-          moreover have "v |\<notin>| fmdom graph |-| scc_visited state'"
-            using \<open>v |\<in>| scc_visited state'\<close> by simp
-          moreover have "fmdom graph |-| scc_visited state'
-                          |\<subset>| fmdom graph |-| scc_visited state"
-            using visited_grows \<open>v |\<in>| fmdom graph |-| scc_visited state\<close>
-                  \<open>v |\<notin>| fmdom graph |-| scc_visited state'\<close> by auto
-          ultimately show ?thesis
-            by (simp add: pfsubset_fcard_mono)
-        qed
-        thus ?thesis
-          by (simp add: state'_def)
-      qed
+      case (Some neighbors)
+      (* v gets visited - the number of unvisited vertices shrinks *)
+      then have "v |\<in>| fmdom graph"
+        by (rule fmdomI)
+      then have "fcard (fmdom graph |-| finsert v (scc_visited state))
+                   < fcard (fmdom graph |-| scc_visited state)"
+        using False by (rule fcard_fminus_finsert_less)
+      then show ?thesis using stack False Some by simp
     qed
   qed
 qed
@@ -797,201 +428,39 @@ proof (induction graph state rule: collect_scc_run.induct)
     by (metis collect_scc_run.elims)
 qed
 
-(* Lemma: visited set never shrinks during collect_scc_run *)
-lemma collect_scc_run_visited_monotonic:
-  "scc_visited state |\<subseteq>| scc_visited (collect_scc_run graph state)"
-proof (induction graph state rule: collect_scc_run.induct)
-  case (1 graph state)
-  then show ?case
-  proof (cases "scc_stack state = []")
-    case True
-    then show ?thesis by simp
-  next
-    case False
-    then have "collect_scc_run graph state = collect_scc_run graph (collect_scc_step graph state)"
-      by simp
-    moreover have "scc_visited state |\<subseteq>| scc_visited (collect_scc_step graph state)"
-      using collect_scc_step_visited_monotonic by blast
-    moreover have "scc_visited (collect_scc_step graph state) |\<subseteq>|
-                   scc_visited (collect_scc_run graph (collect_scc_step graph state))"
-      using 1 False by simp
-    ultimately show ?thesis
-      by (metis dual_order.trans)
-  qed
-qed
-
-(* Lemma: current component never shrinks during collect_scc_run *)
-lemma collect_scc_run_current_grows:
-  "set (scc_component state) \<subseteq> set (scc_component (collect_scc_run graph state))"
-proof (induction graph state rule: collect_scc_run.induct)
-  case (1 graph state)
-  then show ?case
-  proof (cases "scc_stack state = []")
-    case True
-    then show ?thesis by simp
-  next
-    case False
-    then have "collect_scc_run graph state = collect_scc_run graph (collect_scc_step graph state)"
-      by simp
-    moreover have "set (scc_component state) \<subseteq> set (scc_component (collect_scc_step graph state))"
-      using collect_scc_step_current_grows by blast
-    moreover have "set (scc_component (collect_scc_step graph state)) \<subseteq>
-                   set (scc_component (collect_scc_run graph (collect_scc_step graph state)))"
-      using 1 False by simp
-    ultimately show ?thesis
-      by (metis subset_trans)
-  qed
-qed
-
-(*-----------------------------------------------------------------------------*)
-(* Invariant Preservation Lemmas for collect_scc_run *)
-(*-----------------------------------------------------------------------------*)
-
-(* These are proved by induction from the corresponding collect_scc_step lemmas *)
-
-(* Lemma: collect_scc_run preserves validity *)
-lemma collect_scc_run_preserves_valid:
-  assumes "valid_graph graph"
-    and "scc_state_valid graph initial_visited start state"
-    and "scc_reachability_inv graph initial_visited start state"
-  shows "scc_state_valid graph initial_visited start (collect_scc_run graph state)"
+(* Lemma: collect_scc_run preserves any invariant preserved by collect_scc_step *)
+lemma collect_scc_run_invariant:
+  assumes "P state"
+    and "\<And>s. P s \<Longrightarrow> scc_stack s \<noteq> [] \<Longrightarrow> P (collect_scc_step graph s)"
+  shows "P (collect_scc_run graph state)"
   using assms
 proof (induction graph state rule: collect_scc_run.induct)
   case (1 graph state)
-  then show ?case
+  show ?case
   proof (cases "scc_stack state = []")
     case True
-    then show ?thesis using 1 by simp
+    then show ?thesis using "1.prems"(1) by simp
   next
     case False
-    then have run_eq: "collect_scc_run graph state = collect_scc_run graph (collect_scc_step graph state)"
-      by simp
-
-    (* Apply step preservation lemma *)
-    have step_valid: "scc_state_valid graph initial_visited start (collect_scc_step graph state)"
-      using 1(2,3,4) collect_scc_step_preserves_valid by blast
-
-    have step_reach: "scc_reachability_inv graph initial_visited start (collect_scc_step graph state)"
-      using 1(2,3,4) collect_scc_step_preserves_reachability by blast
-
-    (* Apply induction hypothesis *)
-    have "scc_state_valid graph initial_visited start (collect_scc_run graph (collect_scc_step graph state))"
-      using 1(1)[OF False 1(2) step_valid step_reach] by simp
-
-    then show ?thesis using run_eq
-      by metis 
+    have "P (collect_scc_step graph state)"
+      using "1.prems" False by blast
+    then have "P (collect_scc_run graph (collect_scc_step graph state))"
+      using "1.IH" "1.prems"(2) False by blast
+    then show ?thesis
+      using False by (simp only: collect_scc_run.simps[of graph state] if_False)
   qed
 qed
 
-(* Lemma: collect_scc_run preserves reachability invariant *)
-lemma collect_scc_run_preserves_reachability:
+(* Lemma: collect_scc_run preserves all the invariants *)
+lemma collect_scc_run_preserves_inv:
   assumes "valid_graph graph"
-    and "scc_state_valid graph initial_visited start state"
-    and "scc_reachability_inv graph initial_visited start state"
-  shows "scc_reachability_inv graph initial_visited start (collect_scc_run graph state)"
-  using assms
-proof (induction graph state rule: collect_scc_run.induct)
-  case (1 graph state)
-  then show ?case
-  proof (cases "scc_stack state = []")
-    case True
-    then show ?thesis using 1 by simp
-  next
-    case False
-    then have run_eq: "collect_scc_run graph state = collect_scc_run graph (collect_scc_step graph state)"
-      by simp
-
-    (* Apply step preservation lemmas *)
-    have step_valid: "scc_state_valid graph initial_visited start (collect_scc_step graph state)"
-      using 1(2,3,4) collect_scc_step_preserves_valid by blast
-
-    have step_reach: "scc_reachability_inv graph initial_visited start (collect_scc_step graph state)"
-      using 1(2,3,4) collect_scc_step_preserves_reachability by blast
-
-    (* Apply induction hypothesis *)
-    have "scc_reachability_inv graph initial_visited start (collect_scc_run graph (collect_scc_step graph state))"
-      using 1(1)[OF False 1(2) step_valid step_reach] by simp
-
-    then show ?thesis using run_eq by metis
-  qed
-qed
-
-(* Lemma: collect_scc_run preserves soundness invariant *)
-lemma collect_scc_run_preserves_soundness:
-  assumes "valid_graph graph"
-    and "scc_state_valid graph initial_visited start state"
-    and "scc_reachability_inv graph initial_visited start state"
-    and "scc_soundness_inv graph initial_visited start state"
     and downstream_visited:
         "(\<forall>w. has_vertex graph w \<and> reachable graph start w \<and> \<not>(in_same_scc graph w start) \<longrightarrow>
               w |\<in>| initial_visited)"
-  shows "scc_soundness_inv graph initial_visited start (collect_scc_run graph state)"
-  using assms
-proof (induction graph state rule: collect_scc_run.induct)
-  case (1 graph state)
-  then show ?case
-  proof (cases "scc_stack state = []")
-    case True
-    then show ?thesis using 1 by simp
-  next
-    case False
-    then have run_eq: "collect_scc_run graph state = collect_scc_run graph (collect_scc_step graph state)"
-      by simp
-
-    (* Apply step preservation lemmas *)
-    have step_valid: "scc_state_valid graph initial_visited start (collect_scc_step graph state)"
-      using 1(2,3,4) collect_scc_step_preserves_valid by blast
-
-    have step_reach: "scc_reachability_inv graph initial_visited start (collect_scc_step graph state)"
-      using 1(2,3,4) collect_scc_step_preserves_reachability by blast
-
-    have step_sound: "scc_soundness_inv graph initial_visited start (collect_scc_step graph state)"
-      using 1(2,3,4,5,6) collect_scc_step_preserves_soundness by blast
-
-    (* Apply induction hypothesis *)
-    have "scc_soundness_inv graph initial_visited start (collect_scc_run graph (collect_scc_step graph state))"
-      using 1(1)[OF False 1(2) step_valid step_reach step_sound 1(6)] by simp
-
-    then show ?thesis using run_eq by metis
-  qed
-qed
-
-(* Lemma: collect_scc_run preserves completeness invariant *)
-lemma collect_scc_run_preserves_completeness:
-  assumes "valid_graph graph"
-    and "scc_state_valid graph initial_visited start state"
-    and "scc_reachability_inv graph initial_visited start state"
-    and "scc_completeness_inv graph initial_visited start state"
-  shows "scc_completeness_inv graph initial_visited start (collect_scc_run graph state)"
-  using assms
-proof (induction graph state rule: collect_scc_run.induct)
-  case (1 graph state)
-  then show ?case
-  proof (cases "scc_stack state = []")
-    case True
-    then show ?thesis using 1 by simp
-  next
-    case False
-    then have run_eq: "collect_scc_run graph state = collect_scc_run graph (collect_scc_step graph state)"
-      by simp
-
-    (* Apply step preservation lemmas *)
-    have step_valid: "scc_state_valid graph initial_visited start (collect_scc_step graph state)"
-      using 1(2,3,4) collect_scc_step_preserves_valid by blast
-
-    have step_reach: "scc_reachability_inv graph initial_visited start (collect_scc_step graph state)"
-      using 1(2,3,4) collect_scc_step_preserves_reachability by blast
-
-    have step_complete: "scc_completeness_inv graph initial_visited start (collect_scc_step graph state)"
-      using 1(2,3,4,5) collect_scc_step_preserves_completeness by blast
-
-    (* Apply induction hypothesis *)
-    have "scc_completeness_inv graph initial_visited start (collect_scc_run graph (collect_scc_step graph state))"
-      using 1(1)[OF False 1(2) step_valid step_reach step_complete] by simp
-
-    then show ?thesis using run_eq by metis
-  qed
-qed
+    and "scc_inv graph initial_visited start state"
+  shows "scc_inv graph initial_visited start (collect_scc_run graph state)"
+  by (rule collect_scc_run_invariant[where P = "scc_inv graph initial_visited start", OF assms(3)])
+     (rule collect_scc_step_preserves_inv[OF assms(1) downstream_visited])
 
 (*-----------------------------------------------------------------------------*)
 (* collect_one_scc: Uses collect_scc_run to collect one SCC *)
@@ -1021,11 +490,9 @@ lemma collect_one_scc_initial_invariants:
               w |\<in>| visited)"
     and scc_unvisited:
         "(\<forall>w. has_vertex graph w \<and> in_same_scc graph w start \<longrightarrow> w |\<notin>| visited)"
-  shows "scc_state_valid graph visited start state"
-    and "scc_reachability_inv graph visited start state"
-    and "scc_soundness_inv graph visited start state"
-    and "scc_completeness_inv graph visited start state"
-proof -
+  shows "scc_inv graph visited start state"
+  unfolding scc_inv_def
+proof (intro conjI)
   show "scc_state_valid graph visited start state"
     unfolding scc_state_valid_def assms(4)
     by (metis assms(2,3) distinct.simps(1) member_rec(1,2) order_refl scc_state.select_convs(1,2,3))
@@ -1061,18 +528,8 @@ proof -
         using in_same_scc_sym path_props(2) by blast
 
       (* By scc_unvisited, all vertices in the same SCC as start are unvisited *)
-      have "\<forall>v. v \<in> set path \<longrightarrow> v |\<notin>| visited"
-      proof (intro allI impI)
-        fix v
-        assume "v \<in> set path"
-        then have "in_same_scc graph v start"
-          using \<open>\<forall>v. v \<in> set path \<longrightarrow> in_same_scc graph v start\<close> by simp
-        moreover have "has_vertex graph v"
-          using assms(1,2) calculation edge_implies_vertices(1) scc_path_avoiding_vertex
-          by blast
-        ultimately show "v |\<notin>| visited"
-          using scc_unvisited by simp
-      qed
+      then have "\<forall>v. v \<in> set path \<longrightarrow> v |\<notin>| visited"
+        using scc_unvisited in_same_scc_vertices(1)[OF assms(1)] by blast
 
       (* Therefore the path is all unvisited *)
       then have "all_unvisited visited path"
@@ -1093,261 +550,96 @@ proof -
   qed
 qed
 
-(* Soundness: collect_one_scc only collects vertices from the same SCC,
-   provided all "downstream" SCCs have already been visited *)
-lemma collect_one_scc_sound:
-  assumes "valid_graph graph"
-    and "has_vertex graph start"
-    and "\<forall>w |\<in>| visited. has_vertex graph w"
-    and "start |\<notin>| visited"
-    and scc_unvisited:
-        "(\<forall>w. has_vertex graph w \<and> in_same_scc graph w start \<longrightarrow> w |\<notin>| visited)"
-    and downstream_visited:
-        "(\<forall>w. has_vertex graph w \<and>
-              reachable graph start w \<and>
-              \<not>(in_same_scc graph w start) \<longrightarrow>
-              w |\<in>| visited)"
-    and "collect_one_scc graph visited start = (scc, new_visited)"
-    and "List.member scc v"
-  shows "in_same_scc graph v start"
-proof -
-  define initial_state where "initial_state = \<lparr> scc_visited = visited,
-                                                 scc_component = [],
-                                                 scc_stack = [start] \<rparr>"
-  define final_state where "final_state = collect_scc_run graph initial_state"
-
-  have collect_def: "collect_one_scc graph visited start = (scc_component final_state, scc_visited final_state)"
-    unfolding collect_one_scc_def initial_state_def final_state_def by (simp add: Let_def)
-
-  (* Extract scc and new_visited from the definition *)
-  have "scc = scc_component final_state" and "new_visited = scc_visited final_state"
-    using assms(7) collect_def by auto
-
-  (* Show initial state satisfies all invariants using helper *)
-  have initial_valid: "scc_state_valid graph visited start initial_state"
-    and initial_reach: "scc_reachability_inv graph visited start initial_state"
-    and initial_sound: "scc_soundness_inv graph visited start initial_state"
-    using collect_one_scc_initial_invariants[OF assms(1,2,3) initial_state_def
-          downstream_visited scc_unvisited]
-    by blast+
-
-  (* Apply preservation lemmas *)
-  have final_valid: "scc_state_valid graph visited start final_state"
-    using assms(1) initial_valid initial_reach final_state_def
-          collect_scc_run_preserves_valid by blast
-
-  have final_reach: "scc_reachability_inv graph visited start final_state"
-    using assms(1) initial_valid initial_reach final_state_def
-          collect_scc_run_preserves_reachability by blast
-
-  have final_sound: "scc_soundness_inv graph visited start final_state"
-    using assms(1) initial_valid initial_reach initial_sound downstream_visited final_state_def
-          collect_scc_run_preserves_soundness by blast
-
-  (* v is in the component, so by validity it's in visited and not in initial visited *)
-  have "List.member (scc_component final_state) v"
-    using \<open>scc = scc_component final_state\<close> assms(8) by auto
-
-  then have "v |\<in>| scc_visited final_state"
-    using final_valid unfolding scc_state_valid_def by blast
-
-  moreover have "v |\<notin>| visited"
-    using \<open>List.member (scc_component final_state) v\<close> final_valid
-    unfolding scc_state_valid_def by blast
-
-  (* By soundness invariant, v is in the same SCC as start *)
-  ultimately show "in_same_scc graph v start"
-    using final_sound unfolding scc_soundness_inv_def by simp
-qed
-
-(* Completeness: collect_one_scc collects all unvisited vertices from the same SCC,
-   provided no vertex in the same SCC as start has been visited yet *)
-lemma collect_one_scc_complete:
-  assumes "valid_graph graph"
-    and "has_vertex graph start"
-    and "has_vertex graph v"
-    and "\<forall>w |\<in>| visited. has_vertex graph w"
-    and "in_same_scc graph v start"
+(* Correctness of collect_one_scc: provided all "downstream" SCCs have already been
+   visited, and start's own SCC is unvisited, collect_one_scc collects exactly start's
+   SCC (without duplicates), and adds it to the visited set *)
+lemma collect_one_scc_correct:
+  assumes valid: "valid_graph graph"
+    and start_vertex: "has_vertex graph start"
+    and visited_vertices: "\<forall>w |\<in>| visited. has_vertex graph w"
     and scc_unvisited:
         "(\<forall>w. has_vertex graph w \<and> in_same_scc graph w start \<longrightarrow> w |\<notin>| visited)"
     and downstream_visited:
         "(\<forall>w. has_vertex graph w \<and> reachable graph start w \<and> \<not>(in_same_scc graph w start) \<longrightarrow>
               w |\<in>| visited)"
-    and "collect_one_scc graph visited start = (scc, new_visited)"
-  shows "List.member scc v"
+    and res: "collect_one_scc graph visited start = (scc, new_visited)"
+  shows "set scc = {u. has_vertex graph u \<and> in_same_scc graph u start}"
+    and "distinct scc"
+    and "new_visited = visited |\<union>| fset_of_list scc"
 proof -
   define initial_state where "initial_state = \<lparr> scc_visited = visited,
                                                  scc_component = [],
                                                  scc_stack = [start] \<rparr>"
   define final_state where "final_state = collect_scc_run graph initial_state"
 
-  have collect_def: "collect_one_scc graph visited start = (scc_component final_state, scc_visited final_state)"
+  have "collect_one_scc graph visited start = (scc_component final_state, scc_visited final_state)"
     unfolding collect_one_scc_def initial_state_def final_state_def by (simp add: Let_def)
+  then have scc_eq: "scc = scc_component final_state"
+    and new_eq: "new_visited = scc_visited final_state"
+    using res by auto
 
-  (* Extract scc and new_visited from the definition *)
-  have "scc = scc_component final_state" and "new_visited = scc_visited final_state"
-    using assms(8) collect_def by auto
-
-  (* Show initial state satisfies all invariants using helper *)
-  have initial_valid: "scc_state_valid graph visited start initial_state"
-    and initial_reach: "scc_reachability_inv graph visited start initial_state"
-    and initial_complete: "scc_completeness_inv graph visited start initial_state"
-    using collect_one_scc_initial_invariants[OF assms(1,2,4) initial_state_def
-          downstream_visited scc_unvisited]
-    by blast+
-
-  (* Apply completeness preservation *)
-  have final_complete: "scc_completeness_inv graph visited start final_state"
-    using assms(1) initial_valid initial_reach initial_complete final_state_def
-          collect_scc_run_preserves_completeness by blast
-
-  (* The stack is empty in final state *)
+  (* The invariants hold in the final state, whose stack is empty *)
+  have "scc_inv graph visited start initial_state"
+    by (rule collect_one_scc_initial_invariants[OF valid start_vertex visited_vertices
+          initial_state_def downstream_visited scc_unvisited])
+  then have "scc_inv graph visited start final_state"
+    unfolding final_state_def by (rule collect_scc_run_preserves_inv[OF valid downstream_visited])
+  then have final_valid: "scc_state_valid graph visited start final_state"
+    and final_sound: "scc_soundness_inv graph visited start final_state"
+    and final_complete: "scc_completeness_inv graph visited start final_state"
+    unfolding scc_inv_def by blast+
   have stack_empty: "scc_stack final_state = []"
     using final_state_def collect_scc_run_stack_empty by blast
 
-  (* v is reachable from start and they're in the same SCC *)
-  have "reachable graph start v"
-    using assms(5) by simp
-
-  (* By completeness invariant, if v is not visited, there must be something on the stack *)
-  have "v |\<in>| scc_visited final_state"
+  (* By completeness (and the empty stack), all of start's SCC is visited at the end *)
+  have all_visited: "u |\<in>| scc_visited final_state"
+    if u_vertex: "has_vertex graph u" and u_scc: "in_same_scc graph u start" for u
   proof (rule ccontr)
-    assume "v |\<notin>| scc_visited final_state"
-    then have "\<exists>w. List.member (scc_stack final_state) w \<and> unvisited_path graph (scc_visited final_state) w v"
-      using final_complete assms(3) \<open>reachable graph start v\<close> unfolding scc_completeness_inv_def by simp
+    assume "u |\<notin>| scc_visited final_state"
     then obtain w where "List.member (scc_stack final_state) w"
-      by auto
+      using final_complete u_vertex u_scc unfolding scc_completeness_inv_def in_same_scc.simps
+      by blast
     then show False
-      using stack_empty
-      by (simp add: member_rec(2)) 
+      using stack_empty by (simp add: member_rec(2))
   qed
 
-  (* v was visited but not in initial visited set *)
-  moreover have "v |\<notin>| visited"
-    using assms(3,5) scc_unvisited by auto
+  have comp_set: "set (scc_component final_state) = {u. has_vertex graph u \<and> in_same_scc graph u start}"
+  proof (intro set_eqI iffI)
+    fix u
+    assume "u \<in> set (scc_component final_state)"
+    then have "u |\<in>| scc_visited final_state" "u |\<notin>| visited" "has_vertex graph u"
+      using final_valid unfolding scc_state_valid_def in_set_member by blast+
+    then show "u \<in> {u. has_vertex graph u \<and> in_same_scc graph u start}"
+      using final_sound unfolding scc_soundness_inv_def by blast
+  next
+    fix u
+    assume "u \<in> {u. has_vertex graph u \<and> in_same_scc graph u start}"
+    then have "u |\<in>| scc_visited final_state" "u |\<notin>| visited"
+      using all_visited scc_unvisited by blast+
+    then show "u \<in> set (scc_component final_state)"
+      using final_valid unfolding scc_state_valid_def in_set_member by blast
+  qed
 
-  (* By validity, v must be in the component *)
-  have final_valid: "scc_state_valid graph visited start final_state"
-    using assms(1) initial_valid initial_reach final_state_def
-          collect_scc_run_preserves_valid by blast
-
-  (* v grew from initial visited to final visited, and by validity must be in component *)
-  have "List.member (scc_component final_state) v"
-    using \<open>v |\<in>| scc_visited final_state\<close> \<open>v |\<notin>| visited\<close> final_valid
-    unfolding scc_state_valid_def by simp
-
-  then show ?thesis
-    using \<open>scc = scc_component final_state\<close> by simp
-qed
-
-(* Visited set update: new_visited is the union of old visited and the collected component *)
-lemma collect_one_scc_visited_update:
-  assumes "valid_graph graph"
-    and "has_vertex graph start"
-    and "\<forall>w |\<in>| visited. has_vertex graph w"
-    and scc_unvisited:
-        "(\<forall>w. has_vertex graph w \<and> in_same_scc graph w start \<longrightarrow> w |\<notin>| visited)"
-    and downstream_visited:
-        "(\<forall>w. has_vertex graph w \<and> reachable graph start w \<and> \<not>(in_same_scc graph w start) \<longrightarrow>
-              w |\<in>| visited)"
-    and "start |\<notin>| visited"
-    and "collect_one_scc graph visited start = (scc, new_visited)"
-  shows "new_visited = visited |\<union>| fset_of_list scc"
-proof -
-  define initial_state where "initial_state = \<lparr> scc_visited = visited,
-                                                 scc_component = [],
-                                                 scc_stack = [start] \<rparr>"
-  define final_state where "final_state = collect_scc_run graph initial_state"
-
-  have collect_def: "collect_one_scc graph visited start = (scc_component final_state, scc_visited final_state)"
-    unfolding collect_one_scc_def initial_state_def final_state_def by (simp add: Let_def)
-
-  (* Extract scc and new_visited from the definition *)
-  have scc_def: "scc = scc_component final_state" and 
-       new_visited_def: "new_visited = scc_visited final_state"
-    using assms(7) collect_def by auto
-
-  (* Show initial state satisfies validity invariants using helper *)
-  have initial_valid: "scc_state_valid graph visited start initial_state"
-    and initial_reach: "scc_reachability_inv graph visited start initial_state"
-    using collect_one_scc_initial_invariants[OF assms(1,2,3) initial_state_def
-          downstream_visited scc_unvisited]
-    by simp+
-
-  (* Apply preservation lemmas *)
-  have final_valid: "scc_state_valid graph visited start final_state"
-    using assms(1) initial_valid initial_reach final_state_def
-          collect_scc_run_preserves_valid by blast
-
-  (* The visited set grows monotonically *)
-  have visited_mono: "visited |\<subseteq>| scc_visited final_state"
-    using initial_state_def final_state_def collect_scc_run_visited_monotonic
-    by (metis scc_state.select_convs(1))
-
-  (* All vertices in the component are in the final visited set *)
-  have all_in_component_visited: "\<forall>v. List.member (scc_component final_state) v \<longrightarrow> 
-                                    v |\<in>| scc_visited final_state"
+  have comp_distinct: "distinct (scc_component final_state)"
     using final_valid unfolding scc_state_valid_def by blast
 
-  (* All vertices in final visited that weren't in initial visited are in the component *)
-  have all_newly_visited_in_component: "\<forall>v. v |\<in>| scc_visited final_state \<and> v |\<notin>| visited \<longrightarrow>
-                                         List.member (scc_component final_state) v"
-    using final_valid unfolding scc_state_valid_def
-    by metis
+  have visited_eq: "scc_visited final_state = visited |\<union>| fset_of_list (scc_component final_state)"
+  proof (rule fset_eqI)
+    fix u
+    have "u |\<in>| visited |\<union>| fset_of_list (scc_component final_state) \<longleftrightarrow>
+          u |\<in>| visited \<or> List.member (scc_component final_state) u"
+      by (simp add: fset_of_list_elem in_set_member)
+    then show "u |\<in>| scc_visited final_state \<longleftrightarrow>
+               u |\<in>| visited |\<union>| fset_of_list (scc_component final_state)"
+      using final_valid unfolding scc_state_valid_def by blast
+  qed
 
-  (* Therefore new_visited = visited \<union> component *)
-  have "new_visited |\<subseteq>| visited |\<union>| fset_of_list scc"
-    by (metis all_newly_visited_in_component new_visited_def scc_def 
-        fset_of_list.rep_eq fsubsetI funionCI in_set_member)
-  moreover have "visited |\<union>| fset_of_list scc |\<subseteq>| new_visited"
-    by (metis all_in_component_visited new_visited_def scc_def visited_mono
-        fset_of_list.rep_eq fsubsetI funion_iff in_set_member
-        sup.order_iff)
-  ultimately show ?thesis
-    by auto
-qed
-
-(* The SCC returned by collect_one_scc contains no duplicates *)
-lemma collect_one_scc_distinct:
-  assumes "valid_graph graph"
-    and "has_vertex graph start"
-    and "\<forall>w |\<in>| visited. has_vertex graph w"
-    and scc_unvisited:
-        "(\<forall>w. has_vertex graph w \<and> in_same_scc graph w start \<longrightarrow> w |\<notin>| visited)"
-    and downstream_visited:
-        "(\<forall>w. has_vertex graph w \<and> reachable graph start w \<and> \<not>(in_same_scc graph w start) \<longrightarrow>
-              w |\<in>| visited)"
-    and "start |\<notin>| visited"
-    and "collect_one_scc graph visited start = (scc, new_visited)"
-  shows "distinct scc"
-proof -
-  define initial_state where "initial_state = \<lparr> scc_visited = visited,
-                                                 scc_component = [],
-                                                 scc_stack = [start] \<rparr>"
-  define final_state where "final_state = collect_scc_run graph initial_state"
-
-  have collect_def: "collect_one_scc graph visited start = (scc_component final_state, scc_visited final_state)"
-    unfolding collect_one_scc_def initial_state_def final_state_def by (simp add: Let_def)
-
-  (* Extract scc from the definition *)
-  have scc_def: "scc = scc_component final_state"
-    using assms(7) collect_def by auto
-
-  (* Show initial state satisfies validity invariants using helper *)
-  have initial_valid: "scc_state_valid graph visited start initial_state"
-    and initial_reach: "scc_reachability_inv graph visited start initial_state"
-    using collect_one_scc_initial_invariants[OF assms(1,2,3) initial_state_def
-          downstream_visited scc_unvisited]
-    by simp+
-
-  (* Apply preservation lemma *)
-  have final_valid: "scc_state_valid graph visited start final_state"
-    using assms(1) initial_valid initial_reach final_state_def
-          collect_scc_run_preserves_valid by blast
-
-  (* Extract distinctness from validity *)
-  then show ?thesis
-    using scc_def unfolding scc_state_valid_def by simp
+  show "set scc = {u. has_vertex graph u \<and> in_same_scc graph u start}"
+    using comp_set scc_eq by simp
+  show "distinct scc"
+    using comp_distinct scc_eq by simp
+  show "new_visited = visited |\<union>| fset_of_list scc"
+    using visited_eq new_eq scc_eq by simp
 qed
 
 end

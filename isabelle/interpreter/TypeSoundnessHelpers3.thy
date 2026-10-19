@@ -2046,104 +2046,35 @@ proof -
       the helper fold_process_one_arg_sound takes its preconditions in
       exactly this shape and bridges to its internal tySubst via
       apply_subst_compose_zip. \<close>
+  let ?expTy = "\<lambda>i. apply_subst (fmap_of_list (zip (FI_TyArgs funInfo) tyArgs))
+                                (fst (FI_TmArgs funInfo ! i))"
+  have arg_ty: "core_term_type env Ghost (argTms ! i) = Some (?expTy i)"
+    if i_bound: "i < length (FI_TmArgs funInfo)" for i
+    using list_all2_nthD[OF args_typed, of i] i_bound len_argTms_fi
+    by (simp add: case_prod_beta)
+
   have vals_sound:
     "\<forall>i < length (FI_TmArgs funInfo).
-       sound_term_result state env
-         (apply_subst (fmap_of_list (zip (FI_TyArgs funInfo) tyArgs))
-                      (fst (FI_TmArgs funInfo ! i)))
-         (?valResults ! i)"
+       sound_term_result state env (?expTy i) (?valResults ! i)"
   proof (intro allI impI)
     fix i assume i_bound: "i < length (FI_TmArgs funInfo)"
-    with len_argTms_fi have i_argTms: "i < length argTms" by simp
-    let ?paramTy_i = "fst (FI_TmArgs funInfo ! i)"
-    let ?expTy_i = "apply_subst (fmap_of_list (zip (FI_TyArgs funInfo) tyArgs)) ?paramTy_i"
-    from args_typed have all_i:
-      "\<forall>j < length argTms.
-         case core_term_type env Ghost (argTms ! j) of
-           None \<Rightarrow> False
-         | Some actualTy \<Rightarrow> actualTy
-             = (map (\<lambda>(ty, _).
-                       apply_subst (fmap_of_list (zip (FI_TyArgs funInfo) tyArgs)) ty)
-                   (FI_TmArgs funInfo)) ! j"
-      by (simp add: list_all2_conv_all_nth)
-    from all_i i_argTms have raw_ty_i:
-      "case core_term_type env Ghost (argTms ! i) of
-         None \<Rightarrow> False
-       | Some actualTy \<Rightarrow> actualTy
-            = (map (\<lambda>(ty, _).
-                     apply_subst (fmap_of_list (zip (FI_TyArgs funInfo) tyArgs)) ty)
-                  (FI_TmArgs funInfo)) ! i"
-      by blast
-    have map_i_eq:
-      "(map (\<lambda>(ty, _).
-               apply_subst (fmap_of_list (zip (FI_TyArgs funInfo) tyArgs)) ty)
-            (FI_TmArgs funInfo)) ! i = ?expTy_i"
-      using i_bound by (simp add: case_prod_beta)
-    from raw_ty_i obtain actualTy where
-      cty_i: "core_term_type env Ghost (argTms ! i) = Some actualTy"
-      and act_eq_raw: "actualTy = (map (\<lambda>(ty, _).
-                     apply_subst (fmap_of_list (zip (FI_TyArgs funInfo) tyArgs)) ty)
-                  (FI_TmArgs funInfo)) ! i"
-      by (cases "core_term_type env Ghost (argTms ! i)") simp_all
-    from act_eq_raw map_i_eq have act_eq: "actualTy = ?expTy_i" by simp
-    from IH_term[OF state_env wf_env, of "argTms ! i" actualTy] cty_i
-    have "sound_term_result state env actualTy (interp_term d fuel state (argTms ! i))"
-      by simp
-    with act_eq i_argTms show
-      "sound_term_result state env ?expTy_i (?valResults ! i)"
+    show "sound_term_result state env (?expTy i) (?valResults ! i)"
+      using IH_term[OF state_env wf_env arg_ty[OF i_bound]] i_bound len_argTms_fi
       by simp
   qed
 
   have lvals_sound:
     "\<forall>i < length (FI_TmArgs funInfo).
        fst (snd (FI_TmArgs funInfo ! i)) = Ref \<longrightarrow>
-         sound_lvalue_result state env storeTyping
-           (apply_subst (fmap_of_list (zip (FI_TyArgs funInfo) tyArgs))
-                        (fst (FI_TmArgs funInfo ! i)))
-           (?refResults ! i)"
+         sound_lvalue_result state env storeTyping (?expTy i) (?refResults ! i)"
   proof (intro allI impI)
     fix i assume i_bound: "i < length (FI_TmArgs funInfo)"
                 and is_ref: "fst (snd (FI_TmArgs funInfo ! i)) = Ref"
-    with len_argTms_fi have i_argTms: "i < length argTms" by simp
-    let ?paramTy_i = "fst (FI_TmArgs funInfo ! i)"
-    let ?expTy_i = "apply_subst (fmap_of_list (zip (FI_TyArgs funInfo) tyArgs)) ?paramTy_i"
-    from args_typed have all_i:
-      "\<forall>j < length argTms.
-         case core_term_type env Ghost (argTms ! j) of
-           None \<Rightarrow> False
-         | Some actualTy \<Rightarrow> actualTy
-             = (map (\<lambda>(ty, _).
-                       apply_subst (fmap_of_list (zip (FI_TyArgs funInfo) tyArgs)) ty)
-                   (FI_TmArgs funInfo)) ! j"
-      by (simp add: list_all2_conv_all_nth)
-    from all_i i_argTms have raw_ty_i:
-      "case core_term_type env Ghost (argTms ! i) of
-         None \<Rightarrow> False
-       | Some actualTy \<Rightarrow> actualTy
-            = (map (\<lambda>(ty, _).
-                     apply_subst (fmap_of_list (zip (FI_TyArgs funInfo) tyArgs)) ty)
-                  (FI_TmArgs funInfo)) ! i"
-      by blast
-    have map_i_eq:
-      "(map (\<lambda>(ty, _).
-               apply_subst (fmap_of_list (zip (FI_TyArgs funInfo) tyArgs)) ty)
-            (FI_TmArgs funInfo)) ! i = ?expTy_i"
-      using i_bound by (simp add: case_prod_beta)
-    from raw_ty_i obtain actualTy where
-      cty_i: "core_term_type env Ghost (argTms ! i) = Some actualTy"
-      and act_eq_raw: "actualTy = (map (\<lambda>(ty, _).
-                     apply_subst (fmap_of_list (zip (FI_TyArgs funInfo) tyArgs)) ty)
-                  (FI_TmArgs funInfo)) ! i"
-      by (cases "core_term_type env Ghost (argTms ! i)") simp_all
-    from act_eq_raw map_i_eq have act_eq: "actualTy = ?expTy_i" by simp
-    from ref_writable i_argTms is_ref have wlv_i:
-      "is_writable_lvalue env (argTms ! i)" by simp
-    from IH_lvalue[OF state_env wf_env, of "argTms ! i" actualTy] cty_i wlv_i
-    have "sound_lvalue_result state env storeTyping actualTy
-            (interp_writable_lvalue d fuel state (argTms ! i))"
-      by simp
-    with act_eq i_argTms show
-      "sound_lvalue_result state env storeTyping ?expTy_i (?refResults ! i)"
+    have wlv_i: "is_writable_lvalue env (argTms ! i)"
+      using ref_writable i_bound is_ref len_argTms_fi by simp
+    show "sound_lvalue_result state env storeTyping (?expTy i) (?refResults ! i)"
+      using IH_lvalue[OF state_env wf_env conjI[OF wlv_i arg_ty[OF i_bound]]]
+            i_bound len_argTms_fi
       by simp
   qed
 

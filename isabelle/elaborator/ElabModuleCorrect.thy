@@ -515,31 +515,8 @@ proof
       and nex: "\<not> DT_Extern dt"
       and n_eq: "n = DT_Name dt"
     by (cases d) (auto split: if_splits)
-  have all_nil: "\<forall>d \<in> set intf.
-     (case d of
-        BabDecl_Const dc \<Rightarrow>
-          (if DC_Value dc = None
-              \<and> (if DC_Ghost dc = Ghost
-                 then DC_Name dc |\<notin>| fmdom (CM_Functions intMod)
-                      \<and> DC_Name dc |\<notin>| fmdom (CM_Functions implMod)
-                 else DC_Name dc |\<notin>| fmdom (CM_GlobalVars intMod)
-                      \<and> DC_Name dc |\<notin>| fmdom (CM_GlobalVars implMod))
-           then [TyErr_DeclaredButNotDefined (DC_Location dc) (DC_Name dc)]
-           else [])
-      | BabDecl_Function df \<Rightarrow>
-          (if DF_Body df = None \<and> \<not> DF_Extern df
-              \<and> DF_Name df |\<notin>| fmdom (CM_Functions intMod)
-              \<and> DF_Name df |\<notin>| fmdom (CM_Functions implMod)
-           then [TyErr_DeclaredButNotDefined (DF_Location df) (DF_Name df)]
-           else [])
-      | BabDecl_Datatype dd \<Rightarrow> []
-      | BabDecl_Typedef dt \<Rightarrow>
-          (if DT_Definition dt = None \<and> \<not> DT_Extern dt
-              \<and> DT_Name dt |\<notin>| fmdom (CM_TypeSubst implMod)
-           then [TyErr_AbstractTypeNotRealized (DT_Location dt) (DT_Name dt)]
-           else [])) = []"
-    using ok unfolding check_completeness_def by simp
-  from bspec[OF all_nil d_in] show "n |\<in>| fmdom (CM_TypeSubst implMod)"
+  from concat_map_Nil_member[OF ok[unfolded check_completeness_def] d_in]
+  show "n |\<in>| fmdom (CM_TypeSubst implMod)"
     unfolding d_eq using abs nex n_eq by (auto split: if_splits)
 qed
 
@@ -1247,30 +1224,7 @@ lemma check_completeness_defined:
     and "decls_undefined_funs intf
            |\<subseteq>| fmdom (CM_Functions intMod) |\<union>| fmdom (CM_Functions implMod)"
 proof -
-  have all_nil: "\<forall>d \<in> set intf.
-     (case d of
-        BabDecl_Const dc \<Rightarrow>
-          (if DC_Value dc = None
-              \<and> (if DC_Ghost dc = Ghost
-                 then DC_Name dc |\<notin>| fmdom (CM_Functions intMod)
-                      \<and> DC_Name dc |\<notin>| fmdom (CM_Functions implMod)
-                 else DC_Name dc |\<notin>| fmdom (CM_GlobalVars intMod)
-                      \<and> DC_Name dc |\<notin>| fmdom (CM_GlobalVars implMod))
-           then [TyErr_DeclaredButNotDefined (DC_Location dc) (DC_Name dc)]
-           else [])
-      | BabDecl_Function df \<Rightarrow>
-          (if DF_Body df = None \<and> \<not> DF_Extern df
-              \<and> DF_Name df |\<notin>| fmdom (CM_Functions intMod)
-              \<and> DF_Name df |\<notin>| fmdom (CM_Functions implMod)
-           then [TyErr_DeclaredButNotDefined (DF_Location df) (DF_Name df)]
-           else [])
-      | BabDecl_Datatype dd \<Rightarrow> []
-      | BabDecl_Typedef dt \<Rightarrow>
-          (if DT_Definition dt = None \<and> \<not> DT_Extern dt
-              \<and> DT_Name dt |\<notin>| fmdom (CM_TypeSubst implMod)
-           then [TyErr_AbstractTypeNotRealized (DT_Location dt) (DT_Name dt)]
-           else [])) = []"
-    using ok unfolding check_completeness_def by simp
+  note d_ok = concat_map_Nil_member[OF ok[unfolded check_completeness_def]]
   show "decls_undefined_consts intf
           |\<subseteq>| fmdom (CM_GlobalVars intMod) |\<union>| fmdom (CM_GlobalVars implMod)"
   proof
@@ -1282,7 +1236,7 @@ proof -
         and ng: "DC_Ghost dc = NotGhost"
         and n_eq: "n = DC_Name dc"
       by (cases d) (auto split: if_splits)
-    from bspec[OF all_nil d_in]
+    from d_ok[OF d_in]
     show "n |\<in>| fmdom (CM_GlobalVars intMod) |\<union>| fmdom (CM_GlobalVars implMod)"
       unfolding d_eq using noval ng n_eq by (auto split: if_splits)
   qed
@@ -1305,13 +1259,13 @@ proof -
       fix df assume d_eq: "d = BabDecl_Function df"
         and nobody: "DF_Body df = None" and noext: "\<not> DF_Extern df"
         and n_eq: "n = DF_Name df"
-      from bspec[OF all_nil d_in] show ?thesis
+      from d_ok[OF d_in] show ?thesis
         unfolding d_eq using nobody noext n_eq by (auto split: if_splits)
     next
       fix dc assume d_eq: "d = BabDecl_Const dc"
         and noval: "DC_Value dc = None" and gh: "DC_Ghost dc = Ghost"
         and n_eq: "n = DC_Name dc"
-      from bspec[OF all_nil d_in] show ?thesis
+      from d_ok[OF d_in] show ?thesis
         unfolding d_eq using noval gh n_eq by (auto split: if_splits)
     qed
   qed

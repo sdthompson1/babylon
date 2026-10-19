@@ -4951,6 +4951,44 @@ proof -
     by (simp add: ghost_const_fun_def)
 qed
 
+(* Declaring and defining a fresh ghost constant in one step (the two
+   defining branches without a prior declaration): add_ghost_const followed
+   by define_ghost_const, with the rhs typing moved to the extended env. *)
+lemma elab_decls_invariant_add_define_ghost_const:
+  assumes inv: "elab_decls_invariant env0 ownAbstract ctxGlobals env elabEnv m"
+      and notin: "\<not> term_name_in_scope env name"
+      and wk: "is_well_kinded env declTy"
+      and typed: "core_term_type env Ghost finalTm = Some declTy"
+  shows "elab_decls_invariant env0 ownAbstract ctxGlobals
+           (tyenv_add_function name (ghost_const_fun_info declTy) env)
+           (elabEnv \<lparr> EE_GhostConstants := finsert name (EE_GhostConstants elabEnv) \<rparr>)
+           (m \<lparr> CM_TyEnv := tyenv_add_function name (ghost_const_fun_info declTy) (CM_TyEnv m),
+                CM_Functions := fmupd name (ghost_const_fun finalTm) (CM_Functions m) \<rparr>)"
+proof -
+  let ?env1 = "tyenv_add_function name (ghost_const_fun_info declTy) env"
+  let ?ee1 = "elabEnv \<lparr> EE_GhostConstants := finsert name (EE_GhostConstants elabEnv) \<rparr>"
+  let ?m1 = "m \<lparr> CM_TyEnv := tyenv_add_function name (ghost_const_fun_info declTy)
+                               (CM_TyEnv m) \<rparr>"
+  have inv1: "elab_decls_invariant env0 ownAbstract ctxGlobals ?env1 ?ee1 ?m1"
+    by (rule elab_decls_invariant_add_ghost_const[OF inv notin wk])
+  have wf: "tyenv_well_formed env"
+    using inv unfolding elab_decls_invariant_def by blast
+  have fresh_fn: "name |\<notin>| fmdom (TE_Functions env)"
+    using notin unfolding term_name_in_scope_def by blast
+  have ext: "tyenv_extends env ?env1"
+    using tyenv_extends_add_function[OF fresh_fn] .
+  have cons: "tyenv_ctors_consistent env"
+    using wf unfolding tyenv_well_formed_def by blast
+  have typed1: "core_term_type ?env1 Ghost finalTm = Some declTy"
+    using core_term_type_tyenv_extends[OF ext cons typed] .
+  have lk1: "fmlookup (TE_Functions ?env1) name = Some (ghost_const_fun_info declTy)"
+    by (simp add: tyenv_add_function_def)
+  have "elab_decls_invariant env0 ownAbstract ctxGlobals ?env1 ?ee1
+          (?m1 \<lparr> CM_Functions := fmupd name (ghost_const_fun finalTm) (CM_Functions ?m1) \<rparr>)"
+    by (rule elab_decls_invariant_define_ghost_const[OF inv1 lk1 typed1])
+  then show ?thesis by simp
+qed
+
 (* The four ghost branches of elab_const_decl, dispatched to the step lemmas.
    The DefineDeclared branch recovers the declared FunInfo's shape from the
    ghost-constants consistency conjunct of the invariant. *)
@@ -5033,30 +5071,9 @@ proof -
     have typed: "core_term_type env Ghost finalTm = Some declTy"
      and wk: "is_well_kinded env declTy"
       using elab_const_rhs_infer_correct[OF infer_ok wf eewf mv_tv] by blast+
-    let ?env1 = "tyenv_add_function (DC_Name dc) (ghost_const_fun_info declTy) env"
-    let ?ee1 = "elabEnv \<lparr> EE_GhostConstants :=
-                    finsert (DC_Name dc) (EE_GhostConstants elabEnv) \<rparr>"
-    let ?m1 = "m \<lparr> CM_TyEnv := tyenv_add_function (DC_Name dc)
-                                 (ghost_const_fun_info declTy) (CM_TyEnv m) \<rparr>"
-    have inv1: "elab_decls_invariant env0 ownAbstract ctxGlobals ?env1 ?ee1 ?m1"
-      by (rule elab_decls_invariant_add_ghost_const[OF inv notin wk])
-    have fresh_fn: "DC_Name dc |\<notin>| fmdom (TE_Functions env)"
-      using notin unfolding term_name_in_scope_def by blast
-    have ext: "tyenv_extends env ?env1"
-      using tyenv_extends_add_function[OF fresh_fn] .
-    have cons: "tyenv_ctors_consistent env"
-      using wf unfolding tyenv_well_formed_def by blast
-    have typed1: "core_term_type ?env1 Ghost finalTm = Some declTy"
-      using core_term_type_tyenv_extends[OF ext cons typed] .
-    have lk1: "fmlookup (TE_Functions ?env1) (DC_Name dc)
-                 = Some (ghost_const_fun_info declTy)"
-      by (simp add: tyenv_add_function_def)
-    have "elab_decls_invariant env0 ownAbstract ctxGlobals ?env1 ?ee1
-            (?m1 \<lparr> CM_Functions := fmupd (DC_Name dc) (ghost_const_fun finalTm)
-                                         (CM_Functions ?m1) \<rparr>)"
-      by (rule elab_decls_invariant_define_ghost_const[OF inv1 lk1 typed1])
-    then show ?thesis
-      unfolding InferDefine(6) InferDefine(7) InferDefine(8) by simp
+    show ?thesis
+      unfolding InferDefine(6) InferDefine(7) InferDefine(8)
+      using elab_decls_invariant_add_define_ghost_const[OF inv notin wk typed] by simp
   next
     case (AnnotDefine rhs ty declTy finalTm)
     \<comment> \<open>Annotated: the annotation fixes the type, the rhs is coerced to it.\<close>
@@ -5067,30 +5084,9 @@ proof -
     have rt_decl: "Ghost = NotGhost \<longrightarrow> is_runtime_type env declTy" by simp
     have typed: "core_term_type env Ghost finalTm = Some declTy"
       using elab_const_rhs_correct(1)[OF rhs_ok wf eewf mv_tv wk rt_decl] .
-    let ?env1 = "tyenv_add_function (DC_Name dc) (ghost_const_fun_info declTy) env"
-    let ?ee1 = "elabEnv \<lparr> EE_GhostConstants :=
-                    finsert (DC_Name dc) (EE_GhostConstants elabEnv) \<rparr>"
-    let ?m1 = "m \<lparr> CM_TyEnv := tyenv_add_function (DC_Name dc)
-                                 (ghost_const_fun_info declTy) (CM_TyEnv m) \<rparr>"
-    have inv1: "elab_decls_invariant env0 ownAbstract ctxGlobals ?env1 ?ee1 ?m1"
-      by (rule elab_decls_invariant_add_ghost_const[OF inv notin wk])
-    have fresh_fn: "DC_Name dc |\<notin>| fmdom (TE_Functions env)"
-      using notin unfolding term_name_in_scope_def by blast
-    have ext: "tyenv_extends env ?env1"
-      using tyenv_extends_add_function[OF fresh_fn] .
-    have cons: "tyenv_ctors_consistent env"
-      using wf unfolding tyenv_well_formed_def by blast
-    have typed1: "core_term_type ?env1 Ghost finalTm = Some declTy"
-      using core_term_type_tyenv_extends[OF ext cons typed] .
-    have lk1: "fmlookup (TE_Functions ?env1) (DC_Name dc)
-                 = Some (ghost_const_fun_info declTy)"
-      by (simp add: tyenv_add_function_def)
-    have "elab_decls_invariant env0 ownAbstract ctxGlobals ?env1 ?ee1
-            (?m1 \<lparr> CM_Functions := fmupd (DC_Name dc) (ghost_const_fun finalTm)
-                                         (CM_Functions ?m1) \<rparr>)"
-      by (rule elab_decls_invariant_define_ghost_const[OF inv1 lk1 typed1])
-    then show ?thesis
-      unfolding AnnotDefine(7) AnnotDefine(8) AnnotDefine(9) by simp
+    show ?thesis
+      unfolding AnnotDefine(7) AnnotDefine(8) AnnotDefine(9)
+      using elab_decls_invariant_add_define_ghost_const[OF inv notin wk typed] by simp
   qed
 qed
 

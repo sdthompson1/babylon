@@ -1543,6 +1543,32 @@ proof (induction m arbitrary: colTys rule: compile_matrix.induct)
       have ps0_at_c_kind: "head_kind_of (ps0 ! c) = Some hk"
         using nw_col_eq head_kind_some by simp
 
+      \<comment> \<open>The default-matrix IH, shared by all three head kinds.\<close>
+      have IH_default:
+        "list_ex is_wildcard_like ?col_pats \<Longrightarrow>
+           match_tree_eval \<rho>
+             (compile_matrix (drop_at c scruts, List.map_filter (default_row c) rows))
+           = matrix_first_match \<rho>
+               (drop_at c scruts, List.map_filter (default_row c) rows)"
+      proof -
+        assume has_default: "list_ex is_wildcard_like ?col_pats"
+        from matrix_inv_default[OF inv c_lt]
+        have inv': "matrix_inv env g (drop_at c colTys)
+                     (drop_at c scruts, List.map_filter (default_row c) rows)" .
+        have ne': "snd (drop_at c scruts, List.map_filter (default_row c) rows) \<noteq> []"
+          using default_rows_nonempty[OF col_some has_default] by simp
+        have sc': "scruts_consistent \<rho> env
+                     (fst (drop_at c scruts, List.map_filter (default_row c) rows))
+                     (drop_at c colTys)"
+          using scruts_consistent_drop_at[OF sc_cons] by simp
+        from "1.IH"(1)[OF col_some _ _ _ _ has_default inv' ne' wf sc']
+        show "match_tree_eval \<rho>
+                (compile_matrix (drop_at c scruts, List.map_filter (default_row c) rows))
+              = matrix_first_match \<rho>
+                  (drop_at c scruts, List.map_filter (default_row c) rows)"
+          by auto
+      qed
+
       show ?thesis
       proof (cases hk)
         case HK_Bool
@@ -1633,30 +1659,6 @@ proof (induction m arbitrary: colTys rule: compile_matrix.induct)
                                    List.map_filter (specialise_row_bool c h) rows))
                 = matrix_first_match \<rho>
                     (drop_at c scruts, List.map_filter (specialise_row_bool c h) rows)"
-            by auto
-        qed
-        have IH_default:
-          "list_ex is_wildcard_like ?col_pats \<Longrightarrow>
-             match_tree_eval \<rho>
-               (compile_matrix (drop_at c scruts, List.map_filter (default_row c) rows))
-             = matrix_first_match \<rho>
-                 (drop_at c scruts, List.map_filter (default_row c) rows)"
-        proof -
-          assume has_default: "list_ex is_wildcard_like ?col_pats"
-          from matrix_inv_default[OF inv c_lt]
-          have inv': "matrix_inv env g (drop_at c colTys)
-                       (drop_at c scruts, List.map_filter (default_row c) rows)" .
-          have ne': "snd (drop_at c scruts, List.map_filter (default_row c) rows) \<noteq> []"
-            using default_rows_nonempty[OF col_some has_default] by simp
-          have sc': "scruts_consistent \<rho> env
-                       (fst (drop_at c scruts, List.map_filter (default_row c) rows))
-                       (drop_at c colTys)"
-            using scruts_consistent_drop_at[OF sc_cons] by simp
-          from "1.IH"(1)[OF col_some _ _ _ _ has_default inv' ne' wf sc']
-          show "match_tree_eval \<rho>
-                  (compile_matrix (drop_at c scruts, List.map_filter (default_row c) rows))
-                = matrix_first_match \<rho>
-                    (drop_at c scruts, List.map_filter (default_row c) rows)"
             by auto
         qed
 
@@ -1907,30 +1909,6 @@ proof (induction m arbitrary: colTys rule: compile_matrix.induct)
                                    List.map_filter (specialise_row_int c h) rows))
                 = matrix_first_match \<rho>
                     (drop_at c scruts, List.map_filter (specialise_row_int c h) rows)"
-            by auto
-        qed
-        have IH_default:
-          "list_ex is_wildcard_like ?col_pats \<Longrightarrow>
-             match_tree_eval \<rho>
-               (compile_matrix (drop_at c scruts, List.map_filter (default_row c) rows))
-             = matrix_first_match \<rho>
-                 (drop_at c scruts, List.map_filter (default_row c) rows)"
-        proof -
-          assume has_default: "list_ex is_wildcard_like ?col_pats"
-          from matrix_inv_default[OF inv c_lt]
-          have inv': "matrix_inv env g (drop_at c colTys)
-                       (drop_at c scruts, List.map_filter (default_row c) rows)" .
-          have ne': "snd (drop_at c scruts, List.map_filter (default_row c) rows) \<noteq> []"
-            using default_rows_nonempty[OF col_some has_default] by simp
-          have sc': "scruts_consistent \<rho> env
-                       (fst (drop_at c scruts, List.map_filter (default_row c) rows))
-                       (drop_at c colTys)"
-            using scruts_consistent_drop_at[OF sc_cons] by simp
-          from "1.IH"(1)[OF col_some _ _ _ _ has_default inv' ne' wf sc']
-          show "match_tree_eval \<rho>
-                  (compile_matrix (drop_at c scruts, List.map_filter (default_row c) rows))
-                = matrix_first_match \<rho>
-                    (drop_at c scruts, List.map_filter (default_row c) rows)"
             by auto
         qed
         let ?head_arms = "map (\<lambda>h. (CorePat_Int h,
@@ -2194,30 +2172,6 @@ proof (induction m arbitrary: colTys rule: compile_matrix.induct)
                     (replace_at c (CoreTm_VariantProj (scruts ! c) h) scruts,
                      List.map_filter (specialise_row_variant c h) rows)"
             using ih .
-        qed
-        have IH_default:
-          "list_ex is_wildcard_like ?col_pats \<Longrightarrow>
-             match_tree_eval \<rho>
-               (compile_matrix (drop_at c scruts, List.map_filter (default_row c) rows))
-             = matrix_first_match \<rho>
-                 (drop_at c scruts, List.map_filter (default_row c) rows)"
-        proof -
-          assume has_default: "list_ex is_wildcard_like ?col_pats"
-          from matrix_inv_default[OF inv c_lt]
-          have inv': "matrix_inv env g (drop_at c colTys)
-                       (drop_at c scruts, List.map_filter (default_row c) rows)" .
-          have ne': "snd (drop_at c scruts, List.map_filter (default_row c) rows) \<noteq> []"
-            using default_rows_nonempty[OF col_some has_default] by simp
-          have sc': "scruts_consistent \<rho> env
-                       (fst (drop_at c scruts, List.map_filter (default_row c) rows))
-                       (drop_at c colTys)"
-            using scruts_consistent_drop_at[OF sc_cons] by simp
-          from "1.IH"(1)[OF col_some _ _ _ _ has_default inv' ne' wf sc']
-          show "match_tree_eval \<rho>
-                  (compile_matrix (drop_at c scruts, List.map_filter (default_row c) rows))
-                = matrix_first_match \<rho>
-                    (drop_at c scruts, List.map_filter (default_row c) rows)"
-            by auto
         qed
         let ?head_arms = "map (\<lambda>h'. (CorePat_Variant h' CorePat_Wildcard,
                                      compile_matrix

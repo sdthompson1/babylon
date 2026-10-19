@@ -612,6 +612,14 @@ lemma in_same_scc_trans:
   shows "in_same_scc graph v w"
   using assms reachable_trans by auto
 
+(* Lemma: In a valid graph, two vertices in the same SCC are vertices of the graph *)
+lemma in_same_scc_vertices:
+  assumes "valid_graph graph"
+    and "in_same_scc graph u v"
+  shows "has_vertex graph u"
+    and "has_vertex graph v"
+  using assms reachable_implies_vertices in_same_scc.simps by blast+
+
 (* Two SCCs are either disjoint or equal *)
 lemma scc_disjoint_or_equal:
   assumes "valid_graph graph"

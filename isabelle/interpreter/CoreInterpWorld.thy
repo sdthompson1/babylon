@@ -452,21 +452,7 @@ next
           proof (cases condVal)
             case (CV_Bool b)
             with H CoreStmt_Assert Some cv show ?thesis by (cases b) simp_all
-          next
-            case CV_FiniteInt with H CoreStmt_Assert Some cv show ?thesis by simp
-          next
-            case CV_Variant with H CoreStmt_Assert Some cv show ?thesis by simp
-          next
-            case CV_Record with H CoreStmt_Assert Some cv show ?thesis by simp
-          next
-            case CV_Array with H CoreStmt_Assert Some cv show ?thesis by simp
-          next
-            case CV_Int with H CoreStmt_Assert Some cv show ?thesis by simp
-          next
-            case CV_Real with H CoreStmt_Assert Some cv show ?thesis by simp
-          next
-            case CV_Extern with H CoreStmt_Assert Some cv show ?thesis by simp
-          qed
+          qed (use H CoreStmt_Assert Some cv in simp_all)
         qed
         show ?thesis by (simp add: res_eq)
       next
@@ -545,22 +531,8 @@ next
               show ?thesis using w1 w2 Continue by simp
             qed
           qed
-        next
-          \<comment> \<open>Non-bool cond value: TypeError, contradicts H. \<close>
-          case CV_FiniteInt with CoreStmt_While H cv show ?thesis by simp
-        next
-          case CV_Variant with CoreStmt_While H cv show ?thesis by simp
-        next
-          case CV_Record with CoreStmt_While H cv show ?thesis by simp
-        next
-          case CV_Array with CoreStmt_While H cv show ?thesis by simp
-        next
-          case CV_Int with CoreStmt_While H cv show ?thesis by simp
-        next
-          case CV_Real with CoreStmt_While H cv show ?thesis by simp
-        next
-          case CV_Extern with CoreStmt_While H cv show ?thesis by simp
-        qed
+        \<comment> \<open>Non-bool cond value: TypeError, contradicts H. \<close>
+        qed (use CoreStmt_While H cv in simp_all)
       next
         case (CoreStmt_Match gm scrutTm arms)
         from T CoreStmt_Match have gm_ok: "g = Ghost \<longrightarrow> gm = Ghost"

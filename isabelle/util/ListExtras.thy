@@ -56,6 +56,17 @@ lemma those_map_mono:
 
 
 (* ========================================================================== *)
+(* concat *)
+(* ========================================================================== *)
+
+(* An empty concatenation of per-element lists (e.g. per-element error lists)
+   has an empty list at every element. *)
+lemma concat_map_Nil_member:
+  "concat (map f xs) = [] \<Longrightarrow> x \<in> set xs \<Longrightarrow> f x = []"
+  by auto
+
+
+(* ========================================================================== *)
 (* list_all2 *)
 (* ========================================================================== *)
 

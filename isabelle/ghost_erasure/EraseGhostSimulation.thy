@@ -1172,22 +1172,8 @@ next
                 from HE re show ?thesis by blast
               qed
             qed
-          next
-            \<comment> \<open>Non-bool cond value: TypeError, contradicts H. \<close>
-            case CV_FiniteInt with CoreStmt_While H cv show ?thesis by simp
-          next
-            case CV_Variant with CoreStmt_While H cv show ?thesis by simp
-          next
-            case CV_Record with CoreStmt_While H cv show ?thesis by simp
-          next
-            case CV_Array with CoreStmt_While H cv show ?thesis by simp
-          next
-            case CV_Int with CoreStmt_While H cv show ?thesis by simp
-          next
-            case CV_Real with CoreStmt_While H cv show ?thesis by simp
-          next
-            case CV_Extern with CoreStmt_While H cv show ?thesis by simp
-          qed
+          \<comment> \<open>Non-bool cond value: TypeError, contradicts H. \<close>
+          qed (use CoreStmt_While H cv in simp_all)
         qed
       next
         case (CoreStmt_Match g scrutTm arms)

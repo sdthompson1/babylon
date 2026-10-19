@@ -486,23 +486,34 @@ corollary tyenv_well_formed_add_ghost_var:
                                  TE_GhostLocals := finsert var (TE_GhostLocals env) \<rparr>)"
   by (rule tyenv_well_formed_add_local[OF wf ty_wk]) auto
 
-(* tyenv_well_formed does not depend on TE_ConstLocals. *)
-lemma tyenv_well_formed_TE_ConstLocals_irrelevant:
-  assumes "tyenv_well_formed env"
-  shows "tyenv_well_formed (env \<lparr> TE_ConstLocals := c \<rparr>)"
+(* tyenv_well_formed reads only the fields listed here; in particular it does not
+   depend on TE_ConstLocals, TE_FunctionImpure, TE_ProofGoal or TE_ProofTopLevel. *)
+lemma tyenv_well_formed_cong:
+  assumes "TE_LocalVars env' = TE_LocalVars env"
+      and "TE_GlobalVars env' = TE_GlobalVars env"
+      and "TE_GhostLocals env' = TE_GhostLocals env"
+      and "TE_TypeVars env' = TE_TypeVars env"
+      and "TE_RuntimeTypeVars env' = TE_RuntimeTypeVars env"
+      and "TE_ReturnType env' = TE_ReturnType env"
+      and "TE_FunctionGhost env' = TE_FunctionGhost env"
+      and "TE_Functions env' = TE_Functions env"
+      and "TE_Datatypes env' = TE_Datatypes env"
+      and "TE_DataCtors env' = TE_DataCtors env"
+      and "TE_DataCtorsByType env' = TE_DataCtorsByType env"
+      and "TE_AbstractAllocLevels env' = TE_AbstractAllocLevels env"
+  shows "tyenv_well_formed env' = tyenv_well_formed env"
 proof -
-  let ?env' = "env \<lparr> TE_ConstLocals := c \<rparr>"
-  have wk: "\<And>ty. is_well_kinded ?env' ty = is_well_kinded env ty"
-    using is_well_kinded_cong_env[of ?env' env] by simp
-  have rt: "\<And>ty. is_runtime_type ?env' ty = is_runtime_type env ty"
-    using is_runtime_type_cong_env[of ?env' env] by simp
-  have scope_wk_one: "\<And>tvs t. is_well_kinded (?env' \<lparr> TE_TypeVars := tvs \<rparr>) t =
-                                is_well_kinded (env \<lparr> TE_TypeVars := tvs \<rparr>) t"
-    by (rule is_well_kinded_cong_env) simp_all
-  have scope_rt: "\<And>tvs rtvs t. is_runtime_type (?env' \<lparr> TE_TypeVars := tvs, TE_RuntimeTypeVars := rtvs \<rparr>) t =
+  have wk: "\<And>ty. is_well_kinded env' ty = is_well_kinded env ty"
+    by (rule is_well_kinded_cong_env) (simp_all add: assms)
+  have rt: "\<And>ty. is_runtime_type env' ty = is_runtime_type env ty"
+    by (rule is_runtime_type_cong_fields) (simp_all add: assms)
+  have scope_wk: "\<And>tvs t. is_well_kinded (env' \<lparr> TE_TypeVars := tvs \<rparr>) t =
+                            is_well_kinded (env \<lparr> TE_TypeVars := tvs \<rparr>) t"
+    by (rule is_well_kinded_cong_env) (simp_all add: assms)
+  have scope_rt: "\<And>tvs rtvs t. is_runtime_type (env' \<lparr> TE_TypeVars := tvs, TE_RuntimeTypeVars := rtvs \<rparr>) t =
                                  is_runtime_type (env \<lparr> TE_TypeVars := tvs, TE_RuntimeTypeVars := rtvs \<rparr>) t"
-    by (rule is_runtime_type_cong_env) simp_all
-  from assms show ?thesis unfolding tyenv_well_formed_def
+    by (rule is_runtime_type_cong_fields) (simp_all add: assms)
+  show ?thesis unfolding tyenv_well_formed_def
     tyenv_vars_well_kinded_def tyenv_vars_runtime_def
     tyenv_ghost_vars_subset_def tyenv_return_type_well_kinded_def
     tyenv_return_type_runtime_def tyenv_return_type_complete_def
@@ -517,8 +528,23 @@ proof -
     tyenv_runtime_tyvars_subset_def
     tyenv_abstract_types_subset_def
     tyenv_datatypes_nonempty_def
-    by (force simp: wk rt scope_wk_one scope_rt)
+    by (simp add: assms wk rt scope_wk scope_rt)
 qed
+
+lemma tyenv_well_formed_TE_ConstLocals_irrelevant:
+  assumes "tyenv_well_formed env"
+  shows "tyenv_well_formed (env \<lparr> TE_ConstLocals := c \<rparr>)"
+  using assms tyenv_well_formed_cong[of "env \<lparr> TE_ConstLocals := c \<rparr>" env] by simp
+
+lemma tyenv_well_formed_TE_ProofGoal_irrelevant:
+  assumes "tyenv_well_formed env"
+  shows "tyenv_well_formed (env \<lparr> TE_ProofGoal := g \<rparr>)"
+  using assms tyenv_well_formed_cong[of "env \<lparr> TE_ProofGoal := g \<rparr>" env] by simp
+
+lemma tyenv_well_formed_TE_ProofTopLevel_irrelevant:
+  assumes "tyenv_well_formed env"
+  shows "tyenv_well_formed (env \<lparr> TE_ProofTopLevel := b \<rparr>)"
+  using assms tyenv_well_formed_cong[of "env \<lparr> TE_ProofTopLevel := b \<rparr>" env] by simp
 
 (* Declaring a local variable preserves tyenv_well_formed.
    The new variable is added to TE_LocalVars, added to or removed from TE_GhostLocals
@@ -558,74 +584,6 @@ corollary tyenv_well_formed_declare_ghost:
                                  TE_GhostLocals := finsert var (TE_GhostLocals env),
                                  TE_ConstLocals := c \<rparr>)"
   using tyenv_well_formed_declare_var[OF assms, where g = Ghost] by simp
-
-(* tyenv_well_formed does not depend on TE_ProofGoal *)
-lemma tyenv_well_formed_TE_ProofGoal_irrelevant:
-  assumes "tyenv_well_formed env"
-  shows "tyenv_well_formed (env \<lparr> TE_ProofGoal := g \<rparr>)"
-proof -
-  let ?env' = "env \<lparr> TE_ProofGoal := g \<rparr>"
-  have wk: "\<And>ty. is_well_kinded ?env' ty = is_well_kinded env ty"
-    using is_well_kinded_cong_env[of ?env' env] by simp
-  have rt: "\<And>ty. is_runtime_type ?env' ty = is_runtime_type env ty"
-    using is_runtime_type_cong_env[of ?env' env] by simp
-  have scope_wk_one: "\<And>tvs t. is_well_kinded (?env' \<lparr> TE_TypeVars := tvs \<rparr>) t =
-                                is_well_kinded (env \<lparr> TE_TypeVars := tvs \<rparr>) t"
-    by (rule is_well_kinded_cong_env) simp_all
-  have scope_rt: "\<And>tvs rtvs t. is_runtime_type (?env' \<lparr> TE_TypeVars := tvs, TE_RuntimeTypeVars := rtvs \<rparr>) t =
-                                 is_runtime_type (env \<lparr> TE_TypeVars := tvs, TE_RuntimeTypeVars := rtvs \<rparr>) t"
-    by (rule is_runtime_type_cong_env) simp_all
-  from assms show ?thesis unfolding tyenv_well_formed_def
-    tyenv_vars_well_kinded_def tyenv_vars_runtime_def
-    tyenv_ghost_vars_subset_def tyenv_return_type_well_kinded_def
-    tyenv_return_type_runtime_def tyenv_return_type_complete_def
-    tyenv_ctors_consistent_def
-    tyenv_payloads_well_kinded_def
-    tyenv_ctor_tyvars_distinct_def tyenv_ctors_by_type_consistent_def
-    tyenv_fun_types_well_kinded_def
-    tyenv_fun_tyvars_distinct_def
-    tyenv_fun_ghost_constraint_def Let_def
-    tyenv_fun_return_types_complete_def
-    tyenv_ctor_tyvars_fresh_def tyenv_fun_tyvars_fresh_def
-    tyenv_runtime_tyvars_subset_def
-    tyenv_abstract_types_subset_def
-    tyenv_datatypes_nonempty_def
-    by (force simp: wk rt scope_wk_one scope_rt)
-qed
-
-(* tyenv_well_formed does not depend on TE_ProofTopLevel *)
-lemma tyenv_well_formed_TE_ProofTopLevel_irrelevant:
-  assumes "tyenv_well_formed env"
-  shows "tyenv_well_formed (env \<lparr> TE_ProofTopLevel := b \<rparr>)"
-proof -
-  let ?env' = "env \<lparr> TE_ProofTopLevel := b \<rparr>"
-  have wk: "\<And>ty. is_well_kinded ?env' ty = is_well_kinded env ty"
-    using is_well_kinded_cong_env[of ?env' env] by simp
-  have rt: "\<And>ty. is_runtime_type ?env' ty = is_runtime_type env ty"
-    using is_runtime_type_cong_env[of ?env' env] by simp
-  have scope_wk_one: "\<And>tvs t. is_well_kinded (?env' \<lparr> TE_TypeVars := tvs \<rparr>) t =
-                                is_well_kinded (env \<lparr> TE_TypeVars := tvs \<rparr>) t"
-    by (rule is_well_kinded_cong_env) simp_all
-  have scope_rt: "\<And>tvs rtvs t. is_runtime_type (?env' \<lparr> TE_TypeVars := tvs, TE_RuntimeTypeVars := rtvs \<rparr>) t =
-                                 is_runtime_type (env \<lparr> TE_TypeVars := tvs, TE_RuntimeTypeVars := rtvs \<rparr>) t"
-    by (rule is_runtime_type_cong_env) simp_all
-  from assms show ?thesis unfolding tyenv_well_formed_def
-    tyenv_vars_well_kinded_def tyenv_vars_runtime_def
-    tyenv_ghost_vars_subset_def tyenv_return_type_well_kinded_def
-    tyenv_return_type_runtime_def tyenv_return_type_complete_def
-    tyenv_ctors_consistent_def
-    tyenv_payloads_well_kinded_def
-    tyenv_ctor_tyvars_distinct_def tyenv_ctors_by_type_consistent_def
-    tyenv_fun_types_well_kinded_def
-    tyenv_fun_tyvars_distinct_def
-    tyenv_fun_ghost_constraint_def Let_def
-    tyenv_fun_return_types_complete_def
-    tyenv_ctor_tyvars_fresh_def tyenv_fun_tyvars_fresh_def
-    tyenv_runtime_tyvars_subset_def
-    tyenv_abstract_types_subset_def
-    tyenv_datatypes_nonempty_def
-    by (force simp: wk rt scope_wk_one scope_rt)
-qed
 
 (* Growing TE_TypeVars and TE_RuntimeTypeVars preserves tyenv_well_formed.
    The predicates using inner envs that override TE_TypeVars / TE_RuntimeTypeVars

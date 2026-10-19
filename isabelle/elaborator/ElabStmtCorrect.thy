@@ -2691,6 +2691,93 @@ next
     by (fastforce split: sum.splits prod.splits dest: order_trans)
 qed
 
+(* The statement forms whose elaboration returns the input env unchanged. (Any
+   envs built for nested bodies, branches or arms are discarded.) *)
+fun stmt_keeps_env :: "BabStatement \<Rightarrow> bool" where
+  "stmt_keeps_env (BabStmt_Assign _ _ _) = True"
+| "stmt_keeps_env (BabStmt_Swap _ _ _) = True"
+| "stmt_keeps_env (BabStmt_Return _ _) = True"
+| "stmt_keeps_env (BabStmt_Assert _ _ _) = True"
+| "stmt_keeps_env (BabStmt_Assume _ _) = True"
+| "stmt_keeps_env (BabStmt_If _ _ _ _) = True"
+| "stmt_keeps_env (BabStmt_While _ _ _ _) = True"
+| "stmt_keeps_env (BabStmt_Call _ _) = True"
+| "stmt_keeps_env (BabStmt_Match _ _ _) = True"
+| "stmt_keeps_env (BabStmt_ShowHide _ _ _) = True"
+| "stmt_keeps_env _ = False"
+
+lemma elab_statement_keeps_env:
+  assumes elab: "elab_statement env elabEnv ghost stmt next_mv = Inr (coreStmt, env', next_mv')"
+      and keeps: "stmt_keeps_env stmt"
+  shows "env' = env"
+proof (cases stmt)
+  case (BabStmt_Assign loc lhs rhs)
+  note e = elab[unfolded BabStmt_Assign]
+  from e obtain lhsTm lhsTy next_mv1 where
+    lhs_elab: "elab_term env elabEnv ghost lhs next_mv = Inr (lhsTm, lhsTy, next_mv1)"
+    by (auto split: sum.splits prod.splits)
+  show ?thesis
+  proof (cases "is_impure_call env elabEnv rhs")
+    case True
+    with e lhs_elab
+    have "elab_assign_impure env elabEnv ghost loc lhsTm lhsTy rhs next_mv1
+            = Inr (coreStmt, env', next_mv')" by (auto split: if_splits)
+    thus ?thesis using elab_assign_impure_env[OF _ True] by simp
+  next
+    case False
+    with e lhs_elab
+    have "elab_assign_pure env elabEnv ghost loc lhsTm lhsTy rhs next_mv1
+            = Inr (coreStmt, env', next_mv')" by (auto split: if_splits)
+    thus ?thesis using elab_assign_pure_env by simp
+  qed
+next
+  case (BabStmt_Swap loc lhs rhs)
+  note e = elab[unfolded BabStmt_Swap]
+  from e obtain lhsTm lhsTy next_mv1 where
+    lhs_elab: "elab_term env elabEnv ghost lhs next_mv = Inr (lhsTm, lhsTy, next_mv1)"
+    by (auto split: sum.splits prod.splits)
+  from e lhs_elab
+  have "elab_swap env elabEnv ghost loc lhsTm lhsTy rhs next_mv1
+          = Inr (coreStmt, env', next_mv')" by (auto split: if_splits)
+  thus ?thesis using elab_swap_env by simp
+next
+  case (BabStmt_Return loc tmOpt)
+  show ?thesis using elab[unfolded BabStmt_Return]
+    by (auto simp: coerce_term_to_type_unfold
+             dest!: elab_return_impure_env
+             split: sum.splits prod.splits option.splits if_splits)
+next
+  case (BabStmt_Assert loc condOpt proofBody)
+  show ?thesis using elab[unfolded BabStmt_Assert]
+    by (cases condOpt)
+       (auto simp: Let_def split: sum.splits prod.splits option.splits if_splits)
+next
+  case (BabStmt_Assume loc tm)
+  show ?thesis using elab[unfolded BabStmt_Assume]
+    by (auto split: sum.splits prod.splits option.splits if_splits)
+next
+  case (BabStmt_If loc cond thenB elseB)
+  show ?thesis using elab[unfolded BabStmt_If]
+    by (auto simp: Let_def split: sum.splits prod.splits option.splits if_splits)
+next
+  case (BabStmt_While loc cond attrs body)
+  show ?thesis using elab[unfolded BabStmt_While]
+    by (auto simp: Let_def split: sum.splits prod.splits option.splits list.splits)
+next
+  case (BabStmt_Call loc tm)
+  from elab[unfolded BabStmt_Call]
+  have "elab_call_statement env elabEnv ghost loc tm next_mv
+          = Inr (coreStmt, env', next_mv')" by simp
+  thus ?thesis using elab_call_statement_env by blast
+next
+  case (BabStmt_Match loc scrut arms)
+  show ?thesis using elab[unfolded BabStmt_Match]
+    by (auto simp: Let_def split: sum.splits prod.splits option.splits if_splits)
+next
+  case (BabStmt_ShowHide loc sh name)
+  show ?thesis using elab[unfolded BabStmt_ShowHide] by (simp split: if_splits)
+qed (use keeps in simp_all)
+
 (* Elaboration leaves TE_TypeVars / TE_RuntimeTypeVars / TE_FunctionGhost unchanged,
    and never creates a TE_ProofGoal if there wasn't one already. *)
 lemma elab_statement_preserves_TE_TypeVars:
@@ -2783,85 +2870,27 @@ next
                             = Inr (coreStmt, env', next_mv')" by simp
   thus ?case using elab_use_cong_fields by blast
 next
-  \<comment> \<open>Assign: env unchanged (both helpers leave env alone).\<close>
-  case (5 env elabEnv ghost loc lhs rhs next_mv)
-  from "5.prems"(1) obtain lhsTm lhsTy next_mv1 where
-    lhs_elab: "elab_term env elabEnv ghost lhs next_mv = Inr (lhsTm, lhsTy, next_mv1)"
-    by (auto split: sum.splits prod.splits)
-  have "env' = env"
-  proof (cases "is_impure_call env elabEnv rhs")
-    case True
-    with "5.prems"(1) lhs_elab
-    have "elab_assign_impure env elabEnv ghost loc lhsTm lhsTy rhs next_mv1
-            = Inr (coreStmt, env', next_mv')" by (auto split: if_splits)
-    thus ?thesis using elab_assign_impure_env[OF _ True] by simp
-  next
-    case False
-    with "5.prems"(1) lhs_elab
-    have "elab_assign_pure env elabEnv ghost loc lhsTm lhsTy rhs next_mv1
-            = Inr (coreStmt, env', next_mv')" by (auto split: if_splits)
-    thus ?thesis using elab_assign_pure_env by simp
-  qed
-  thus ?case by simp
+  \<comment> \<open>Assign, Swap, Return, Assert, Assume, If, While, Call, Match, ShowHide: env
+      unchanged (elab_statement_keeps_env).\<close>
+  case 5 show ?case using elab_statement_keeps_env[OF "5.prems"(1)] by simp
 next
-  \<comment> \<open>Swap: env unchanged (elab_swap leaves env alone).\<close>
-  case (6 env elabEnv ghost loc lhs rhs next_mv)
-  from "6.prems"(1) obtain lhsTm lhsTy next_mv1 where
-    lhs_elab: "elab_term env elabEnv ghost lhs next_mv = Inr (lhsTm, lhsTy, next_mv1)"
-    by (auto split: sum.splits prod.splits)
-  from "6.prems"(1) lhs_elab
-  have "elab_swap env elabEnv ghost loc lhsTm lhsTy rhs next_mv1
-          = Inr (coreStmt, env', next_mv')" by (auto split: if_splits)
-  hence "env' = env" using elab_swap_env by simp
-  thus ?case by simp
+  case 6 show ?case using elab_statement_keeps_env[OF "6.prems"(1)] by simp
 next
-  \<comment> \<open>Return: env unchanged in every success path.\<close>
-  case (7 env elabEnv ghost loc tmOpt next_mv)
-  show ?case using "7.prems"(1)
-    by (auto simp: coerce_term_to_type_unfold
-             dest!: elab_return_impure_env
-             split: sum.splits prod.splits option.splits if_splits)
+  case 7 show ?case using elab_statement_keeps_env[OF "7.prems"(1)] by simp
 next
-  \<comment> \<open>Assert: env' = env in every success path (the proof-body env is discarded), so
-      all four tracked fields are trivially unchanged.\<close>
-  case (8 env elabEnv ghost loc condOpt proofBody next_mv)
-  show ?case using "8.prems"(1)
-    by (cases condOpt)
-       (auto simp: Let_def split: sum.splits prod.splits option.splits if_splits)
+  case 8 show ?case using elab_statement_keeps_env[OF "8.prems"(1)] by simp
 next
-  \<comment> \<open>Assume: env unchanged.\<close>
-  case (9 env elabEnv ghost loc tm next_mv)
-  show ?case using "9.prems"(1) by (auto split: sum.splits prod.splits option.splits if_splits)
+  case 9 show ?case using elab_statement_keeps_env[OF "9.prems"(1)] by simp
 next
-  \<comment> \<open>If: env' = env in every success path (the per-branch envs are discarded), so all
-      four tracked fields are trivially unchanged.\<close>
-  case (10 env elabEnv ghost loc cond thenB elseB next_mv)
-  show ?case using "10.prems"(1)
-    by (auto simp: Let_def split: sum.splits prod.splits option.splits if_splits)
+  case 10 show ?case using elab_statement_keeps_env[OF "10.prems"(1)] by simp
 next
-  \<comment> \<open>While: env' = env in every success path (the body env is discarded), so all four
-      tracked fields are trivially unchanged.\<close>
-  case (11 env elabEnv ghost loc cond attrs body next_mv)
-  show ?case using "11.prems"(1)
-    by (auto simp: Let_def split: sum.splits prod.splits option.splits list.splits)
+  case 11 show ?case using elab_statement_keeps_env[OF "11.prems"(1)] by simp
 next
-  \<comment> \<open>Call: env' = env, so all four tracked fields are unchanged.\<close>
-  case (12 env elabEnv ghost loc tm next_mv)
-  from "12.prems" have "elab_call_statement env elabEnv ghost loc tm next_mv
-                          = Inr (coreStmt, env', next_mv')" by simp
-  hence "env' = env" using elab_call_statement_env by blast
-  thus ?case by simp
+  case 12 show ?case using elab_statement_keeps_env[OF "12.prems"(1)] by simp
 next
-  \<comment> \<open>Match: env' = env in every success path (arm envs are discarded), so all
-      four tracked fields are trivially unchanged.\<close>
-  case (13 env elabEnv ghost loc scrut arms next_mv)
-  from "13.prems"(1) have "env' = env"
-    by (auto simp: Let_def split: sum.splits prod.splits option.splits if_splits)
-  thus ?case by simp
+  case 13 show ?case using elab_statement_keeps_env[OF "13.prems"(1)] by simp
 next
-  \<comment> \<open>ShowHide: env unchanged.\<close>
-  case (14 env elabEnv ghost loc sh name next_mv)
-  from "14.prems"(1) show ?case by (simp split: if_splits)
+  case 14 show ?case using elab_statement_keeps_env[OF "14.prems"(1)] by simp
 next
   \<comment> \<open>Ghost wrapper: re-elaborates inner in Ghost mode (same env).\<close>
   case (15 env elabEnv ghost loc inner next_mv)
@@ -2996,87 +3025,27 @@ next
   show ?case
     using "4.prems"(2) flds elabenv_well_formed_cong_env by metis
 next
-  \<comment> \<open>Assign: env unchanged.\<close>
-  case (5 env elabEnv ghost loc lhs rhs next_mv)
-  from "5.prems"(1) obtain lhsTm lhsTy next_mv1 where
-    lhs_elab: "elab_term env elabEnv ghost lhs next_mv = Inr (lhsTm, lhsTy, next_mv1)"
-    by (auto split: sum.splits prod.splits)
-  have "env' = env"
-  proof (cases "is_impure_call env elabEnv rhs")
-    case True
-    with "5.prems"(1) lhs_elab
-    have "elab_assign_impure env elabEnv ghost loc lhsTm lhsTy rhs next_mv1
-            = Inr (coreStmt, env', next_mv')" by (auto split: if_splits)
-    thus ?thesis using elab_assign_impure_env[OF _ True] by simp
-  next
-    case False
-    with "5.prems"(1) lhs_elab
-    have "elab_assign_pure env elabEnv ghost loc lhsTm lhsTy rhs next_mv1
-            = Inr (coreStmt, env', next_mv')" by (auto split: if_splits)
-    thus ?thesis using elab_assign_pure_env by simp
-  qed
-  thus ?case using "5.prems"(2) by simp
+  \<comment> \<open>Assign, Swap, Return, Assert, Assume, If, While, Call, Match, ShowHide: env
+      unchanged (elab_statement_keeps_env).\<close>
+  case 5 show ?case using elab_statement_keeps_env[OF "5.prems"(1)] "5.prems"(2) by simp
 next
-  \<comment> \<open>Swap: env unchanged.\<close>
-  case (6 env elabEnv ghost loc lhs rhs next_mv)
-  from "6.prems"(1) obtain lhsTm lhsTy next_mv1 where
-    lhs_elab: "elab_term env elabEnv ghost lhs next_mv = Inr (lhsTm, lhsTy, next_mv1)"
-    by (auto split: sum.splits prod.splits)
-  from "6.prems"(1) lhs_elab
-  have "elab_swap env elabEnv ghost loc lhsTm lhsTy rhs next_mv1
-          = Inr (coreStmt, env', next_mv')" by (auto split: if_splits)
-  hence "env' = env" using elab_swap_env by simp
-  thus ?case using "6.prems"(2) by simp
+  case 6 show ?case using elab_statement_keeps_env[OF "6.prems"(1)] "6.prems"(2) by simp
 next
-  \<comment> \<open>Return: env unchanged.\<close>
-  case (7 env elabEnv ghost loc tmOpt next_mv)
-  from "7.prems"(1) have "env' = env"
-    by (auto simp: coerce_term_to_type_unfold
-             dest!: elab_return_impure_env
-             split: sum.splits prod.splits option.splits if_splits)
-  thus ?case using "7.prems"(2) by simp
+  case 7 show ?case using elab_statement_keeps_env[OF "7.prems"(1)] "7.prems"(2) by simp
 next
-  \<comment> \<open>Assert: env unchanged (the proof-body env is discarded).\<close>
-  case (8 env elabEnv ghost loc condOpt proofBody next_mv)
-  from "8.prems"(1) have "env' = env"
-    by (cases condOpt)
-       (auto simp: Let_def split: sum.splits prod.splits option.splits if_splits)
-  thus ?case using "8.prems"(2) by simp
+  case 8 show ?case using elab_statement_keeps_env[OF "8.prems"(1)] "8.prems"(2) by simp
 next
-  \<comment> \<open>Assume: env unchanged.\<close>
-  case (9 env elabEnv ghost loc tm next_mv)
-  from "9.prems"(1) have "env' = env" by (auto split: sum.splits prod.splits option.splits if_splits)
-  thus ?case using "9.prems"(2) by simp
+  case 9 show ?case using elab_statement_keeps_env[OF "9.prems"(1)] "9.prems"(2) by simp
 next
-  \<comment> \<open>If: env unchanged (the per-branch envs are discarded).\<close>
-  case (10 env elabEnv ghost loc cond thenB elseB next_mv)
-  from "10.prems"(1) have "env' = env"
-    by (auto simp: Let_def split: sum.splits prod.splits option.splits if_splits)
-  thus ?case using "10.prems"(2) by simp
+  case 10 show ?case using elab_statement_keeps_env[OF "10.prems"(1)] "10.prems"(2) by simp
 next
-  \<comment> \<open>While: env unchanged (the body env is discarded).\<close>
-  case (11 env elabEnv ghost loc cond attrs body next_mv)
-  from "11.prems"(1) have "env' = env"
-    by (auto simp: Let_def split: sum.splits prod.splits option.splits list.splits)
-  thus ?case using "11.prems"(2) by simp
+  case 11 show ?case using elab_statement_keeps_env[OF "11.prems"(1)] "11.prems"(2) by simp
 next
-  \<comment> \<open>Call: env unchanged.\<close>
-  case (12 env elabEnv ghost loc tm next_mv)
-  from "12.prems"(1) have "elab_call_statement env elabEnv ghost loc tm next_mv
-                             = Inr (coreStmt, env', next_mv')" by simp
-  hence "env' = env" using elab_call_statement_env by blast
-  thus ?case using "12.prems"(2) by simp
+  case 12 show ?case using elab_statement_keeps_env[OF "12.prems"(1)] "12.prems"(2) by simp
 next
-  \<comment> \<open>Match: env unchanged (arm envs are discarded).\<close>
-  case (13 env elabEnv ghost loc scrut arms next_mv)
-  from "13.prems"(1) have "env' = env"
-    by (auto simp: Let_def split: sum.splits prod.splits option.splits if_splits)
-  thus ?case using "13.prems"(2) by simp
+  case 13 show ?case using elab_statement_keeps_env[OF "13.prems"(1)] "13.prems"(2) by simp
 next
-  \<comment> \<open>ShowHide: env unchanged.\<close>
-  case (14 env elabEnv ghost loc sh name next_mv)
-  from "14.prems"(1) have "env' = env" by (simp split: if_splits)
-  thus ?case using "14.prems"(2) by simp
+  case 14 show ?case using elab_statement_keeps_env[OF "14.prems"(1)] "14.prems"(2) by simp
 next
   \<comment> \<open>Ghost wrapper: re-elaborates inner in Ghost mode (same env).\<close>
   case (15 env elabEnv ghost loc inner next_mv)
@@ -3242,87 +3211,27 @@ next
     using tyenv_well_formed_TE_ProofGoal_irrelevant[OF "4.prems"(2), where g="Some bodyTm"]
     by (simp add: env'_eq)
 next
-  \<comment> \<open>Assign: env unchanged.\<close>
-  case (5 env elabEnv ghost loc lhs rhs next_mv)
-  from "5.prems"(1) obtain lhsTm lhsTy next_mv1 where
-    lhs_elab: "elab_term env elabEnv ghost lhs next_mv = Inr (lhsTm, lhsTy, next_mv1)"
-    by (auto split: sum.splits prod.splits)
-  have "env' = env"
-  proof (cases "is_impure_call env elabEnv rhs")
-    case True
-    with "5.prems"(1) lhs_elab
-    have "elab_assign_impure env elabEnv ghost loc lhsTm lhsTy rhs next_mv1
-            = Inr (coreStmt, env', next_mv')" by (auto split: if_splits)
-    thus ?thesis using elab_assign_impure_env[OF _ True] by simp
-  next
-    case False
-    with "5.prems"(1) lhs_elab
-    have "elab_assign_pure env elabEnv ghost loc lhsTm lhsTy rhs next_mv1
-            = Inr (coreStmt, env', next_mv')" by (auto split: if_splits)
-    thus ?thesis using elab_assign_pure_env by simp
-  qed
-  thus ?case using "5.prems"(2) by simp
+  \<comment> \<open>Assign, Swap, Return, Assert, Assume, If, While, Call, Match, ShowHide: env
+      unchanged (elab_statement_keeps_env).\<close>
+  case 5 show ?case using elab_statement_keeps_env[OF "5.prems"(1)] "5.prems"(2) by simp
 next
-  \<comment> \<open>Swap: env unchanged.\<close>
-  case (6 env elabEnv ghost loc lhs rhs next_mv)
-  from "6.prems"(1) obtain lhsTm lhsTy next_mv1 where
-    lhs_elab: "elab_term env elabEnv ghost lhs next_mv = Inr (lhsTm, lhsTy, next_mv1)"
-    by (auto split: sum.splits prod.splits)
-  from "6.prems"(1) lhs_elab
-  have "elab_swap env elabEnv ghost loc lhsTm lhsTy rhs next_mv1
-          = Inr (coreStmt, env', next_mv')" by (auto split: if_splits)
-  hence "env' = env" using elab_swap_env by simp
-  thus ?case using "6.prems"(2) by simp
+  case 6 show ?case using elab_statement_keeps_env[OF "6.prems"(1)] "6.prems"(2) by simp
 next
-  \<comment> \<open>Return: env unchanged.\<close>
-  case (7 env elabEnv ghost loc tmOpt next_mv)
-  from "7.prems"(1) have "env' = env"
-    by (auto simp: coerce_term_to_type_unfold
-             dest!: elab_return_impure_env
-             split: sum.splits prod.splits option.splits if_splits)
-  thus ?case using "7.prems"(2) by simp
+  case 7 show ?case using elab_statement_keeps_env[OF "7.prems"(1)] "7.prems"(2) by simp
 next
-  \<comment> \<open>Assert: env unchanged (the proof-body env is discarded).\<close>
-  case (8 env elabEnv ghost loc condOpt proofBody next_mv)
-  from "8.prems"(1) have "env' = env"
-    by (cases condOpt)
-       (auto simp: Let_def split: sum.splits prod.splits option.splits if_splits)
-  thus ?case using "8.prems"(2) by simp
+  case 8 show ?case using elab_statement_keeps_env[OF "8.prems"(1)] "8.prems"(2) by simp
 next
-  \<comment> \<open>Assume: env unchanged.\<close>
-  case (9 env elabEnv ghost loc tm next_mv)
-  from "9.prems"(1) have "env' = env" by (auto split: sum.splits prod.splits option.splits if_splits)
-  thus ?case using "9.prems"(2) by simp
+  case 9 show ?case using elab_statement_keeps_env[OF "9.prems"(1)] "9.prems"(2) by simp
 next
-  \<comment> \<open>If: env unchanged (the per-branch envs are discarded).\<close>
-  case (10 env elabEnv ghost loc cond thenB elseB next_mv)
-  from "10.prems"(1) have "env' = env"
-    by (auto simp: Let_def split: sum.splits prod.splits option.splits if_splits)
-  thus ?case using "10.prems"(2) by simp
+  case 10 show ?case using elab_statement_keeps_env[OF "10.prems"(1)] "10.prems"(2) by simp
 next
-  \<comment> \<open>While: env unchanged (the body env is discarded).\<close>
-  case (11 env elabEnv ghost loc cond attrs body next_mv)
-  from "11.prems"(1) have "env' = env"
-    by (auto simp: Let_def split: sum.splits prod.splits option.splits list.splits)
-  thus ?case using "11.prems"(2) by simp
+  case 11 show ?case using elab_statement_keeps_env[OF "11.prems"(1)] "11.prems"(2) by simp
 next
-  \<comment> \<open>Call: env unchanged.\<close>
-  case (12 env elabEnv ghost loc tm next_mv)
-  from "12.prems"(1) have "elab_call_statement env elabEnv ghost loc tm next_mv
-                             = Inr (coreStmt, env', next_mv')" by simp
-  hence "env' = env" using elab_call_statement_env by blast
-  thus ?case using "12.prems"(2) by simp
+  case 12 show ?case using elab_statement_keeps_env[OF "12.prems"(1)] "12.prems"(2) by simp
 next
-  \<comment> \<open>Match: env unchanged (arm envs are discarded).\<close>
-  case (13 env elabEnv ghost loc scrut arms next_mv)
-  from "13.prems"(1) have "env' = env"
-    by (auto simp: Let_def split: sum.splits prod.splits option.splits if_splits)
-  thus ?case using "13.prems"(2) by simp
+  case 13 show ?case using elab_statement_keeps_env[OF "13.prems"(1)] "13.prems"(2) by simp
 next
-  \<comment> \<open>ShowHide: env unchanged.\<close>
-  case (14 env elabEnv ghost loc sh name next_mv)
-  from "14.prems"(1) have "env' = env" by (simp split: if_splits)
-  thus ?case using "14.prems"(2) by simp
+  case 14 show ?case using elab_statement_keeps_env[OF "14.prems"(1)] "14.prems"(2) by simp
 next
   \<comment> \<open>Ghost wrapper: re-elaborates inner in Ghost mode (same env).\<close>
   case (15 env elabEnv ghost loc inner next_mv)

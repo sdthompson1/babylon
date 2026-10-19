@@ -1119,21 +1119,7 @@ next
           proof (cases condVal)
             case (CV_Bool b)
             with H CoreStmt_Assert Some cv show ?thesis by (cases b) simp_all
-          next
-            case CV_FiniteInt with H CoreStmt_Assert Some cv show ?thesis by simp
-          next
-            case CV_Variant with H CoreStmt_Assert Some cv show ?thesis by simp
-          next
-            case CV_Record with H CoreStmt_Assert Some cv show ?thesis by simp
-          next
-            case CV_Array with H CoreStmt_Assert Some cv show ?thesis by simp
-          next
-            case CV_Int with H CoreStmt_Assert Some cv show ?thesis by simp
-          next
-            case CV_Real with H CoreStmt_Assert Some cv show ?thesis by simp
-          next
-            case CV_Extern with H CoreStmt_Assert Some cv show ?thesis by simp
-          qed
+          qed (use H CoreStmt_Assert Some cv in simp_all)
         qed
         show ?thesis unfolding env'_eq by (rule ghost_resultI[OF res_eq rel])
       next
@@ -1214,22 +1200,8 @@ next
                 by (rule IH_stmt[OF fn_eq funs_rs fg rel_rs T' rec_eq])
             qed
           qed
-        next
-          \<comment> \<open>Non-bool cond value: TypeError, contradicts H. \<close>
-          case CV_FiniteInt with CoreStmt_While H cv show ?thesis by simp
-        next
-          case CV_Variant with CoreStmt_While H cv show ?thesis by simp
-        next
-          case CV_Record with CoreStmt_While H cv show ?thesis by simp
-        next
-          case CV_Array with CoreStmt_While H cv show ?thesis by simp
-        next
-          case CV_Int with CoreStmt_While H cv show ?thesis by simp
-        next
-          case CV_Real with CoreStmt_While H cv show ?thesis by simp
-        next
-          case CV_Extern with CoreStmt_While H cv show ?thesis by simp
-        qed
+        \<comment> \<open>Non-bool cond value: TypeError, contradicts H. \<close>
+        qed (use CoreStmt_While H cv in simp_all)
       next
         case (CoreStmt_Match g scrutTm arms)
         from T CoreStmt_Match have env'_eq: "env' = env"

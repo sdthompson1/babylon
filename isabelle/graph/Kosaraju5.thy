@@ -84,646 +84,274 @@ proof (intro allI impI)
   qed
 qed
 
-(* General list lemma: Find first element satisfying a property.
-   Given a non-empty list where the first element doesn't satisfy property P,
-   but some element does satisfy P, we can decompose the list as prefix @ [z] @ tail
-   where all elements in the prefix don't satisfy P, but z does satisfy P. *)
-lemma list_first_satisfying:
-  fixes xs :: "'a list"
-    and P :: "'a \<Rightarrow> bool"
-  assumes "xs \<noteq> []"
-    and "\<not>P (hd xs)"
-    and "\<exists>y \<in> set xs. P y"
-  shows "\<exists>prefix z tail. xs = prefix @ [z] @ tail \<and>
-                         prefix \<noteq> [] \<and>
-                         (\<forall>v \<in> set prefix. \<not>P v) \<and>
-                         P z"
-  using assms
-proof (induction xs)
-  case Nil
-  then show ?case by simp
-next
-  case (Cons x rest)
-  show ?case
-  proof (cases "rest = []")
-    case True
-    (* rest is empty, so xs = [x] *)
-    then have "xs = [x]" using Cons by simp
-    (* But we have \<exists>y \<in> set xs. P y, and \<not>P x, contradiction *)
-    then have "x \<in> set xs" by simp
-    then have "\<not>P x" using Cons.prems(2) \<open>xs = [x]\<close> by simp
-    moreover have "\<exists>y \<in> set xs. P y" using Cons.prems(3)
-      by (simp add: assms(3)) 
-    ultimately have "\<exists>y \<in> {x}. P y" using \<open>xs = [x]\<close> by simp
-    then have "P x" by simp
-    then show ?thesis using \<open>\<not>P x\<close> by contradiction
-  next
-    case False
-    (* rest is non-empty *)
-    then obtain y ys where rest_decomp: "rest = y # ys" by (cases rest) auto
+(*-----------------------------------------------------------------------------*)
+(* Preconditions for collect_all_sccs *)
+(*-----------------------------------------------------------------------------*)
 
-    show ?thesis
-    proof (cases "P y")
-      case True
-      (* y satisfies P, so we found it: xs = [x] @ [y] @ ys *)
-      define prefix where "prefix = [x]"
-      define tail where "tail = ys"
-      have "x # rest = prefix @ [y] @ tail"
-        by (simp add: prefix_def rest_decomp tail_def) 
-      thus ?thesis
-        by (metis Cons.prems(2) True in_set_replicate length_Cons list.sel(1) list.size(3) prefix_def
-            remdups_adj.simps(2) remdups_adj_singleton_iff)
-    next
-      case False
-      (* y doesn't satisfy P either *)
-      show ?thesis
-      proof (cases "\<exists>z \<in> set rest. P z")
-        case True
-        (* Some element in rest satisfies P *)
-        then have "\<not>P (hd rest)"
-          using rest_decomp False by simp
+(* The invariant maintained by collect_all_sccs:
+   1. The graph is valid
+   2. All visited vertices are in the graph
+   3. All vertices in the list are in the graph
+   4. The visited set is closed under reachability
+   5. Every graph vertex not in the list is visited
+   6. The list is properly ordered *)
+definition collect_all_sccs_pre :: "('a::linorder) Graph \<Rightarrow> 'a fset \<Rightarrow> 'a list \<Rightarrow> bool" where
+  "collect_all_sccs_pre graph visited verts \<longleftrightarrow>
+    valid_graph graph \<and>
+    (\<forall>w |\<in>| visited. has_vertex graph w) \<and>
+    (\<forall>w. List.member verts w \<longrightarrow> has_vertex graph w) \<and>
+    (\<forall>v w. v |\<in>| visited \<and> reachable graph v w \<longrightarrow> w |\<in>| visited) \<and>
+    (\<forall>v. has_vertex graph v \<and> \<not>(List.member verts v) \<longrightarrow> v |\<in>| visited) \<and>
+    vertex_list_ordered graph visited verts"
 
-        (* Apply IH to rest *)
-        then have "\<exists>prefix z tail. rest = prefix @ [z] @ tail \<and>
-                                    prefix \<noteq> [] \<and>
-                                    (\<forall>v \<in> set prefix. \<not>P v) \<and>
-                                    P z"
-          using Cons.IH[OF _ _ True] rest_decomp by simp
-
-        then obtain prefix z tail where rest_props:
-          "rest = prefix @ [z] @ tail"
-          "prefix \<noteq> []"
-          "(\<forall>v \<in> set prefix. \<not>P v)"
-          "P z"
-          by blast
-
-        (* Now xs = x # (prefix @ [z] @ tail) = (x # prefix) @ [z] @ tail *)
-        have "x # rest = (x # prefix) @ [z] @ tail"
-          by (simp add: rest_props(1))
-        moreover have "x # prefix \<noteq> []" by simp
-        moreover have "\<forall>v \<in> set (x # prefix). \<not>P v"
-          using Cons.prems(2) rest_props(3) by simp
-        moreover have "P z" using rest_props(4) by simp
-        ultimately show ?thesis by blast
-      next
-        case False
-        (* No element in rest satisfies P *)
-        then have no_p_in_rest: "\<nexists>z. z \<in> set rest \<and> P z" by simp
-        (* But we know \<exists>y \<in> set xs. P y *)
-        have "\<exists>y \<in> set xs. P y"
-          by (simp add: assms(3)) 
-        (* xs = x # rest, so y is either x or in rest *)
-        then have "P x \<or> (\<exists>y \<in> set rest. P y)"
-          using Cons.prems(3) by auto 
-        then have "P x" using no_p_in_rest by simp
-        (* But \<not>P x *)
-        then show ?thesis using Cons.prems(2) by simp
-      qed
-    qed
-  qed
-qed
-
-(* Helper lemma: Establish that downstream SCCs are already visited.
-   This lemma shows that if we have a vertex 'start' at the head of an ordered vertex list,
-   and start is unvisited, then all vertices reachable from start that are NOT in the same
-   SCC as start must already be visited. This is the key precondition needed for
-   collect_one_scc_sound. *)
-lemma downstream_sccs_visited:
-  assumes "valid_graph graph"
-    and "\<forall>w |\<in>| visited. has_vertex graph w"
-    and "\<forall>v w. v |\<in>| visited \<and> reachable graph v w \<longrightarrow> w |\<in>| visited"
-    and "\<forall>v. has_vertex graph v \<and> \<not>(List.member vertices v) \<longrightarrow> v |\<in>| visited"
-    and "vertex_list_ordered graph visited vertices"
-    and "vertices = start # rest"
-    and "start |\<notin>| visited"
-  shows "\<forall>w. has_vertex graph w \<and> reachable graph start w \<and> \<not>(in_same_scc graph w start) \<longrightarrow>
-             w |\<in>| visited"
-proof (intro allI impI)
-  fix w
-  assume w_props: "has_vertex graph w \<and> reachable graph start w \<and> \<not>(in_same_scc graph w start)"
-
-  (* Since start reaches w, there exists a valid path from start to w *)
-  obtain path where path_props:
-    "valid_path graph path"
-    "path_start path = start"
-    "path_end path = w"
-    using assms(1) w_props reachable_implies_valid_path by blast
-
-  (* Find the first vertex on the path that is not in start's SCC.
-     This gives us a path prefix [y1,...,yn,x] where:
-     - y1 = start
-     - y1,...,yn are all in start's SCC
-     - x is the first vertex not in start's SCC
-     - yn -> x is a cross-SCC edge *)
-
-  (* Since w is not in start's SCC, and the path ends at w, there must be
-     at least one vertex on the path that is not in start's SCC *)
-  have "\<exists>x. List.member path x \<and> \<not>(in_same_scc graph x start)"
-  proof -
-    have "path \<noteq> []"
-      using path_props(1) by auto
-    hence "List.member path w"
-      using path_props(3) path_end_in_path by auto
-    thus ?thesis
-      using w_props by blast
-  qed
-
-  (* Let x be the first such vertex on the path *)
-  obtain prefix x path_tail where x_def:
-    "path = prefix @ [x] @ path_tail"
-    "prefix \<noteq> []"
-    "\<forall>y \<in> set prefix. in_same_scc graph y start"
-    "\<not>(in_same_scc graph x start)"
-  proof -
-    (* Apply list_first_satisfying with P = \<lambda>v. \<not>(in_same_scc graph v start) *)
-    define P where "P = (\<lambda>v. \<not>(in_same_scc graph v start))"
-
-    (* path is non-empty *)
-    have "path \<noteq> []"
-      using path_props(1) by auto
-
-    (* The first element of path is start *)
-    have "hd path = start"
-      using path_props(1,2)
-      by (metis \<open>path \<noteq> []\<close> list.sel(1) path_start.elims)
-
-    (* start is in the same SCC as start, so \<not>P (hd path) *)
-    have "\<not>P (hd path)"
-      unfolding P_def
-      using \<open>hd path = start\<close>
-      by (metis assms(1) edge_implies_vertices(1) in_same_scc_refl reachable_first_step w_props)
-
-    (* We know \<exists>x. List.member path x \<and> \<not>(in_same_scc graph x start) *)
-    (* which means \<exists>x \<in> set path. P x *)
-    have "\<exists>y \<in> set path. P y"
-      unfolding P_def
-      using \<open>\<exists>x. List.member path x \<and> \<not>(in_same_scc graph x start)\<close>
-      by (meson in_set_member)
-
-    (* Apply list_first_satisfying *)
-    then obtain prefix z tail where decomp:
-      "path = prefix @ [z] @ tail"
-      "prefix \<noteq> []"
-      "(\<forall>v \<in> set prefix. \<not>P v)"
-      "P z"
-      using \<open>\<not> P (hd path)\<close> \<open>path \<noteq> []\<close> list_first_satisfying by blast
-
-    (* Translate back from P *)
-    have "\<forall>y \<in> set prefix. in_same_scc graph y start"
-      using decomp(3) unfolding P_def by simp
-    moreover have "\<not>(in_same_scc graph z start)"
-      using decomp(4) unfolding P_def by simp
-
-    ultimately show ?thesis
-      using decomp(1,2) that by blast
-  qed
-
-  (* x must be a vertex in the graph *)
-  have x_in_graph: "has_vertex graph x"
-    by (metis append_Cons assms(1) edge_implies_vertices(1) in_set_conv_decomp path_props(1,3)
-        reachable_first_step vertex_on_path_reachable w_props x_def(1))
-    
-  (* There must be a vertex yn in start's SCC with an edge yn -> x *)
-  obtain yn where yn_props:
-    "has_edge graph yn x"
-    "in_same_scc graph yn start"
-  proof -
-    (* Since prefix is non-empty, we can decompose it as prefix' @ [yn] *)
-    obtain prefix' yn where prefix_decomp: "prefix = prefix' @ [yn]"
-      by (metis append_butlast_last_id x_def(2))
-
-    (* Therefore path = prefix' @ [yn, x] *)
-    then have path_decomp: "path = prefix' @ [yn, x] @ path_tail"
-      using x_def(1) by auto
-      
-    (* By valid_path, there must be an edge yn -> x *)
-    have "has_edge graph yn x"
-      using path_props(1) path_decomp
-    proof (induction prefix' arbitrary: path)
-      case Nil
-      then have "path = [yn, x] @ path_tail"
-        by simp
-      then show ?case
-        using Nil.prems(1) by auto
-    next
-      case (Cons a prefix'')
-      then have "path = a # prefix'' @ [yn, x] @ path_tail"
-        by simp
-      then have "valid_path graph (prefix'' @ [yn, x] @ path_tail)"
-        using Cons.prems(1) valid_path.elims(3) by fastforce
-      then show ?case
-        using Cons.IH by blast
-    qed
-
-    (* By x_def(3), yn is in prefix, so yn is in start's SCC *)
-    moreover have "in_same_scc graph yn start"
-      using x_def(3) prefix_decomp by simp
-
-    ultimately show ?thesis
-      using that by blast
-  qed
-
-  (* Now we have two cases for x *)
-  show "w |\<in>| visited"
-  proof (cases "x |\<in>| visited")
-    case True
-    (* Case 1: x is visited *)
-    (* Since x is visited and x reaches w (x is on the path to w),
-       w must also be visited by assumption 3 *)
-    have "reachable graph x w"
-      by (metis append_Cons assms(1) in_set_conv_decomp path_props(1,3) vertex_on_path_reachable
-          x_def(1))
-    then show ?thesis
-      using assms(3) True by blast
-  next
-    case False
-    (* Case 2: x is unvisited *)
-    (* Since x is unvisited but in the graph, x must be in the vertices list *)
-    have "List.member vertices x"
-      using assms(4) x_in_graph False by blast
-
-    (* start is also in the vertices list (it's at the head) *)
-    have "List.member vertices start"
-      using assms(6) by (simp add: member_rec(1))
-
-    (* We have edge yn -> x, where x and yn are in different SCCs,
-       and x appears in the vertices list *)
-    have "has_edge graph yn x"
-      using yn_props(1) by simp
-    moreover have "\<not>(in_same_scc graph yn x)"
-      using yn_props(2) x_def(2) in_same_scc_sym in_same_scc_trans
-      using x_def(4) by blast 
-    moreover have "List.member vertices x"
-      using \<open>List.member vertices x\<close> by simp
-    ultimately have "\<exists>v_x. List.member vertices v_x \<and> has_vertex graph v_x \<and> in_same_scc graph v_x x \<and>
-                          (\<forall>v_yn. List.member vertices v_yn \<and> has_vertex graph v_yn \<and> in_same_scc graph v_yn yn \<longrightarrow>
-                            index_of v_x vertices < index_of v_yn vertices)"
-      using assms(5) unfolding vertex_list_ordered_def
-      by (simp add: False) 
-
-    (* This gives us v_x in x's SCC that appears before all vertices in yn's SCC *)
-    then obtain v_x where v_x_props:
-      "has_vertex graph v_x"
-      "in_same_scc graph v_x x"
-      "(\<forall>v_yn. List.member vertices v_yn \<and> has_vertex graph v_yn \<and> in_same_scc graph v_yn yn \<longrightarrow>
-         index_of v_x vertices < index_of v_yn vertices)"
-      by auto
-
-    (* start is in yn's SCC (by transitivity: start ~ yn) *)
-    have "in_same_scc graph start yn"
-      using yn_props(2) in_same_scc_sym by simp
-
-    (* Therefore v_x appears before start in the vertices list *)
-    have "index_of v_x vertices < index_of start vertices"
-      using v_x_props(1,3) \<open>in_same_scc graph start yn\<close>
-      using assms(1) edge_implies_vertices(1) reachable_first_step w_props
-      using \<open>List.member vertices start\<close> by blast 
-
-    (* But start is at the head of the vertices list, so it has index 0 *)
-    have "index_of start vertices = 0"
-      by (metis assms(6) index_of.simps(2))
-
-    (* This means index_of v_x vertices < 0, which is impossible *)
-    then show ?thesis
-      using \<open>index_of v_x vertices < index_of start vertices\<close> by simp
-  qed
-qed
-
-(* Helper lemma: Establish that all vertices in the same SCC as start are unvisited.
-   This shows that when processing vertex start, no other vertex in start's SCC
-   has been visited yet. This is a key precondition for collect_one_scc_complete. *)
+(* If start is unvisited and the visited set is closed under reachability,
+   then no vertex in start's SCC is visited. *)
 lemma same_scc_unvisited:
   assumes "\<forall>v w. v |\<in>| visited \<and> reachable graph v w \<longrightarrow> w |\<in>| visited"
     and "start |\<notin>| visited"
   shows "\<forall>w. has_vertex graph w \<and> in_same_scc graph w start \<longrightarrow> w |\<notin>| visited"
-proof (intro allI impI)
-  fix w
-  assume w_props: "has_vertex graph w \<and> in_same_scc graph w start"
+  using assms in_same_scc.simps by blast
 
-  (* We need to show w is not visited *)
-  (* By contradiction: assume w is visited *)
-  show "w |\<notin>| visited"
-  proof (rule ccontr)
-    assume "\<not> w |\<notin>| visited"
-    then have w_visited: "w |\<in>| visited" by simp
-
-    (* Since w and start are in the same SCC, start is reachable from w *)
-    have "reachable graph w start"
-      using w_props in_same_scc_sym by auto
-
-    (* By assumption 1, if w is visited and start is reachable from w,
-       then start must also be visited *)
-    have "start |\<in>| visited"
-      using assms(1) w_visited \<open>reachable graph w start\<close>
-      using in_same_scc.simps w_props by blast
-
-    (* But this contradicts assumption 2 that start is not visited *)
-    then show False
-      using assms(2) by simp
-  qed
-qed
-
-(* Helper lemma establishing properties needed for recursive calls in collect_all_sccs proofs *)
-lemma collect_all_sccs_recursive_properties:
-  assumes "valid_graph graph"
-    and "\<forall>w |\<in>| visited. has_vertex graph w"
-    and "\<forall>w. List.member (start # rest) w \<longrightarrow> has_vertex graph w"
-    and "\<forall>v w. v |\<in>| visited \<and> reachable graph v w \<longrightarrow> w |\<in>| visited"
-    and "\<forall>v. has_vertex graph v \<and> \<not>(List.member (start # rest) v) \<longrightarrow> v |\<in>| visited"
-    and "vertex_list_ordered graph visited (start # rest)"
-    and "start |\<notin>| visited"
-    and "collect_one_scc graph visited start = (scc_start, new_visited)"
-  shows "\<forall>w |\<in>| new_visited. has_vertex graph w"
-    and "\<forall>w. List.member rest w \<longrightarrow> has_vertex graph w"
-    and "\<forall>v w. v |\<in>| new_visited \<and> reachable graph v w \<longrightarrow> w |\<in>| new_visited"
-    and "\<forall>v. has_vertex graph v \<and> \<not>(List.member rest v) \<longrightarrow> v |\<in>| new_visited"
-    and "vertex_list_ordered graph new_visited rest"
+(* If start is unvisited and at the head of an ordered vertex list, then all vertices
+   reachable from start that are NOT in the same SCC as start are already visited.
+   (Proof: follow the path from start; the first edge leaving start's SCC would lead
+   to an unvisited SCC that must appear before start in the list, which is impossible
+   since start is at the head.) *)
+lemma downstream_sccs_visited:
+  assumes valid: "valid_graph graph"
+    and closed: "\<forall>v w. v |\<in>| visited \<and> reachable graph v w \<longrightarrow> w |\<in>| visited"
+    and ordered: "vertex_list_ordered graph visited (start # rest)"
+  shows "\<forall>w. has_vertex graph w \<and> reachable graph start w \<and> \<not>(in_same_scc graph w start) \<longrightarrow>
+             w |\<in>| visited"
 proof -
-  have start_in_graph: "has_vertex graph start"
-    using assms(3,7) by (simp add: member_rec(1))
-
-  (* Establish fundamental properties *)
-  have downstream_visited: "\<forall>w. has_vertex graph w \<and> reachable graph start w 
-                              \<and> \<not>(in_same_scc graph w start) \<longrightarrow> w |\<in>| visited"
-    using downstream_sccs_visited
-    by (metis (no_types, lifting) assms(1,2,4,5,6))
-
-  have scc_unvisited: "\<forall>w. has_vertex graph w \<and> in_same_scc graph w start \<longrightarrow> w |\<notin>| visited"
-    using same_scc_unvisited
-    using assms(4,7) by blast
-
-  (* Rest members are in graph *)
-  show "\<forall>w. List.member rest w \<longrightarrow> has_vertex graph w"
-    using assms(3,7) by (simp add: member_rec(1))
-
-  (* New visited contains vertices *)
-  show "\<forall>w |\<in>| new_visited. has_vertex graph w"
-  proof
-    fix w assume "w |\<in>| new_visited"
-    have "new_visited = visited |\<union>| fset_of_list scc_start"
-      using assms(1,2,7,8) collect_one_scc_visited_update downstream_visited scc_unvisited
-        start_in_graph by blast
-    then have "w |\<in>| visited \<or> w \<in> set scc_start"
-      using \<open>w |\<in>| new_visited\<close> by (simp add: fset_of_list_elem)
-    then show "has_vertex graph w"
-    proof
-      assume "w |\<in>| visited"
-      then show ?thesis using assms(2) by simp
+  have "reachable graph v w \<Longrightarrow> v = start \<Longrightarrow> in_same_scc graph w start \<or> w |\<in>| visited" for v w
+  proof (induction rule: reachable.induct)
+    case (reachable_refl v)
+    then show ?case using in_same_scc_refl by blast
+  next
+    case (reachable_step v w u)
+    then have start_w: "reachable graph start w" and edge: "has_edge graph w u"
+      and IH: "in_same_scc graph w start \<or> w |\<in>| visited"
+      by blast+
+    have start_vertex: "has_vertex graph start"
+      using reachable_implies_vertices(1)[OF valid start_w] .
+    have w_vertex: "has_vertex graph w"
+      using reachable_implies_vertices(2)[OF valid start_w] .
+    show ?case
+    proof (cases "w |\<in>| visited")
+      case True
+      have "reachable graph w u"
+        using edge w_vertex reachable.reachable_refl reachable.reachable_step by blast
+      then show ?thesis using True closed by blast
     next
-      assume "w \<in> set scc_start"
-      then have "List.member scc_start w" by (simp add: in_set_member)
-      have "in_same_scc graph w start"
-        using \<open>List.member scc_start w\<close> assms(1,2,7,8) collect_one_scc_sound downstream_visited
-          scc_unvisited start_in_graph by blast
-      then show ?thesis
-        by (metis assms(1) edge_implies_vertices(1) scc_path_avoiding_vertex start_in_graph)
-    qed
-  qed
-
-  (* Closure under reachability *)
-  show "\<forall>v w. v |\<in>| new_visited \<and> reachable graph v w \<longrightarrow> w |\<in>| new_visited"
-  proof (intro allI impI)
-    fix v' w
-    assume "v' |\<in>| new_visited \<and> reachable graph v' w"
-    then have v'_visited: "v' |\<in>| new_visited" and reachable_vw: "reachable graph v' w" by auto
-
-    have "new_visited = visited |\<union>| fset_of_list scc_start"
-      using assms(1,2,7,8) collect_one_scc_visited_update downstream_visited scc_unvisited
-        start_in_graph by blast
-    then have "v' |\<in>| visited \<or> v' \<in> set scc_start"
-      using v'_visited by (simp add: fset_of_list_elem)
-    then show "w |\<in>| new_visited"
-    proof
-      assume "v' |\<in>| visited"
-      then have "w |\<in>| visited"
-        using assms(4) reachable_vw by blast
-      then show ?thesis
-        using \<open>new_visited = visited |\<union>| fset_of_list scc_start\<close> by simp
-    next
-      assume "v' \<in> set scc_start"
-      then have "List.member scc_start v'" by (simp add: in_set_member)
-      have "in_same_scc graph v' start"
-        using \<open>List.member scc_start v'\<close> assms(1,2,7,8) collect_one_scc_sound downstream_visited
-          scc_unvisited start_in_graph by blast
-      have "reachable graph start w"
-        using \<open>in_same_scc graph v' start\<close> reachable_vw reachable_trans by auto
+      case False
+      with IH have w_scc: "in_same_scc graph w start" by blast
       show ?thesis
-      proof (cases "in_same_scc graph w start")
-        case True
-        have "has_vertex graph w"
-          using True assms(1) edge_implies_vertices(1) scc_path_avoiding_vertex start_in_graph
-          by blast
-        then have "w \<in> set scc_start"
-          using collect_one_scc_complete[OF assms(1) start_in_graph \<open>has_vertex graph w\<close>
-                assms(2) True scc_unvisited downstream_visited assms(8)]
-          by (simp add: in_set_member)
-        then show ?thesis
-          using \<open>new_visited = visited |\<union>| fset_of_list scc_start\<close>
-          by (simp add: fset_of_list_elem)
-      next
-        case False
-        have "has_vertex graph w"
-          by (metis \<open>reachable graph start w\<close> assms(1) edge_implies_vertices(2) reachable.cases)
-        then have "w |\<in>| visited"
-          using downstream_visited \<open>reachable graph start w\<close> False by simp
-        then show ?thesis
-          using \<open>new_visited = visited |\<union>| fset_of_list scc_start\<close> by simp
+      proof (rule ccontr)
+        assume "\<not> (in_same_scc graph u start \<or> u |\<in>| visited)"
+        then have u_scc: "\<not> in_same_scc graph u start" and u_unvisited: "u |\<notin>| visited"
+          by blast+
+        have "\<not> in_same_scc graph w u"
+          using w_scc u_scc in_same_scc_sym in_same_scc_trans by blast
+        then obtain v_c where v_c_first:
+          "\<forall>v_d. List.member (start # rest) v_d \<and> has_vertex graph v_d \<and> in_same_scc graph v_d w \<longrightarrow>
+                  index_of v_c (start # rest) < index_of v_d (start # rest)"
+          using ordered edge u_unvisited unfolding vertex_list_ordered_def by blast
+        have "index_of v_c (start # rest) < index_of start (start # rest)"
+          using v_c_first start_vertex w_scc in_same_scc_sym member_rec(1) by metis
+        then show False by simp
       qed
     qed
   qed
-
-  (* Vertices not in rest are in new_visited *)
-  show "\<forall>v'. has_vertex graph v' \<and> \<not>(List.member rest v') \<longrightarrow> v' |\<in>| new_visited"
-  proof (intro allI impI)
-    fix v'
-    assume v'_props: "has_vertex graph v' \<and> \<not>(List.member rest v')"
-    show "v' |\<in>| new_visited"
-    proof (cases "v' = start")
-      case True
-      have "start \<in> set scc_start"
-        using collect_one_scc_complete[OF assms(1) start_in_graph start_in_graph
-              assms(2) _ scc_unvisited downstream_visited assms(8)]
-        using in_same_scc_refl start_in_graph
-        by (metis in_set_member)
-      then show ?thesis
-        using True collect_one_scc_visited_update[OF assms(1) start_in_graph assms(2) 
-                      scc_unvisited downstream_visited assms(7,8)]
-        by (simp add: fset_of_list_elem)
-    next
-      case False
-      then have "\<not>(List.member (start # rest) v')"
-        using v'_props by (simp add: member_rec(1))
-      then have "v' |\<in>| visited"
-        using assms(5,7) v'_props by auto
-      then show ?thesis
-        using collect_one_scc_visited_update[OF assms(1) start_in_graph assms(2)
-                      scc_unvisited downstream_visited assms(7,8)]
-        by auto
-    qed
-  qed
-
-  (* Rest is properly ordered *)
-  show "vertex_list_ordered graph new_visited rest"
-  proof -
-    have "vertex_list_ordered graph visited (start # rest)"
-      using assms(6,7) by auto
-    moreover have "visited |\<subseteq>| new_visited"
-      using collect_one_scc_visited_update[OF assms(1) start_in_graph assms(2)
-                      scc_unvisited downstream_visited assms(7,8)]
-      by auto
-    ultimately have "vertex_list_ordered graph new_visited (start # rest)"
-      using vertex_list_ordered_monotonic by blast
-    moreover have "start |\<in>| new_visited"
-    proof -
-      have "start \<in> set scc_start"
-        using collect_one_scc_complete[OF assms(1) start_in_graph start_in_graph
-              assms(2) _ scc_unvisited downstream_visited assms(8)]
-        using in_same_scc_refl start_in_graph
-        by (metis in_set_member)
-      then show ?thesis
-        using collect_one_scc_visited_update[OF assms(1) start_in_graph assms(2)
-                        scc_unvisited downstream_visited assms(7,8)]
-        by (simp add: fset_of_list_elem)
-    qed
-    ultimately show ?thesis
-      using vertex_list_ordered_tail
-      using \<open>\<forall>v w. v |\<in>| new_visited \<and> reachable graph v w \<longrightarrow> w |\<in>| new_visited\<close> by blast
-  qed
+  then show ?thesis by blast
 qed
 
-(* Helper lemma for the case when start is already visited in collect_all_sccs proofs *)
-lemma collect_all_sccs_skip_visited_properties:
-  assumes "valid_graph graph"
-    and "\<forall>w |\<in>| visited. has_vertex graph w"
-    and "\<forall>w. List.member (start # rest) w \<longrightarrow> has_vertex graph w"
-    and "\<forall>v w. v |\<in>| visited \<and> reachable graph v w \<longrightarrow> w |\<in>| visited"
-    and "\<forall>v. has_vertex graph v \<and> \<not>(List.member (start # rest) v) \<longrightarrow> v |\<in>| visited"
-    and "vertex_list_ordered graph visited (start # rest)"
+(* The preconditions are preserved when skipping a visited head *)
+lemma collect_all_sccs_pre_skip:
+  assumes "collect_all_sccs_pre graph visited (start # rest)"
     and "start |\<in>| visited"
-  shows "\<forall>w. List.member rest w \<longrightarrow> has_vertex graph w"
-    and "vertex_list_ordered graph visited rest"
-    and "\<forall>v. has_vertex graph v \<and> \<not>(List.member rest v) \<longrightarrow> v |\<in>| visited"
+  shows "collect_all_sccs_pre graph visited rest"
 proof -
-  show "\<forall>w. List.member rest w \<longrightarrow> has_vertex graph w"
-    using assms(3) by (simp add: member_rec(1))
+  have pre: "valid_graph graph" "\<forall>w |\<in>| visited. has_vertex graph w"
+    "\<forall>w. List.member (start # rest) w \<longrightarrow> has_vertex graph w"
+    "\<forall>v w. v |\<in>| visited \<and> reachable graph v w \<longrightarrow> w |\<in>| visited"
+    "\<forall>v. has_vertex graph v \<and> \<not>(List.member (start # rest) v) \<longrightarrow> v |\<in>| visited"
+    "vertex_list_ordered graph visited (start # rest)"
+    using assms(1) unfolding collect_all_sccs_pre_def by blast+
+  have "\<forall>w. List.member rest w \<longrightarrow> has_vertex graph w"
+    using pre(3) by (simp add: member_rec(1))
+  moreover have "\<forall>v. has_vertex graph v \<and> \<not>(List.member rest v) \<longrightarrow> v |\<in>| visited"
+    using pre(5) assms(2) by (auto simp: member_rec(1))
+  moreover have "vertex_list_ordered graph visited rest"
+    using vertex_list_ordered_tail[OF pre(6) assms(2) pre(4)] .
+  ultimately show ?thesis
+    using pre(1,2,4) unfolding collect_all_sccs_pre_def by blast
+qed
 
-  show "vertex_list_ordered graph visited rest"
-    using assms(4,6,7) vertex_list_ordered_tail by blast
+(* What happens when collect_all_sccs processes an unvisited head: the collected
+   component is exactly start's SCC, the visited set grows by that SCC, and the
+   preconditions hold for the rest of the list. *)
+lemma collect_all_sccs_head:
+  assumes pre: "collect_all_sccs_pre graph visited (start # rest)"
+    and start_unvisited: "start |\<notin>| visited"
+    and res: "collect_one_scc graph visited start = (scc, new_visited)"
+  shows "set scc = {u. has_vertex graph u \<and> in_same_scc graph u start}"
+    and "start \<in> set scc"
+    and "distinct scc"
+    and "new_visited = visited |\<union>| fset_of_list scc"
+    and "\<forall>u \<in> set scc. u |\<notin>| visited"
+    and "collect_all_sccs_pre graph new_visited rest"
+proof -
+  have valid: "valid_graph graph"
+    and visited_vertices: "\<forall>w |\<in>| visited. has_vertex graph w"
+    and verts_vertices: "\<forall>w. List.member (start # rest) w \<longrightarrow> has_vertex graph w"
+    and closed: "\<forall>v w. v |\<in>| visited \<and> reachable graph v w \<longrightarrow> w |\<in>| visited"
+    and covered: "\<forall>v. has_vertex graph v \<and> \<not>(List.member (start # rest) v) \<longrightarrow> v |\<in>| visited"
+    and ordered: "vertex_list_ordered graph visited (start # rest)"
+    using pre unfolding collect_all_sccs_pre_def by blast+
 
-  show "\<forall>v. has_vertex graph v \<and> \<not>(List.member rest v) \<longrightarrow> v |\<in>| visited"
-  proof (intro allI impI)
+  have start_vertex: "has_vertex graph start"
+    using verts_vertices by (simp add: member_rec(1))
+  have scc_unvisited: "\<forall>w. has_vertex graph w \<and> in_same_scc graph w start \<longrightarrow> w |\<notin>| visited"
+    using same_scc_unvisited[OF closed start_unvisited] .
+  have downstream: "\<forall>w. has_vertex graph w \<and> reachable graph start w \<and>
+                        \<not>(in_same_scc graph w start) \<longrightarrow> w |\<in>| visited"
+    using downstream_sccs_visited[OF valid closed ordered] .
+
+  (* The collected component is exactly start's SCC *)
+  note correct = collect_one_scc_correct[OF valid start_vertex visited_vertices scc_unvisited
+                   downstream res]
+
+  show scc_set: "set scc = {u. has_vertex graph u \<and> in_same_scc graph u start}"
+    by (rule correct(1))
+
+  show "start \<in> set scc"
+    unfolding scc_set using start_vertex in_same_scc_refl by blast
+
+  show "distinct scc"
+    by (rule correct(2))
+
+  show new_eq: "new_visited = visited |\<union>| fset_of_list scc"
+    by (rule correct(3))
+
+  show "\<forall>u \<in> set scc. u |\<notin>| visited"
+    unfolding scc_set using scc_unvisited by blast
+
+  (* The preconditions hold for the rest of the list *)
+  have new_iff: "w |\<in>| new_visited \<longleftrightarrow>
+                   w |\<in>| visited \<or> (has_vertex graph w \<and> in_same_scc graph w start)" for w
+    using new_eq scc_set by (simp add: fset_of_list_elem)
+
+  have new_vertices: "\<forall>w |\<in>| new_visited. has_vertex graph w"
+  proof (rule fBallI)
+    fix w
+    assume "w |\<in>| new_visited"
+    then show "has_vertex graph w"
+      using new_iff visited_vertices by (meson fbspec)
+  qed
+
+  have rest_vertices: "\<forall>w. List.member rest w \<longrightarrow> has_vertex graph w"
+    using verts_vertices by (simp add: member_rec(1))
+
+  have new_closed: "\<forall>v w. v |\<in>| new_visited \<and> reachable graph v w \<longrightarrow> w |\<in>| new_visited"
+  proof (intro allI impI, elim conjE)
+    fix v w
+    assume v_new: "v |\<in>| new_visited" and vw: "reachable graph v w"
+    show "w |\<in>| new_visited"
+    proof (cases "v |\<in>| visited")
+      case True
+      then show ?thesis using vw closed new_iff by blast
+    next
+      case False
+      then have "in_same_scc graph v start"
+        using v_new new_iff by blast
+      then have "reachable graph start w"
+        using vw by (meson in_same_scc.simps reachable_trans)
+      moreover have "has_vertex graph w"
+        using reachable_implies_vertices(2)[OF valid vw] .
+      ultimately show ?thesis
+        using downstream new_iff by blast
+    qed
+  qed
+
+  have new_covered: "\<forall>v. has_vertex graph v \<and> \<not>(List.member rest v) \<longrightarrow> v |\<in>| new_visited"
+  proof (intro allI impI, elim conjE)
     fix v
-    assume "has_vertex graph v \<and> \<not>(List.member rest v)"
-    show "v |\<in>| visited"
+    assume v_vertex: "has_vertex graph v" and v_rest: "\<not> List.member rest v"
+    show "v |\<in>| new_visited"
     proof (cases "v = start")
       case True
-      then show ?thesis using assms(7) by simp
+      then show ?thesis using start_vertex in_same_scc_refl new_iff by blast
     next
       case False
-      then have "\<not>(List.member (start # rest) v)"
-        using \<open>has_vertex graph v \<and> \<not>(List.member rest v)\<close> by (simp add: member_rec(1))
-      then show ?thesis
-        using assms(5) \<open>has_vertex graph v \<and> \<not>(List.member rest v)\<close> by simp
+      then have "\<not> List.member (start # rest) v"
+        using v_rest by (simp add: member_rec(1))
+      then show ?thesis using v_vertex covered new_iff by blast
     qed
   qed
+
+  have new_ordered: "vertex_list_ordered graph new_visited rest"
+  proof -
+    have "visited |\<subseteq>| new_visited"
+      by (simp add: new_eq funion_upper1)
+    then have "vertex_list_ordered graph new_visited (start # rest)"
+      by (rule vertex_list_ordered_monotonic[OF ordered])
+    moreover have "start |\<in>| new_visited"
+      using start_vertex in_same_scc_refl new_iff by blast
+    ultimately show ?thesis
+      using vertex_list_ordered_tail new_closed by blast
+  qed
+
+  show "collect_all_sccs_pre graph new_visited rest"
+    unfolding collect_all_sccs_pre_def
+    using valid new_vertices rest_vertices new_closed new_covered new_ordered by blast
 qed
 
-(* Vertices in SCCs collected by collect_all_sccs were not initially visited *)
-lemma collect_all_sccs_vertices_were_unvisited:
-  assumes "valid_graph graph"
-    and "\<forall>w |\<in>| visited. has_vertex graph w"
-    and "\<forall>w. List.member vertices w \<longrightarrow> has_vertex graph w"
-    and "\<forall>v w. v |\<in>| visited \<and> reachable graph v w \<longrightarrow> w |\<in>| visited"
-    and "\<forall>v. has_vertex graph v \<and> \<not>(List.member vertices v) \<longrightarrow> v |\<in>| visited"
-    and "vertex_list_ordered graph visited vertices"
-    and "set scc \<in> set (map set (collect_all_sccs graph visited vertices))"
-    and "v \<in> set scc"
-  shows "v |\<notin>| visited"
-  using assms
-proof (induction vertices arbitrary: visited scc v)
+(* Induction rule for collect_all_sccs, under the preconditions.
+   The Head case is given the facts established by collect_all_sccs_head. *)
+lemma collect_all_sccs_induct [consumes 1, case_names Nil Skip Head]:
+  assumes "collect_all_sccs_pre graph visited verts"
+    and base: "\<And>visited. collect_all_sccs_pre graph visited [] \<Longrightarrow> P visited []"
+    and skip_case: "\<And>visited start rest.
+          collect_all_sccs_pre graph visited rest \<Longrightarrow>
+          start |\<in>| visited \<Longrightarrow>
+          collect_all_sccs graph visited (start # rest) = collect_all_sccs graph visited rest \<Longrightarrow>
+          P visited rest \<Longrightarrow>
+          P visited (start # rest)"
+    and head_case: "\<And>visited start rest scc new_visited.
+          collect_all_sccs_pre graph new_visited rest \<Longrightarrow>
+          start |\<notin>| visited \<Longrightarrow>
+          collect_all_sccs graph visited (start # rest) = scc # collect_all_sccs graph new_visited rest \<Longrightarrow>
+          set scc = {u. has_vertex graph u \<and> in_same_scc graph u start} \<Longrightarrow>
+          start \<in> set scc \<Longrightarrow>
+          distinct scc \<Longrightarrow>
+          new_visited = visited |\<union>| fset_of_list scc \<Longrightarrow>
+          (\<forall>u \<in> set scc. u |\<notin>| visited) \<Longrightarrow>
+          P new_visited rest \<Longrightarrow>
+          P visited (start # rest)"
+  shows "P visited verts"
+  using assms(1)
+proof (induction verts arbitrary: visited)
   case Nil
-  then show ?case
-    by (metis collect_all_sccs.simps(1) in_set_member list.simps(8) member_rec(2))
+  then show ?case by (rule base)
 next
   case (Cons start rest)
   show ?case
   proof (cases "start |\<in>| visited")
-    case True
-    then have "collect_all_sccs graph visited (start # rest) = collect_all_sccs graph visited rest"
-      by simp
-    then have prem: "set scc \<in> set (map set (collect_all_sccs graph visited rest))"
-      using Cons.prems(7) by simp
-
-    have skip_props:
-      "\<forall>w. List.member rest w \<longrightarrow> has_vertex graph w"
-      "vertex_list_ordered graph visited rest"
-      "\<forall>v. has_vertex graph v \<and> \<not>(List.member rest v) \<longrightarrow> v |\<in>| visited"
-      using collect_all_sccs_skip_visited_properties[OF Cons.prems(1,2,3,4,5,6) True]
-      by blast+
-
+    case start_visited: True
+    have pre_rest: "collect_all_sccs_pre graph visited rest"
+      using collect_all_sccs_pre_skip[OF Cons.prems start_visited] .
     show ?thesis
-      using Cons.IH Cons.prems(2,4,8) prem assms(1)
-        skip_props(1,2,3) by blast
+      by (rule skip_case[OF pre_rest start_visited _ Cons.IH[OF pre_rest]])
+         (simp add: start_visited)
   next
-    case False
-    have start_in_graph: "has_vertex graph start"
-      using Cons.prems(3) by (simp add: member_rec(1))
-    have same_scc_unvisited: "\<forall>w. has_vertex graph w \<and> in_same_scc graph w start \<longrightarrow> w |\<notin>| visited"
-      using False in_same_scc.simps Cons.prems(4) by blast
-    have downstream_visited: "\<forall>w. has_vertex graph w \<and> reachable graph start w \<and> \<not>(in_same_scc graph w start) \<longrightarrow> w |\<in>| visited"
-      using Cons.prems(2,4,5,6) assms(1) downstream_sccs_visited by blast
-
-    obtain scc_start new_visited where collect_result:
-      "collect_one_scc graph visited start = (scc_start, new_visited)"
+    case start_unvisited: False
+    obtain scc new_visited where res: "collect_one_scc graph visited start = (scc, new_visited)"
       by (metis surj_pair)
-
-    have "collect_all_sccs graph visited (start # rest) =
-          scc_start # collect_all_sccs graph new_visited rest"
-      using False collect_result by simp
-    then have "set scc = set scc_start \<or> set scc \<in> set (map set (collect_all_sccs graph new_visited rest))"
-      using Cons.prems(7) by auto
-
-    then show ?thesis
-    proof
-      assume "set scc = set scc_start"
-      show ?thesis
-      proof -
-        have "List.member scc_start v"
-          using \<open>set scc = set scc_start\<close> Cons.prems(8)
-          by (simp add: in_set_member)
-        have "in_same_scc graph v start"
-          using collect_one_scc_sound[OF Cons.prems(1) start_in_graph Cons.prems(2) False
-                same_scc_unvisited downstream_visited collect_result \<open>List.member scc_start v\<close>]
-          by blast
-        show ?thesis
-          using same_scc_unvisited \<open>in_same_scc graph v start\<close> Cons.prems(8)
-          using Cons.prems(2) by blast
-      qed
-
-    next
-      assume prem: "set scc \<in> set (map set (collect_all_sccs graph new_visited rest))"
-
-      (* Use helper lemma to establish all properties for recursive call *)
-      have recursive_props:
-        "\<forall>w |\<in>| new_visited. has_vertex graph w"
-        "\<forall>w. List.member rest w \<longrightarrow> has_vertex graph w"
-        "\<forall>v w. v |\<in>| new_visited \<and> reachable graph v w \<longrightarrow> w |\<in>| new_visited"
-        "\<forall>v. has_vertex graph v \<and> \<not>(List.member rest v) \<longrightarrow> v |\<in>| new_visited"
-        "vertex_list_ordered graph new_visited rest"
-        using collect_all_sccs_recursive_properties[OF Cons.prems(1,2,3,4,5,6) False collect_result]
-        by blast+
-
-      have "v |\<notin>| new_visited"
-        using Cons.IH[OF Cons.prems(1) recursive_props prem]
-        by (simp add: Cons.prems(8)) 
-
-      moreover have "visited |\<subseteq>| new_visited"
-        using collect_one_scc_visited_update[OF Cons.prems(1) start_in_graph Cons.prems(2)
-              same_scc_unvisited downstream_visited False collect_result]
-        by auto
-
-      ultimately show ?thesis by auto
-    qed
+    note props = collect_all_sccs_head[OF Cons.prems start_unvisited res]
+    show ?thesis
+      by (rule head_case[OF props(6) start_unvisited _ props(1-5) Cons.IH[OF props(6)]])
+         (simp add: start_unvisited res)
   qed
 qed
 
@@ -731,427 +359,153 @@ qed
 (* Correctness Theorems for collect_all_sccs *)
 (*-----------------------------------------------------------------------------*)
 
+(* Vertices in SCCs collected by collect_all_sccs were not initially visited *)
+lemma collect_all_sccs_vertices_were_unvisited:
+  assumes "collect_all_sccs_pre graph visited verts"
+    and "scc \<in> set (collect_all_sccs graph visited verts)"
+    and "v \<in> set scc"
+  shows "v |\<notin>| visited"
+  using assms
+proof (induction rule: collect_all_sccs_induct)
+  case (Nil visited)
+  then show ?case by simp
+next
+  case (Skip visited start rest)
+  show ?case
+    using Skip.prems unfolding Skip.hyps(3) by (rule Skip.IH)
+next
+  case (Head visited start rest scc' new_visited)
+  have "scc = scc' \<or> scc \<in> set (collect_all_sccs graph new_visited rest)"
+    using Head.prems(1) unfolding Head.hyps(3) by simp
+  then show ?case
+  proof
+    assume "scc = scc'"
+    then show ?thesis using Head.hyps(8) Head.prems(2) by blast
+  next
+    assume "scc \<in> set (collect_all_sccs graph new_visited rest)"
+    then have "v |\<notin>| new_visited"
+      using Head.IH Head.prems(2) by blast
+    then show ?thesis
+      using Head.hyps(7) by simp
+  qed
+qed
+
 (* Each component returned by collect_all_sccs is a strongly connected component *)
 theorem collect_all_sccs_are_sccs:
-  assumes "valid_graph graph"
-    and "\<forall>w |\<in>| visited. has_vertex graph w"
-    and "\<forall>w. List.member vertices w \<longrightarrow> has_vertex graph w"
-    and "\<forall>v w. v |\<in>| visited \<and> reachable graph v w \<longrightarrow> w |\<in>| visited"
-    and "\<forall>v. has_vertex graph v \<and> \<not>(List.member vertices v) \<longrightarrow> v |\<in>| visited"
-    and "vertex_list_ordered graph visited vertices"
-    and "List.member (collect_all_sccs graph visited vertices) scc"
-  shows "\<exists>v. List.member scc v \<and> (\<forall>u. List.member scc u \<longleftrightarrow> (has_vertex graph u \<and> in_same_scc graph u v))"
+  assumes "collect_all_sccs_pre graph visited verts"
+    and "scc \<in> set (collect_all_sccs graph visited verts)"
+  shows "\<exists>v. v \<in> set scc \<and> (\<forall>u. u \<in> set scc \<longleftrightarrow> (has_vertex graph u \<and> in_same_scc graph u v))"
   using assms
-proof (induction vertices arbitrary: visited scc)
-  case Nil
-  (* Empty vertices list: no SCCs returned *)
-  then show ?case
-    by (metis collect_all_sccs.simps(1) member_rec(2)) 
+proof (induction rule: collect_all_sccs_induct)
+  case (Nil visited)
+  then show ?case by simp
 next
-  case (Cons start rest)
+  case (Skip visited start rest)
   show ?case
-  proof (cases "start |\<in>| visited")
-    case True
-    (* start is already visited, skip it *)
-    have "collect_all_sccs graph visited (start # rest) = collect_all_sccs graph visited rest"
-      using True by simp
-    then have "List.member (collect_all_sccs graph visited rest) scc"
-      using Cons.prems(7) by simp
-
-    have skip_props:
-      "\<forall>w. List.member rest w \<longrightarrow> has_vertex graph w"
-      "vertex_list_ordered graph visited rest"
-      "\<forall>v. has_vertex graph v \<and> \<not>(List.member rest v) \<longrightarrow> v |\<in>| visited"
-      using collect_all_sccs_skip_visited_properties[OF assms(1) Cons.prems(2,3,4,5,6) True]
-      by blast+
-
-    (* Apply IH to rest with same visited set *)
-    show ?thesis
-      using Cons.IH Cons.prems(2,4) \<open>List.member (collect_all_sccs graph visited rest) scc\<close> assms(1)
-        skip_props(1,2,3) by blast
-      
+    using Skip.prems unfolding Skip.hyps(3) by (rule Skip.IH)
+next
+  case (Head visited start rest scc' new_visited)
+  have "scc = scc' \<or> scc \<in> set (collect_all_sccs graph new_visited rest)"
+    using Head.prems unfolding Head.hyps(3) by simp
+  then show ?case
+  proof
+    assume "scc = scc'"
+    then have "start \<in> set scc \<and>
+               (\<forall>u. u \<in> set scc \<longleftrightarrow> (has_vertex graph u \<and> in_same_scc graph u start))"
+      using Head.hyps(4,5) by simp
+    then show ?thesis by blast
   next
-    case False
-    (* start is unvisited, so we collect its SCC *)
-    have start_unvisited: "start |\<notin>| visited" using False by simp
-
-    (* start must be in the vertices list *)
-    have "List.member (start # rest) start"
-      by (simp add: member_rec(1))
-
-    (* Therefore start must be a vertex in the graph *)
-    have start_in_graph: "has_vertex graph start"
-      using Cons.prems(3) \<open>List.member (start # rest) start\<close> by blast
-
-    (* By downstream_sccs_visited, all downstream SCCs are already visited *)
-    have downstream_visited: "\<forall>w. has_vertex graph w \<and> reachable graph start w \<and>
-                                    \<not>(in_same_scc graph w start) \<longrightarrow> w |\<in>| visited"
-      using Cons.prems(2,4,5,6) assms(1) downstream_sccs_visited by blast
-
-    (* By same_scc_unvisited, all vertices in start's SCC are unvisited *)
-    have same_scc_unvisited: "\<forall>w. has_vertex graph w \<and> in_same_scc graph w start \<longrightarrow> w |\<notin>| visited"
-      using Cons.prems(4) in_same_scc.simps start_unvisited by blast
-      
-    (* Collect start's SCC *)
-    obtain scc_start new_visited where collect_result:
-      "collect_one_scc graph visited start = (scc_start, new_visited)"
-      by (metis surj_pair)
-
-    (* The result is scc_start # collect_all_sccs graph new_visited rest *)
-    have collect_decomp: "collect_all_sccs graph visited (start # rest) =
-                          scc_start # collect_all_sccs graph new_visited rest"
-      using False collect_result by simp
-
-    (* start is in scc_start *)
-    have start_in_scc_start: "List.member scc_start start"
-      using collect_one_scc_complete[OF Cons.prems(1) start_in_graph start_in_graph
-            Cons.prems(2) _ same_scc_unvisited downstream_visited collect_result]
-      using in_same_scc_refl start_in_graph by blast
-
-    (* scc is either scc_start or in the recursive call *)
-    have "scc = scc_start \<or> List.member (collect_all_sccs graph new_visited rest) scc"
-      by (metis Cons.prems(7) collect_decomp member_rec(1))
-      
-    then show ?thesis
-    proof
-      assume "scc = scc_start"
-      (* scc is the one we just collected from start *)
-
-      (* Forward direction: All vertices in scc_start are in the same SCC as start *)
-      have forward: "\<forall>u. List.member scc_start u \<longrightarrow> in_same_scc graph u start"
-        using Cons.prems(2) assms(1) collect_one_scc_sound collect_result downstream_visited
-          local.same_scc_unvisited start_in_graph start_unvisited by blast
-
-      (* Backward direction: All vertices in start's SCC are in scc_start *)
-      have backward: "\<forall>u. has_vertex graph u \<and> in_same_scc graph u start \<longrightarrow> List.member scc_start u"
-        using collect_one_scc_complete[OF Cons.prems(1) start_in_graph _ Cons.prems(2) _
-              same_scc_unvisited downstream_visited collect_result]
-        by blast
-
-      (* Combine both directions *)
-      have "\<forall>u. List.member scc_start u \<longleftrightarrow> (has_vertex graph u \<and> in_same_scc graph u start)"
-        using forward backward
-        by (metis Cons.prems(1) edge_implies_vertices(1) scc_path_avoiding_vertex start_in_graph)
-
-      (* Therefore scc is a valid SCC *)
-      show ?thesis
-        using \<open>scc = scc_start\<close> start_in_scc_start
-              \<open>\<forall>u. List.member scc_start u \<longleftrightarrow> (has_vertex graph u \<and> in_same_scc graph u start)\<close>
-        by blast
-    next
-      assume "List.member (collect_all_sccs graph new_visited rest) scc"
-      (* scc is from the recursive call *)
-
-      (* Use helper lemma to establish all properties for recursive call *)
-      have recursive_props:
-        "\<forall>w |\<in>| new_visited. has_vertex graph w"
-        "\<forall>w. List.member rest w \<longrightarrow> has_vertex graph w"
-        "\<forall>v w. v |\<in>| new_visited \<and> reachable graph v w \<longrightarrow> w |\<in>| new_visited"
-        "\<forall>v. has_vertex graph v \<and> \<not>(List.member rest v) \<longrightarrow> v |\<in>| new_visited"
-        "vertex_list_ordered graph new_visited rest"
-        using collect_all_sccs_recursive_properties[OF Cons.prems(1,2,3,4,5,6) start_unvisited collect_result]
-        by blast+
-
-      (* Apply IH *)
-      show ?thesis
-        using Cons.IH[OF Cons.prems(1) recursive_props
-              \<open>List.member (collect_all_sccs graph new_visited rest) scc\<close>]
-        by simp
-    qed
+    assume "scc \<in> set (collect_all_sccs graph new_visited rest)"
+    then show ?thesis by (rule Head.IH)
   qed
 qed
 
 (* All vertices in the graph that are not already visited appear in some SCC *)
 theorem collect_all_sccs_vertices_in_graph:
-  assumes "valid_graph graph"
-    and "\<forall>w |\<in>| visited. has_vertex graph w"
-    and "\<forall>w. List.member vertices w \<longrightarrow> has_vertex graph w"
-    and "\<forall>v w. v |\<in>| visited \<and> reachable graph v w \<longrightarrow> w |\<in>| visited"
-    and "\<forall>v. has_vertex graph v \<and> \<not>(List.member vertices v) \<longrightarrow> v |\<in>| visited"
-    and "vertex_list_ordered graph visited vertices"
+  assumes "collect_all_sccs_pre graph visited verts"
     and "has_vertex graph v"
     and "v |\<notin>| visited"
-  shows "\<exists>scc. scc \<in> set (collect_all_sccs graph visited vertices) \<and> v \<in> set scc"
+  shows "\<exists>scc. scc \<in> set (collect_all_sccs graph visited verts) \<and> v \<in> set scc"
   using assms
-proof (induction vertices arbitrary: visited v)
-  case Nil
-  (* If vertices is empty, then by assumption 5, v must be in visited *)
+proof (induction rule: collect_all_sccs_induct)
+  case (Nil visited)
+  (* Every graph vertex not in the (empty) list is visited *)
   then show ?case
-    by (meson member_rec(2))
+    unfolding collect_all_sccs_pre_def by (meson member_rec(2))
 next
-  case (Cons start rest)
+  case (Skip visited start rest)
   show ?case
-  proof (cases "start |\<in>| visited")
-    case True
-    (* start is already visited, skip it *)
-    have "collect_all_sccs graph visited (start # rest) = collect_all_sccs graph visited rest"
-      using True by simp
-
-    have skip_props:
-      "\<forall>w. List.member rest w \<longrightarrow> has_vertex graph w"
-      "vertex_list_ordered graph visited rest"
-      "\<forall>v. has_vertex graph v \<and> \<not>(List.member rest v) \<longrightarrow> v |\<in>| visited"
-      using collect_all_sccs_skip_visited_properties[OF Cons.prems(1,2,3,4,5,6) True]
-      by blast+
-
-    show ?thesis
-      using Cons.IH[OF Cons.prems(1,2) skip_props(1) Cons.prems(4) skip_props(3,2) Cons.prems(7,8)]
-      using \<open>collect_all_sccs graph visited (start # rest) = collect_all_sccs graph visited rest\<close>
-      by auto
+    unfolding Skip.hyps(3) using Skip.IH Skip.prems by blast
+next
+  case (Head visited start rest scc' new_visited)
+  show ?case
+  proof (cases "v |\<in>| new_visited")
+    case v_new: True
+    have "v \<in> set scc'"
+      using Head.hyps(7) Head.prems(2) v_new by (auto simp: fset_of_list_elem)
+    then show ?thesis
+      unfolding Head.hyps(3) by auto
   next
-    case False
-    (* start is unvisited, so we collect its SCC *)
-    have start_in_graph: "has_vertex graph start"
-      using Cons.prems(3) by (simp add: member_rec(1))
-
-    have same_scc_unvisited: "\<forall>w. has_vertex graph w \<and> in_same_scc graph w start \<longrightarrow> w |\<notin>| visited"
-      using Cons.prems(4) False in_same_scc.simps by blast
-
-    have downstream_visited: "\<forall>w. has_vertex graph w \<and> reachable graph start w \<and>
-                                  \<not>(in_same_scc graph w start) \<longrightarrow> w |\<in>| visited"
-      using Cons.prems(2,4,5,6) assms(1) downstream_sccs_visited by blast
-
-    obtain scc_start new_visited where collect_result:
-      "collect_one_scc graph visited start = (scc_start, new_visited)"
-      by (metis surj_pair)
-
-    have collect_decomp: "collect_all_sccs graph visited (start # rest) =
-          scc_start # collect_all_sccs graph new_visited rest"
-      using False collect_result by simp
-
-    (* Use helper lemma to establish all properties for recursive call *)
-    have recursive_props:
-      "\<forall>w |\<in>| new_visited. has_vertex graph w"
-      "\<forall>w. List.member rest w \<longrightarrow> has_vertex graph w"
-      "\<forall>v w. v |\<in>| new_visited \<and> reachable graph v w \<longrightarrow> w |\<in>| new_visited"
-      "\<forall>v. has_vertex graph v \<and> \<not>(List.member rest v) \<longrightarrow> v |\<in>| new_visited"
-      "vertex_list_ordered graph new_visited rest"
-      using collect_all_sccs_recursive_properties[OF Cons.prems(1,2,3,4,5,6) False collect_result]
-      by blast+
-
+    case v_not_new: False
     show ?thesis
-    proof (cases "v |\<in>| new_visited")
-      case True
-      (* v is in new_visited but was not in visited, so it must be in scc_start *)
-      have "new_visited = visited |\<union>| fset_of_list scc_start"
-        using collect_one_scc_visited_update[OF Cons.prems(1) start_in_graph Cons.prems(2)
-              same_scc_unvisited downstream_visited False collect_result]
-        by simp
-      then have "v \<in> set scc_start"
-        using True Cons.prems(8) by (simp add: fset_of_list_elem)
-      then show ?thesis
-        using collect_decomp by auto
-    next
-      case False
-      (* v is not in new_visited, so apply IH to the recursive call *)
-      have "\<exists>scc. scc \<in> set (collect_all_sccs graph new_visited rest) \<and> v \<in> set scc"
-        using Cons.IH[OF Cons.prems(1) recursive_props Cons.prems(7) False]
-        by simp
-      then show ?thesis
-        using collect_decomp by auto
-    qed
+      unfolding Head.hyps(3) using Head.IH[OF Head.prems(1) v_not_new] by auto
   qed
 qed
 
 (* The vertices in each SCC are distinct *)
 theorem collect_all_sccs_distinct:
-  assumes "valid_graph graph"
-    and "\<forall>w |\<in>| visited. has_vertex graph w"
-    and "\<forall>w. List.member vertices w \<longrightarrow> has_vertex graph w"
-    and "\<forall>v w. v |\<in>| visited \<and> reachable graph v w \<longrightarrow> w |\<in>| visited"
-    and "\<forall>v. has_vertex graph v \<and> \<not>(List.member vertices v) \<longrightarrow> v |\<in>| visited"
-    and "vertex_list_ordered graph visited vertices"
-    and "scc \<in> set (collect_all_sccs graph visited vertices)"
+  assumes "collect_all_sccs_pre graph visited verts"
+    and "scc \<in> set (collect_all_sccs graph visited verts)"
   shows "distinct scc"
   using assms
-proof (induction vertices arbitrary: visited scc)
-  case Nil
-  then show ?case
-    by (metis collect_all_sccs.simps(1) length_greater_0_conv length_pos_if_in_set)
+proof (induction rule: collect_all_sccs_induct)
+  case (Nil visited)
+  then show ?case by simp
 next
-  case (Cons start rest)
+  case (Skip visited start rest)
   show ?case
-  proof (cases "start |\<in>| visited")
-    case True
-    (* start is already visited, skip it *)
-    have "collect_all_sccs graph visited (start # rest) = collect_all_sccs graph visited rest"
-      using True by simp
-    then have "scc \<in> set (collect_all_sccs graph visited rest)"
-      using Cons.prems(7) by auto
-
-    have skip_props:
-      "\<forall>w. List.member rest w \<longrightarrow> has_vertex graph w"
-      "vertex_list_ordered graph visited rest"
-      "\<forall>v. has_vertex graph v \<and> \<not>(List.member rest v) \<longrightarrow> v |\<in>| visited"
-      using collect_all_sccs_skip_visited_properties[OF Cons.prems(1,2,3,4,5,6) True]
-      by blast+
-
-    show ?thesis
-      using Cons.IH Cons.prems(2,4) \<open>scc \<in> set (collect_all_sccs graph visited rest)\<close> assms(1)
-        skip_props(1,2,3) by blast
-  next
-    case False
-    (* start is unvisited, so we collect its SCC *)
-    have start_in_graph: "has_vertex graph start"
-      using Cons.prems(3) by (simp add: member_rec(1))
-
-    have same_scc_unvisited: "\<forall>w. has_vertex graph w \<and> in_same_scc graph w start \<longrightarrow> w |\<notin>| visited"
-      using Cons.prems(4) False in_same_scc.simps by blast
-
-    have downstream_visited: "\<forall>w. has_vertex graph w \<and> reachable graph start w \<and>
-                                  \<not>(in_same_scc graph w start) \<longrightarrow> w |\<in>| visited"
-      using Cons.prems(2,4,5,6) assms(1) downstream_sccs_visited by blast
-
-    obtain scc_start new_visited where collect_result:
-      "collect_one_scc graph visited start = (scc_start, new_visited)"
-      by (metis surj_pair)
-
-    have "collect_all_sccs graph visited (start # rest) =
-          scc_start # collect_all_sccs graph new_visited rest"
-      using False collect_result by simp
-
-    then have "scc = scc_start \<or> scc \<in> set (collect_all_sccs graph new_visited rest)"
-      using Cons.prems(7) by auto
-
-    then show ?thesis
-    proof
-      assume "scc = scc_start"
-      (* scc is the one we just collected from start, use collect_one_scc_distinct *)
-      show ?thesis
-        using \<open>scc = scc_start\<close> collect_one_scc_distinct[OF Cons.prems(1) start_in_graph
-              Cons.prems(2) same_scc_unvisited downstream_visited False collect_result]
-        by simp
-    next
-      assume "scc \<in> set (collect_all_sccs graph new_visited rest)"
-      (* scc is from the recursive call *)
-
-      (* Use helper lemma to establish all properties for recursive call *)
-      have recursive_props:
-        "\<forall>w |\<in>| new_visited. has_vertex graph w"
-        "\<forall>w. List.member rest w \<longrightarrow> has_vertex graph w"
-        "\<forall>v w. v |\<in>| new_visited \<and> reachable graph v w \<longrightarrow> w |\<in>| new_visited"
-        "\<forall>v. has_vertex graph v \<and> \<not>(List.member rest v) \<longrightarrow> v |\<in>| new_visited"
-        "vertex_list_ordered graph new_visited rest"
-        using collect_all_sccs_recursive_properties[OF Cons.prems(1,2,3,4,5,6) False collect_result]
-        by blast+
-
-      show ?thesis
-        using Cons.IH[OF Cons.prems(1) recursive_props
-              \<open>scc \<in> set (collect_all_sccs graph new_visited rest)\<close>]
-        by simp
-    qed
-  qed
+    using Skip.prems unfolding Skip.hyps(3) by (rule Skip.IH)
+next
+  case (Head visited start rest scc' new_visited)
+  have "scc = scc' \<or> scc \<in> set (collect_all_sccs graph new_visited rest)"
+    using Head.prems unfolding Head.hyps(3) by simp
+  then show ?case
+    using Head.hyps(6) Head.IH by blast
 qed
 
 (* There is only one copy of each SCC in the output *)
-(* Note: this is also a consequence of the reverse topological order property (next theorem),
-   as two repeated SCCs would not be topologically orderable, but here we prove it directly
-   by induction on the vertices list. *)
 theorem collect_all_sccs_distinct_list:
-  assumes "valid_graph graph"
-    and "\<forall>w |\<in>| visited. has_vertex graph w"
-    and "\<forall>w. List.member vertices w \<longrightarrow> has_vertex graph w"
-    and "\<forall>v w. v |\<in>| visited \<and> reachable graph v w \<longrightarrow> w |\<in>| visited"
-    and "\<forall>v. has_vertex graph v \<and> \<not>(List.member vertices v) \<longrightarrow> v |\<in>| visited"
-    and "vertex_list_ordered graph visited vertices"
-  shows "distinct (map set (collect_all_sccs graph visited vertices))"
+  assumes "collect_all_sccs_pre graph visited verts"
+  shows "distinct (map set (collect_all_sccs graph visited verts))"
   using assms
-proof (induction vertices arbitrary: visited)
-  case Nil
-  then show ?case
-    by (metis collect_all_sccs.simps(1) distinct.simps(1) list.map_disc_iff)
+proof (induction rule: collect_all_sccs_induct)
+  case (Nil visited)
+  then show ?case by simp
 next
-  case (Cons start rest)
+  case (Skip visited start rest)
   show ?case
-  proof (cases "start |\<in>| visited")
-    case True
-    (* start is already visited, skip it *)
-    have "collect_all_sccs graph visited (start # rest) = collect_all_sccs graph visited rest"
-      using True by simp
-
-    have skip_props:
-      "\<forall>w. List.member rest w \<longrightarrow> has_vertex graph w"
-      "vertex_list_ordered graph visited rest"
-      "\<forall>v. has_vertex graph v \<and> \<not>(List.member rest v) \<longrightarrow> v |\<in>| visited"
-      using collect_all_sccs_skip_visited_properties[OF Cons.prems(1,2,3,4,5,6) True]
-      by blast+
-
-    show ?thesis
-      using Cons.IH[OF Cons.prems(1,2) skip_props(1) Cons.prems(4) skip_props(3,2)]
-      using `collect_all_sccs graph visited (start # rest) = collect_all_sccs graph visited rest`
-      by simp
-  next
-    case False
-    (* start is unvisited, so we collect its SCC *)
-    have start_in_graph: "has_vertex graph start"
-      using Cons.prems(3) by (simp add: member_rec(1))
-
-    have same_scc_unvisited: "\<forall>w. has_vertex graph w \<and> in_same_scc graph w start \<longrightarrow> w |\<notin>| visited"
-      using Cons.prems(4) False in_same_scc.simps by blast
-
-    have downstream_visited: "\<forall>w. has_vertex graph w \<and> reachable graph start w \<and>
-                                  \<not>(in_same_scc graph w start) \<longrightarrow> w |\<in>| visited"
-      using Cons.prems(2,4,5,6) assms(1) downstream_sccs_visited by blast
-
-    obtain scc_start new_visited where collect_result:
-      "collect_one_scc graph visited start = (scc_start, new_visited)"
-      by (metis surj_pair)
-
-    have "collect_all_sccs graph visited (start # rest) =
-          scc_start # collect_all_sccs graph new_visited rest"
-      using False collect_result by simp
-
-    (* Use helper lemma to establish all properties for recursive call *)
-    have recursive_props:
-      "\<forall>w |\<in>| new_visited. has_vertex graph w"
-      "\<forall>w. List.member rest w \<longrightarrow> has_vertex graph w"
-      "\<forall>v w. v |\<in>| new_visited \<and> reachable graph v w \<longrightarrow> w |\<in>| new_visited"
-      "\<forall>v. has_vertex graph v \<and> \<not>(List.member rest v) \<longrightarrow> v |\<in>| new_visited"
-      "vertex_list_ordered graph new_visited rest"
-      using collect_all_sccs_recursive_properties[OF Cons.prems(1,2,3,4,5,6) False collect_result]
-      by blast+
-
-    (* By IH, the recursive list is distinct *)
-    have IH: "distinct (map set (collect_all_sccs graph new_visited rest))"
-      using Cons.IH[OF Cons.prems(1) recursive_props]
-      by simp
-
-    (* Now show that set scc_start is not in the recursive list *)
-    have "set scc_start \<notin> set (map set (collect_all_sccs graph new_visited rest))"
-    proof (rule ccontr)
-      assume "\<not> set scc_start \<notin> set (map set (collect_all_sccs graph new_visited rest))"
-      then have hyp: "set scc_start \<in> set (map set (collect_all_sccs graph new_visited rest))" by simp
-
-      (* All vertices in scc_start were not in new_visited when the recursive list was collected *)
-      have "\<forall>v \<in> set scc_start. v |\<notin>| new_visited"
-        using collect_all_sccs_vertices_were_unvisited[OF Cons.prems(1) recursive_props]
-        using hyp by blast
-
-      (* But start is in scc_start *)
-      have "start \<in> set scc_start"
-        using collect_one_scc_complete[OF Cons.prems(1) start_in_graph start_in_graph
-              Cons.prems(2) _ same_scc_unvisited downstream_visited collect_result]
-        using in_same_scc_refl start_in_graph
-        by (metis in_set_member)
-
-      (* And start is in new_visited *)
-      have "new_visited = visited |\<union>| fset_of_list scc_start"
-        using collect_one_scc_visited_update[OF Cons.prems(1) start_in_graph Cons.prems(2)
-              same_scc_unvisited downstream_visited False collect_result]
-        by simp
-      then have "start |\<in>| new_visited"
-        using `start \<in> set scc_start` by (simp add: fset_of_list_elem)
-
-      (* This contradicts the fact that all vertices in scc_start were not in new_visited *)
-      then show False
-        using `\<forall>v \<in> set scc_start. v |\<notin>| new_visited` `start \<in> set scc_start` by blast
-    qed
-
-    then show ?thesis
-      using `collect_all_sccs graph visited (start # rest) =
-             scc_start # collect_all_sccs graph new_visited rest` IH
+    unfolding Skip.hyps(3) by (rule Skip.IH)
+next
+  case (Head visited start rest scc' new_visited)
+  (* scc' cannot appear again later: start is in scc' and in new_visited, but every
+     vertex of a later SCC is outside new_visited *)
+  have "set scc' \<notin> set (map set (collect_all_sccs graph new_visited rest))"
+  proof
+    assume "set scc' \<in> set (map set (collect_all_sccs graph new_visited rest))"
+    then obtain scc where scc: "scc \<in> set (collect_all_sccs graph new_visited rest)"
+      and "set scc = set scc'"
+      by auto
+    then have "start \<in> set scc"
+      using Head.hyps(5) by simp
+    then have "start |\<notin>| new_visited"
+      using collect_all_sccs_vertices_were_unvisited[OF Head.hyps(1) scc] by blast
+    moreover have "start |\<in>| new_visited"
+      using Head.hyps(5,7) by (simp add: fset_of_list_elem)
+    ultimately show False
       by simp
   qed
+  then show ?case
+    unfolding Head.hyps(3) using Head.IH by simp
 qed
 
 (* Definition of reverse topological ordering.
@@ -1163,171 +517,73 @@ definition sccs_reverse_topologically_ordered :: "('a::linorder) Graph \<Rightar
            (\<forall>u v. u \<in> set (sccs ! i) \<and> v \<in> set (sccs ! j) \<longrightarrow>
                   \<not>has_edge graph u v))"
 
+(* Adding an SCC at the front preserves reverse topological order,
+   provided there are no edges from it to any later SCC *)
+lemma sccs_reverse_topologically_ordered_Cons:
+  assumes "\<forall>s \<in> set sccs. \<forall>u \<in> set scc. \<forall>v \<in> set s. \<not> has_edge graph u v"
+    and "sccs_reverse_topologically_ordered graph sccs"
+  shows "sccs_reverse_topologically_ordered graph (scc # sccs)"
+  unfolding sccs_reverse_topologically_ordered_def
+proof (intro allI impI)
+  fix i j u v
+  assume ij: "i < j \<and> j < length (scc # sccs)"
+    and uv: "u \<in> set ((scc # sccs) ! i) \<and> v \<in> set ((scc # sccs) ! j)"
+  obtain j' where j: "j = Suc j'"
+    using ij by (cases j) auto
+  show "\<not> has_edge graph u v"
+  proof (cases i)
+    case 0
+    with uv j have "u \<in> set scc" "v \<in> set (sccs ! j')"
+      by auto
+    moreover have "sccs ! j' \<in> set sccs"
+      using ij j by simp
+    ultimately show ?thesis
+      using assms(1) by blast
+  next
+    case (Suc i')
+    with ij uv j have "i' < j'" "j' < length sccs" "u \<in> set (sccs ! i')" "v \<in> set (sccs ! j')"
+      by auto
+    then show ?thesis
+      using assms(2) unfolding sccs_reverse_topologically_ordered_def by blast
+  qed
+qed
+
 (* Theorem: collect_all_sccs produces SCCs in reverse topological order. *)
 theorem collect_all_sccs_reverse_topologically_ordered:
-  assumes "valid_graph graph"
-    and "\<forall>w |\<in>| visited. has_vertex graph w"
-    and "\<forall>w. List.member vertices w \<longrightarrow> has_vertex graph w"
-    and "\<forall>v w. v |\<in>| visited \<and> reachable graph v w \<longrightarrow> w |\<in>| visited"
-    and "\<forall>v. has_vertex graph v \<and> \<not>(List.member vertices v) \<longrightarrow> v |\<in>| visited"
-    and "vertex_list_ordered graph visited vertices"
-  shows "sccs_reverse_topologically_ordered graph (collect_all_sccs graph visited vertices)"
+  assumes "collect_all_sccs_pre graph visited verts"
+  shows "sccs_reverse_topologically_ordered graph (collect_all_sccs graph visited verts)"
   using assms
-proof (induction vertices arbitrary: visited)
-  case Nil
-  (* Base case: empty list is trivially ordered *)
+proof (induction rule: collect_all_sccs_induct)
+  case (Nil visited)
   then show ?case
-    unfolding sccs_reverse_topologically_ordered_def
-    by (metis bot.extremum_strict bot_nat_def collect_all_sccs.simps(1) list.size(3))
+    by (simp add: sccs_reverse_topologically_ordered_def)
 next
-  case (Cons start rest)
+  case (Skip visited start rest)
   show ?case
-  proof (cases "start |\<in>| visited")
-    case True
-    (* Case 1: start already visited, skip it *)
-    have "collect_all_sccs graph visited (start # rest) = collect_all_sccs graph visited rest"
-      using True by simp
-
-    (* By IH, the result is reverse topologically ordered *)
-    have skip_props:
-      "\<forall>w. List.member rest w \<longrightarrow> has_vertex graph w"
-      "vertex_list_ordered graph visited rest"
-      "\<forall>v. has_vertex graph v \<and> \<not>(List.member rest v) \<longrightarrow> v |\<in>| visited"
-      using collect_all_sccs_skip_visited_properties[OF Cons.prems(1,2,3,4,5,6) True]
-      by blast+
-
-    show ?thesis
-      using Cons.IH[OF Cons.prems(1,2) skip_props(1) Cons.prems(4) skip_props(3,2)]
-      using `collect_all_sccs graph visited (start # rest) = collect_all_sccs graph visited rest`
-      by simp
-
-  next
-    case False
-    (* Case 2: start unvisited, collect its SCC *)
-    obtain scc_start new_visited where collect_result:
-      "collect_one_scc graph visited start = (scc_start, new_visited)"
-      by (metis surj_pair)
-
-    have step_def: "collect_all_sccs graph visited (start # rest) =
-          scc_start # collect_all_sccs graph new_visited rest"
-      using False collect_result by simp
-
-    (* Get properties for recursive call *)
-    have recursive_props:
-      "\<forall>w |\<in>| new_visited. has_vertex graph w"
-      "\<forall>w. List.member rest w \<longrightarrow> has_vertex graph w"
-      "\<forall>v w. v |\<in>| new_visited \<and> reachable graph v w \<longrightarrow> w |\<in>| new_visited"
-      "\<forall>v. has_vertex graph v \<and> \<not>(List.member rest v) \<longrightarrow> v |\<in>| new_visited"
-      "vertex_list_ordered graph new_visited rest"
-      using collect_all_sccs_recursive_properties[OF Cons.prems(1,2,3,4,5,6) False collect_result]
-      by blast+
-
-    (* By IH, the recursive result is reverse topologically ordered *)
-    have IH: "sccs_reverse_topologically_ordered graph (collect_all_sccs graph new_visited rest)"
-      using Cons.IH[OF Cons.prems(1) recursive_props]
-      by simp
-
-    (* Need to show: scc_start # collect_all_sccs graph new_visited rest is reverse 
-       topologically ordered *)
-    (* This requires showing:
-       1. The recursive list is ordered (by IH)
-       2. No edges from scc_start to any SCC in the recursive list *)
-
-    show ?thesis
-      unfolding sccs_reverse_topologically_ordered_def
-    proof (intro allI impI)
-      fix i j u v
-      assume indices: "i < j 
-          \<and> j < length (collect_all_sccs graph visited (start # rest))"
-      assume uv: "u \<in> set (collect_all_sccs graph visited (start # rest) ! i)
-          \<and> v \<in> set (collect_all_sccs graph visited (start # rest) ! j)"
-
-      show "\<not>has_edge graph u v"
-      proof (cases i)
-        case 0
-        (* i = 0, so scc_i is scc_start *)
-        then have "u \<in> set scc_start" using uv step_def by auto
-        (* j > 0, so scc_j is from the recursive call *)
-        then have "j > 0" using indices by auto
-        then have "v \<in> set ((collect_all_sccs graph new_visited rest) ! (j - 1))"
-          using step_def uv by auto
-
-        (* Key: v was not in new_visited when the recursive call was made *)
-        have "v |\<notin>| new_visited"
-        proof -
-          have "v \<in> set ((collect_all_sccs graph new_visited rest) ! (j - 1))"
-            using `v \<in> set ((collect_all_sccs graph new_visited rest) ! (j - 1))` .
-          moreover have "(collect_all_sccs graph new_visited rest) ! (j - 1)
-                         \<in> set (collect_all_sccs graph new_visited rest)"
-            using `j > 0` indices step_def
-            by force
-          ultimately have "\<exists>scc. scc \<in> set (collect_all_sccs graph new_visited rest) \<and> v \<in> set scc"
-            by blast
-          then show ?thesis
-            using collect_all_sccs_vertices_were_unvisited[OF Cons.prems(1) recursive_props]
-            by auto
-        qed
-
-        (* But u is in scc_start, so u \<in> new_visited *)
-        have "u |\<in>| new_visited"
-        proof -
-          have "u \<in> set scc_start" using `u \<in> set scc_start` .
-
-          (* Establish the preconditions for collect_one_scc_visited_update *)
-          have start_in_graph: "has_vertex graph start"
-            using Cons.prems(3) by (simp add: member_rec(1))
-          have same_scc_unvisited: "\<forall>w. has_vertex graph w \<and> in_same_scc graph w start \<longrightarrow> w |\<notin>| visited"
-            using False Cons.prems(4) in_same_scc.simps by blast
-          have downstream_visited: "\<forall>w. has_vertex graph w \<and> reachable graph start w \<and> \<not>in_same_scc graph w start \<longrightarrow> w |\<in>| visited"
-            using Cons.prems(2,4,5,6) assms(1) downstream_sccs_visited by blast
-
-          have "new_visited = visited |\<union>| fset_of_list scc_start"
-            using collect_one_scc_visited_update[OF Cons.prems(1) start_in_graph Cons.prems(2)
-                  same_scc_unvisited downstream_visited False collect_result]
-            by simp
-          then show ?thesis
-            using `u \<in> set scc_start` by (simp add: fset_of_list_elem)
-        qed
-
-        (* If there were an edge u \<rightarrow> v, then v would be reachable from u *)
-        (* And since u \<in> new_visited and new_visited is closed under reachability,
-           v would be in new_visited, contradicting v \<notin> new_visited *)
-        show ?thesis
-        proof (rule ccontr)
-          assume "\<not>\<not>has_edge graph u v"
-          then have "has_edge graph u v" by simp
-          then have "reachable graph u v"
-            by (meson `u |\<in>| new_visited` recursive_props(1)
-                reachable.reachable_refl reachable.reachable_step)
-          then have "v |\<in>| new_visited"
-            using `u |\<in>| new_visited` recursive_props(3) by blast
-          then show False
-            using `v |\<notin>| new_visited` by simp
-        qed
-
-      next
-        case (Suc i')
-        (* Both i and j are > 0, so both SCCs are from the recursive call *)
-        then have "j > 0" using indices by simp
-        then have "u \<in> set ((collect_all_sccs graph new_visited rest) ! i')"
-              and "v \<in> set ((collect_all_sccs graph new_visited rest) ! (j - 1))"
-          using Suc step_def uv by auto+
-
-        (* This follows from IH on the recursive list *)
-        have "i' < j - 1" using Suc indices
-          by linarith
-        have "j - 1 < length (collect_all_sccs graph new_visited rest)"
-          using indices step_def by fastforce
-
-        show ?thesis
-          using IH unfolding sccs_reverse_topologically_ordered_def
-          using `i' < j - 1` `j - 1 < length (collect_all_sccs graph new_visited rest)`
-          using `u \<in> set ((collect_all_sccs graph new_visited rest) ! i')`
-          using `v \<in> set ((collect_all_sccs graph new_visited rest) ! (j - 1))`
-          by blast
-      qed
-    qed
+    unfolding Skip.hyps(3) by (rule Skip.IH)
+next
+  case (Head visited start rest scc' new_visited)
+  (* No edges from scc' to later SCCs: scc' is inside new_visited, which is closed
+     under reachability, while later SCCs lie outside new_visited *)
+  have "\<forall>s \<in> set (collect_all_sccs graph new_visited rest). \<forall>u \<in> set scc'. \<forall>v \<in> set s.
+          \<not> has_edge graph u v"
+  proof (intro ballI)
+    fix s u v
+    assume s: "s \<in> set (collect_all_sccs graph new_visited rest)"
+      and u: "u \<in> set scc'" and v: "v \<in> set s"
+    have "v |\<notin>| new_visited"
+      using collect_all_sccs_vertices_were_unvisited[OF Head.hyps(1) s v] .
+    moreover have "u |\<in>| new_visited"
+      using Head.hyps(7) u by (simp add: fset_of_list_elem)
+    moreover have "\<forall>v w. v |\<in>| new_visited \<and> reachable graph v w \<longrightarrow> w |\<in>| new_visited"
+      and "\<forall>w |\<in>| new_visited. has_vertex graph w"
+      using Head.hyps(1) unfolding collect_all_sccs_pre_def by blast+
+    ultimately show "\<not> has_edge graph u v"
+      using reachable.reachable_refl reachable.reachable_step by metis
   qed
+  then show ?case
+    unfolding Head.hyps(3)
+    by (rule sccs_reverse_topologically_ordered_Cons[OF _ Head.IH])
 qed
 
 end

@@ -550,6 +550,18 @@ lemma dec_pattern_compatible_extend_env_one_var:
   using dec_pattern_compatible_TE_DataCtors_cong[of "extend_env_one_var constOf ghost b env" env p t]
   by (cases b) (simp add: extend_env_one_var_def)
 
+(* Unpacking a compatible constructor pattern with a payload: the constructor
+   is in env, the scrutinee type is its datatype applied to type arguments, and
+   the payload pattern is compatible with the specialised payload type. *)
+lemma dec_pattern_compatible_variant_SomeE:
+  assumes "dec_pattern_compatible env (DP_Variant ctorName (Some inner)) ty"
+  obtains dtName tyvars payloadTy tyArgs where
+    "fmlookup (TE_DataCtors env) ctorName = Some (dtName, tyvars, payloadTy)"
+    "ty = CoreTy_Datatype dtName tyArgs"
+    "length tyArgs = length tyvars"
+    "dec_pattern_compatible env inner (apply_subst (fmap_of_list (zip tyvars tyArgs)) payloadTy)"
+  using assms by (auto split: option.splits prod.splits CoreType.splits)
+
 (* If a DecPattern is compatible with a well-kinded scrutinee type, every
    variable binding it introduces is well-kinded. Proof goes by mutual
    induction on dp/list following dec_pattern_compatible's structure;
@@ -581,47 +593,26 @@ next
 next
   case (5 env ctorName payload_opt t)
   show ?case
-  proof (cases "fmlookup (TE_DataCtors env) ctorName")
+  proof (cases payload_opt)
     case None
-    thus ?thesis using "5.prems"(1) by simp
+    thus ?thesis by simp
   next
-    case (Some triple)
-    obtain dtName tyvars payloadTy where triple_eq:
-      "triple = (dtName, tyvars, payloadTy)" by (cases triple) auto
+    case (Some inner_pat)
+    from "5.prems"(1)[unfolded Some] obtain dtName tyvars payloadTy tyArgs where
+      lk: "fmlookup (TE_DataCtors env) ctorName = Some (dtName, tyvars, payloadTy)" and
+      t_eq: "t = CoreTy_Datatype dtName tyArgs" and
+      len_args: "length tyArgs = length tyvars" and
+      inner_compat: "dec_pattern_compatible env inner_pat
+                       (apply_subst (fmap_of_list (zip tyvars tyArgs)) payloadTy)"
+      by (rule dec_pattern_compatible_variant_SomeE)
+    \<comment> \<open>The substituted payload type is well-kinded under env. \<close>
+    have tyArgs_wk: "list_all (is_well_kinded env) tyArgs"
+      using "5.prems"(2) t_eq by (auto split: option.splits)
+    have substituted_payload_wk:
+      "is_well_kinded env (apply_subst (fmap_of_list (zip tyvars tyArgs)) payloadTy)"
+      using ctor_payload_specialized_well_kinded[OF "5.prems"(3) lk len_args tyArgs_wk] .
     show ?thesis
-    proof (cases t)
-      case (CoreTy_Datatype tyName tyArgs)
-      from "5.prems"(1) Some triple_eq CoreTy_Datatype have
-        ty_match: "tyName = dtName"
-        and len_args: "length tyArgs = length tyvars"
-        by auto
-      show ?thesis
-      proof (cases payload_opt)
-        case None
-        thus ?thesis by simp
-      next
-        case (Some inner_pat)
-        from "5.prems"(1) \<open>fmlookup (TE_DataCtors env) ctorName = Some triple\<close>
-             triple_eq CoreTy_Datatype Some
-        have inner_compat:
-          "dec_pattern_compatible env inner_pat
-                (apply_subst (fmap_of_list (zip tyvars tyArgs)) payloadTy)"
-          by auto
-        \<comment> \<open>The substituted payload type is well-kinded under env. \<close>
-        have lk: "fmlookup (TE_DataCtors env) ctorName = Some (dtName, tyvars, payloadTy)"
-          using \<open>fmlookup (TE_DataCtors env) ctorName = Some triple\<close> triple_eq by simp
-        have tyArgs_wk: "list_all (is_well_kinded env) tyArgs"
-          using "5.prems"(2) CoreTy_Datatype
-          using case_optionE is_well_kinded.simps(1) by blast
-        have substituted_payload_wk:
-          "is_well_kinded env (apply_subst (fmap_of_list (zip tyvars tyArgs)) payloadTy)"
-          using ctor_payload_specialized_well_kinded[OF "5.prems"(3) lk len_args tyArgs_wk] .
-        show ?thesis
-          by (simp add: "5.IH" "5.prems"(3) CoreTy_Datatype Some
-              \<open>fmlookup (TE_DataCtors env) ctorName = Some triple\<close> inner_compat substituted_payload_wk
-              triple_eq)
-      qed
-    qed (use "5.prems"(1) Some triple_eq in \<open>auto split: option.splits prod.splits\<close>)
+      by (simp add: "5.IH" "5.prems"(3) t_eq Some lk inner_compat substituted_payload_wk)
   qed
 next
   case (6 env flds t)
@@ -683,54 +674,35 @@ next
 next
   case (5 env ctorName payload_opt t)
   show ?case
-  proof (cases "fmlookup (TE_DataCtors env) ctorName")
+  proof (cases payload_opt)
     case None
-    thus ?thesis using "5.prems"(1) by simp
+    thus ?thesis by simp
   next
-    case (Some triple)
-    obtain dtName tyvars payloadTy where triple_eq:
-      "triple = (dtName, tyvars, payloadTy)" by (cases triple) auto
+    case (Some inner_pat)
+    from "5.prems"(1)[unfolded Some] obtain dtName tyvars payloadTy tyArgs where
+      lk: "fmlookup (TE_DataCtors env) ctorName = Some (dtName, tyvars, payloadTy)" and
+      t_eq: "t = CoreTy_Datatype dtName tyArgs" and
+      len_args: "length tyArgs = length tyvars" and
+      inner_compat: "dec_pattern_compatible env inner_pat
+                       (apply_subst (fmap_of_list (zip tyvars tyArgs)) payloadTy)"
+      by (rule dec_pattern_compatible_variant_SomeE)
+    have tyArgs_wk: "list_all (is_well_kinded env) tyArgs"
+      using "5.prems"(3) t_eq by (auto split: option.splits)
+    have substituted_payload_wk:
+      "is_well_kinded env (apply_subst (fmap_of_list (zip tyvars tyArgs)) payloadTy)"
+      using ctor_payload_specialized_well_kinded[OF "5.prems"(4) lk len_args tyArgs_wk] .
+    \<comment> \<open>Runtime side: from is_runtime_type env (CoreTy_Datatype dtName tyArgs),
+        dtName is non-ghost and tyArgs all runtime. \<close>
+    have ng: "dtName \<notin> ghost_datatypes env"
+      using "5.prems"(2) t_eq by auto
+    have tyArgs_rt: "list_all (is_runtime_type env) tyArgs"
+      using "5.prems"(2) t_eq by auto
+    have substituted_payload_rt:
+      "is_runtime_type env (apply_subst (fmap_of_list (zip tyvars tyArgs)) payloadTy)"
+      using ctor_payload_specialized_runtime[OF "5.prems"(4) lk len_args tyArgs_rt ng] .
     show ?thesis
-    proof (cases t)
-      case (CoreTy_Datatype tyName tyArgs)
-      from "5.prems"(1) Some triple_eq CoreTy_Datatype have
-        ty_match: "tyName = dtName"
-        and len_args: "length tyArgs = length tyvars"
-        by auto
-      show ?thesis
-      proof (cases payload_opt)
-        case None
-        thus ?thesis by simp
-      next
-        case (Some inner_pat)
-        from "5.prems"(1) \<open>fmlookup (TE_DataCtors env) ctorName = Some triple\<close>
-             triple_eq CoreTy_Datatype Some
-        have inner_compat:
-          "dec_pattern_compatible env inner_pat
-                (apply_subst (fmap_of_list (zip tyvars tyArgs)) payloadTy)"
-          by auto
-        have lk: "fmlookup (TE_DataCtors env) ctorName = Some (dtName, tyvars, payloadTy)"
-          using \<open>fmlookup (TE_DataCtors env) ctorName = Some triple\<close> triple_eq by simp
-        have tyArgs_wk: "list_all (is_well_kinded env) tyArgs"
-          using "5.prems"(3) CoreTy_Datatype by (auto split: option.splits)
-        have substituted_payload_wk:
-          "is_well_kinded env (apply_subst (fmap_of_list (zip tyvars tyArgs)) payloadTy)"
-          using ctor_payload_specialized_well_kinded[OF "5.prems"(4) lk len_args tyArgs_wk] .
-        \<comment> \<open>Runtime side: from is_runtime_type env (CoreTy_Datatype dtName tyArgs),
-            dtName is non-ghost and tyArgs all runtime. \<close>
-        have ng: "dtName \<notin> ghost_datatypes env"
-          using "5.prems"(2) CoreTy_Datatype ty_match by auto
-        have tyArgs_rt: "list_all (is_runtime_type env) tyArgs"
-          using "5.prems"(2) CoreTy_Datatype by auto
-        have substituted_payload_rt:
-          "is_runtime_type env (apply_subst (fmap_of_list (zip tyvars tyArgs)) payloadTy)"
-          using ctor_payload_specialized_runtime[OF "5.prems"(4) lk len_args tyArgs_rt ng] .
-        show ?thesis
-          by (simp add: "5.IH" "5.prems"(4) CoreTy_Datatype Some
-              \<open>fmlookup (TE_DataCtors env) ctorName = Some triple\<close> inner_compat substituted_payload_rt
-              substituted_payload_wk triple_eq)
-      qed
-    qed (use "5.prems"(1) Some triple_eq in \<open>auto split: option.splits prod.splits\<close>)
+      by (simp add: "5.IH" "5.prems"(4) t_eq Some lk inner_compat substituted_payload_rt
+                    substituted_payload_wk)
   qed
 next
   case (6 env flds t)
