@@ -896,24 +896,11 @@ next
       \<comment> \<open>env' is well-formed\<close>
       have wk: "is_well_kinded env resolvedRhsTy"
         using core_term_type_well_kinded[OF resolvedRhs_typed Cons.prems(4)] .
-      define env_no_cn where "env_no_cn = env \<lparr> TE_LocalVars := fmupd vn resolvedRhsTy (TE_LocalVars env),
-                                                  TE_GhostLocals := gv' \<rparr>"
-      have wf_no_cn: "tyenv_well_formed env_no_cn"
-      proof (cases ghost)
-        case Ghost
-        show ?thesis using tyenv_well_formed_add_ghost_var[OF Cons.prems(4) wk] Ghost
-          by (simp add: env_no_cn_def gv'_def)
-      next
-        case NotGhost
-        have rt: "is_runtime_type env resolvedRhsTy"
-          using core_term_type_notghost_runtime[OF _ Cons.prems(4)] resolvedRhs_typed NotGhost by simp
-        thus ?thesis using tyenv_well_formed_add_var[OF Cons.prems(4) wk rt] NotGhost
-          by (simp add: env_no_cn_def gv'_def)
-      qed
-      have env'_eq_cn: "env' = env_no_cn \<lparr> TE_ConstLocals := finsert vn (TE_ConstLocals env) \<rparr>"
-        by (simp add: env'_def env_no_cn_def)
+      have rt: "ghost = NotGhost \<longrightarrow> is_runtime_type env resolvedRhsTy"
+        using core_term_type_well_kinded_and_runtime[OF resolvedRhs_typed Cons.prems(4)] by blast
       have env'_wf: "tyenv_well_formed env'"
-        using wf_no_cn tyenv_well_formed_TE_ConstLocals_irrelevant env'_eq_cn by simp
+        unfolding env'_def gv'_def
+        by (rule tyenv_well_formed_declare_var[OF Cons.prems(4) wk rt])
 
       \<comment> \<open>The variable typechecks in env'\<close>
       have var_typed: "core_term_type env' ghost (CoreTm_Var vn) = Some resolvedRhsTy"
@@ -926,7 +913,7 @@ next
       have lhs_typed': "core_term_type env' ghost lhsTm = Some lhsTy"
         using core_term_type_irrelevant_var[OF lhs_fresh Cons.prems(2) gv'_agree]
               core_term_type_TE_ConstLocals_irrelevant
-        by (simp add: env'_def env_no_cn_def)
+        by (simp add: env'_def)
 
       \<comment> \<open>env' has the same TE_TypeVars / TE_ReturnType as env (only locals,
           ghost-locals, and const-names changed). The rigidity conditions lift:
@@ -981,7 +968,7 @@ next
         show "core_term_type env' ghost xtm = Some xty"
           using core_term_type_irrelevant_var[OF xtm_fresh xtm_typed gv'_agree]
                 core_term_type_TE_ConstLocals_irrelevant
-          by (simp add: env'_def env_no_cn_def)
+          by (simp add: env'_def)
       qed
 
       \<comment> \<open>restTm typechecks in env' by the inductive hypothesis\<close>

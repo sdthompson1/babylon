@@ -960,39 +960,12 @@ proof -
   have wf': "tyenv_well_formed ?env'"
     using assms(2) tyenv_well_formed_extend_env_with_tyvars by blast
   have tyargs_wk: "list_all (is_well_kinded ?env') newTyArgs" using rta by simp
-  have "tyenv_fun_types_well_kinded ?env'"
-    using wf' tyenv_well_formed_def by blast
-  hence fi_args_wk_inner: "\<forall>ty \<in> fst ` set (FI_TmArgs funInfo).
-            is_well_kinded (?env' \<lparr> TE_TypeVars := TE_AbstractTypes ?env' |\<union>| fset_of_list (FI_TyArgs funInfo) \<rparr>) ty"
-    using fn_lookup' tyenv_fun_types_well_kinded_def by blast
-  have abs_sub': "TE_AbstractTypes ?env' |\<subseteq>| TE_TypeVars ?env'"
-    using wf' tyenv_well_formed_def tyenv_abstract_types_subset_def by blast
   have len_tyargs: "length newTyArgs = length (FI_TyArgs funInfo)" using rta by simp
   have expArgTypes_wk: "list_all (is_well_kinded ?env') expArgTypes"
-  proof -
-    have "list_all (\<lambda>(ty, _). is_well_kinded ?env' (apply_subst
-            (fmap_of_list (zip (FI_TyArgs funInfo) newTyArgs)) ty)) (FI_TmArgs funInfo)"
-    proof (unfold list_all_iff, intro ballI, clarify)
-      fix t v assume "(t, v) \<in> set (FI_TmArgs funInfo)"
-      hence "t \<in> fst ` set (FI_TmArgs funInfo)" by (force simp: rev_image_eqI)
-      with fi_args_wk_inner
-      have "is_well_kinded (?env' \<lparr> TE_TypeVars := TE_AbstractTypes ?env' |\<union>| fset_of_list (FI_TyArgs funInfo) \<rparr>) t"
-        by blast
-      thus "is_well_kinded ?env' (apply_subst (fmap_of_list (zip (FI_TyArgs funInfo) newTyArgs)) t)"
-        using apply_subst_specializes_well_kinded[OF _ tyargs_wk len_tyargs[symmetric] abs_sub'] by simp
-    qed
-    thus ?thesis using expArg_eq by (auto simp: list_all_iff)
-  qed
+    using fun_param_types_specialized_well_kinded[OF wf' fn_lookup' len_tyargs tyargs_wk] expArg_eq
+    by (auto simp: list_all_iff)
 
   \<comment> \<open>expArgTypes runtime\<close>
-  have "tyenv_fun_ghost_constraint ?env'"
-    using wf' tyenv_well_formed_def by blast
-  hence fi_args_rt_inner: "FI_Ghost funInfo = NotGhost \<Longrightarrow>
-          \<forall>ty vor. (ty, vor, NotGhost) \<in> set (FI_TmArgs funInfo) \<longrightarrow>
-            is_runtime_type (?env' \<lparr> TE_TypeVars := TE_AbstractTypes ?env' |\<union>| fset_of_list (FI_TyArgs funInfo),
-                  TE_RuntimeTypeVars := (TE_AbstractTypes ?env' |\<inter>| TE_RuntimeTypeVars ?env')
-                                         |\<union>| fset_of_list (FI_TyArgs funInfo) \<rparr>) ty"
-    using fn_lookup' tyenv_fun_ghost_constraint_def by (simp add: Let_def)
   have len_exp: "length expArgTypes = length (FI_TmArgs funInfo)"
     using expArg_eq by simp
   have expArgTypes_rt:
@@ -1014,14 +987,9 @@ proof -
     \<comment> \<open>The parameter is not ghost, so its declared type is a runtime type.\<close>
     have mem: "(t, vor, NotGhost) \<in> set (FI_TmArgs funInfo)"
       using nth_mem[OF i_lt'] p_eq gh_eq by simp
-    from fi_args_rt_inner[OF fg_ng] mem
-    have "is_runtime_type (?env' \<lparr> TE_TypeVars := TE_AbstractTypes ?env' |\<union>| fset_of_list (FI_TyArgs funInfo),
-                TE_RuntimeTypeVars := (TE_AbstractTypes ?env' |\<inter>| TE_RuntimeTypeVars ?env')
-                                       |\<union>| fset_of_list (FI_TyArgs funInfo) \<rparr>) t" by blast
-    moreover have "fset_of_list (FI_TyArgs funInfo) |\<inter>| TE_AbstractTypes ?env' = {||}"
-      using wf' fn_lookup' unfolding tyenv_well_formed_def tyenv_fun_tyvars_fresh_def by blast
-    ultimately have "is_runtime_type ?env' (apply_subst (fmap_of_list (zip (FI_TyArgs funInfo) newTyArgs)) t)"
-      using apply_subst_specializes_runtime[OF _ tyargs_rt len_tyargs[symmetric]] by simp
+    have "is_runtime_type ?env' (apply_subst (fmap_of_list (zip (FI_TyArgs funInfo) newTyArgs)) t)"
+      using fun_param_type_specialized_runtime[OF wf' fn_lookup' len_tyargs tyargs_rt _ mem] fg_ng
+      by simp
     moreover have "expArgTypes ! i = apply_subst (fmap_of_list (zip (FI_TyArgs funInfo) newTyArgs)) t"
       using expArg_eq i_lt' p_eq by simp
     ultimately show "is_runtime_type ?env' (expArgTypes ! i)" by simp
@@ -1097,17 +1065,9 @@ proof -
     using assms(2) tyenv_well_formed_extend_env_with_tyvars by blast
   have tyargs_wk: "list_all (is_well_kinded ?env') newTyArgs" using rta by simp
   have len_tyargs: "length newTyArgs = length tyvars" using rta by simp
-  have abs_sub': "TE_AbstractTypes ?env' |\<subseteq>| TE_TypeVars ?env'"
-    using wf' tyenv_well_formed_def tyenv_abstract_types_subset_def by blast
-  have "tyenv_payloads_well_kinded ?env'"
-    using wf' tyenv_well_formed_def by blast
-  hence payload_wk: "is_well_kinded (?env' \<lparr> TE_TypeVars := TE_AbstractTypes ?env' |\<union>| fset_of_list tyvars \<rparr>) payloadTy"
-    using ctor_lookup' tyenv_payloads_well_kinded_def by blast
-  let ?subst = "fmap_of_list (zip tyvars newTyArgs)"
-  have payload_subst_wk: "is_well_kinded ?env' (apply_subst ?subst payloadTy)"
-    using apply_subst_specializes_well_kinded[OF payload_wk tyargs_wk len_tyargs[symmetric] abs_sub'] .
   have expArgTypes_wk: "list_all (is_well_kinded ?env') expArgTypes"
-    using expArg_eq payload_subst_wk by simp
+    using expArg_eq ctor_payload_specialized_well_kinded[OF wf' ctor_lookup' len_tyargs tyargs_wk]
+    by simp
 
   \<comment> \<open>expArgTypes runtime\<close>
   have expArgTypes_rt: "ghost = NotGhost \<longrightarrow> list_all (is_runtime_type ?env') expArgTypes"
@@ -1115,14 +1075,9 @@ proof -
     assume ng: "ghost = NotGhost"
     have tyargs_rt: "list_all (is_runtime_type ?env') newTyArgs" using rta ng by simp
     have dt_not_ghost: "dtName \<notin> ghost_datatypes ?env'" using ghost_ok' ng by simp
-    have fresh: "fset_of_list tyvars |\<inter>| TE_AbstractTypes ?env' = {||}"
-      using wf' ctor_lookup' unfolding tyenv_well_formed_def tyenv_ctor_tyvars_fresh_def by blast
-    have payload_subst_rt: "is_runtime_type ?env' (apply_subst ?subst payloadTy)"
-      using apply_subst_specializes_runtime
-              [OF tyenv_nonghost_payloads_runtime[OF wf' ctor_lookup' dt_not_ghost]
-                  tyargs_rt len_tyargs[symmetric] fresh] .
     show "list_all (is_runtime_type ?env') expArgTypes"
-      using expArg_eq payload_subst_rt by simp
+      using expArg_eq ctor_payload_specialized_runtime[OF wf' ctor_lookup' len_tyargs tyargs_rt dt_not_ghost]
+      by simp
   qed
 
   show ?thesis

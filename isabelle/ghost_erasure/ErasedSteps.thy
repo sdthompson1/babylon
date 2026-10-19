@@ -1,5 +1,5 @@
 theory ErasedSteps
-  imports GhostInvisible
+  imports GhostInvisible "../util/ListExtras"
 begin
 
 (* Steps that the full state and the erased state take together.
@@ -2167,11 +2167,6 @@ lemma notghost_typed_VariantCtor:
   using assms
   by (cases "core_term_type env NotGhost payload")
      (auto simp: notghost_typed_def Let_def split: option.splits prod.splits if_splits)
-
-(* If every element of a list of options is defined... *)
-lemma those_map_Some_all:
-  "those (map f xs) = Some ys \<Longrightarrow> \<forall>x \<in> set xs. f x \<noteq> None"
-  by (induction xs arbitrary: ys) (auto split: option.splits)
 
 lemma notghost_typed_Record:
   assumes "notghost_typed env (CoreTm_Record flds)"

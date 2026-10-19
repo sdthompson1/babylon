@@ -574,17 +574,9 @@ next
       ng: "dtName \<notin> ghost_datatypes env" and
       rts: "list_all (is_runtime_type env) argTypes"
     by simp_all
-  have payload_rt:
-    "is_runtime_type
-       (env \<lparr> TE_TypeVars := TE_AbstractTypes env |\<union>| fset_of_list tyvars,
-              TE_RuntimeTypeVars := (TE_AbstractTypes env |\<inter>| TE_RuntimeTypeVars env)
-                                     |\<union>| fset_of_list tyvars \<rparr>) payloadTy"
-    by (rule tyenv_nonghost_payloads_runtime[OF wf lk ng])
-  have fresh: "fset_of_list tyvars |\<inter>| TE_AbstractTypes env = {||}"
-    using wf lk unfolding tyenv_well_formed_def tyenv_ctor_tyvars_fresh_def by blast
   have rt': "is_runtime_type env
                (apply_subst (fmap_of_list (zip tyvars argTypes)) payloadTy)"
-    by (rule apply_subst_specializes_runtime[OF payload_rt rts len fresh])
+    by (rule ctor_payload_specialized_runtime[OF wf lk len[symmetric] rts ng])
   have pvE: "value_has_type envE payload
                (apply_subst (fmap_of_list (zip tyvars argTypes)) payloadTy)"
     by (rule CV_Variant.IH[OF pv rt'])

@@ -361,38 +361,11 @@ lemma tyenv_well_formed_extend_env_one_var:
   shows "tyenv_well_formed (extend_env_one_var constOf ghost b env)"
 proof -
   obtain vr name ty where b_eq: "b = (vr, name, ty)" by (cases b) auto
+  have wk: "is_well_kinded env ty" using ty_wk b_eq by simp
+  have rt: "ghost = NotGhost \<longrightarrow> is_runtime_type env ty" using ty_rt b_eq by simp
   show ?thesis
-  proof (cases ghost)
-    case Ghost
-    \<comment> \<open>Ghost mode: extend_env_one_var sets TE_GhostLocals := finsert name (...).
-        Use tyenv_well_formed_add_ghost_var (modulo TE_ConstLocals irrelevance). \<close>
-    let ?env_no_const = "env \<lparr> TE_LocalVars := fmupd name ty (TE_LocalVars env),
-                                TE_GhostLocals := finsert name (TE_GhostLocals env) \<rparr>"
-    have step1: "tyenv_well_formed ?env_no_const"
-      using tyenv_well_formed_add_ghost_var[OF wf] ty_wk b_eq by simp
-    have full_eq:
-      "extend_env_one_var constOf ghost b env
-       = ?env_no_const \<lparr> TE_ConstLocals := (if constOf vr
-                                            then finsert name (TE_ConstLocals env)
-                                            else fminus (TE_ConstLocals env) {|name|}) \<rparr>"
-      using b_eq Ghost by (simp add: extend_env_one_var_def)
-    show ?thesis
-      using step1 tyenv_well_formed_TE_ConstLocals_irrelevant full_eq by simp
-  next
-    case NotGhost
-    let ?env_no_const = "env \<lparr> TE_LocalVars := fmupd name ty (TE_LocalVars env),
-                                TE_GhostLocals := fminus (TE_GhostLocals env) {|name|} \<rparr>"
-    have step1: "tyenv_well_formed ?env_no_const"
-      using tyenv_well_formed_add_var[OF wf] ty_wk ty_rt[OF NotGhost] b_eq by simp
-    have full_eq:
-      "extend_env_one_var constOf ghost b env
-       = ?env_no_const \<lparr> TE_ConstLocals := (if constOf vr
-                                            then finsert name (TE_ConstLocals env)
-                                            else fminus (TE_ConstLocals env) {|name|}) \<rparr>"
-      using b_eq NotGhost by (simp add: extend_env_one_var_def)
-    show ?thesis
-      using step1 tyenv_well_formed_TE_ConstLocals_irrelevant full_eq by simp
-  qed
+    unfolding b_eq extend_env_one_var_def
+    using tyenv_well_formed_declare_var[OF wf wk rt] by simp
 qed
 
 lemma tyenv_well_formed_foldr_extend_env_one_var:
@@ -635,18 +608,14 @@ next
                 (apply_subst (fmap_of_list (zip tyvars tyArgs)) payloadTy)"
           by auto
         \<comment> \<open>The substituted payload type is well-kinded under env. \<close>
-        have payload_wk_at_tyvars:
-          "is_well_kinded (env\<lparr>TE_TypeVars := TE_AbstractTypes env |\<union>| fset_of_list tyvars\<rparr>) payloadTy"
-          using "5.prems"(3) \<open>fmlookup (TE_DataCtors env) ctorName = Some triple\<close> triple_eq
-          unfolding tyenv_well_formed_def tyenv_payloads_well_kinded_def by force
-        have abs_sub: "TE_AbstractTypes env |\<subseteq>| TE_TypeVars env"
-          using "5.prems"(3) unfolding tyenv_well_formed_def tyenv_abstract_types_subset_def by blast
+        have lk: "fmlookup (TE_DataCtors env) ctorName = Some (dtName, tyvars, payloadTy)"
+          using \<open>fmlookup (TE_DataCtors env) ctorName = Some triple\<close> triple_eq by simp
         have tyArgs_wk: "list_all (is_well_kinded env) tyArgs"
           using "5.prems"(2) CoreTy_Datatype
           using case_optionE is_well_kinded.simps(1) by blast
         have substituted_payload_wk:
           "is_well_kinded env (apply_subst (fmap_of_list (zip tyvars tyArgs)) payloadTy)"
-          using apply_subst_specializes_well_kinded[OF payload_wk_at_tyvars tyArgs_wk len_args[symmetric] abs_sub] .
+          using ctor_payload_specialized_well_kinded[OF "5.prems"(3) lk len_args tyArgs_wk] .
         show ?thesis
           by (simp add: "5.IH" "5.prems"(3) CoreTy_Datatype Some
               \<open>fmlookup (TE_DataCtors env) ctorName = Some triple\<close> inner_compat substituted_payload_wk
@@ -740,36 +709,22 @@ next
           "dec_pattern_compatible env inner_pat
                 (apply_subst (fmap_of_list (zip tyvars tyArgs)) payloadTy)"
           by auto
-        have payload_wk_at_tyvars:
-          "is_well_kinded (env\<lparr>TE_TypeVars := TE_AbstractTypes env |\<union>| fset_of_list tyvars\<rparr>) payloadTy"
-          using "5.prems"(4) \<open>fmlookup (TE_DataCtors env) ctorName = Some triple\<close> triple_eq
-          unfolding tyenv_well_formed_def tyenv_payloads_well_kinded_def by force
-        have abs_sub: "TE_AbstractTypes env |\<subseteq>| TE_TypeVars env"
-          using "5.prems"(4) unfolding tyenv_well_formed_def tyenv_abstract_types_subset_def by blast
+        have lk: "fmlookup (TE_DataCtors env) ctorName = Some (dtName, tyvars, payloadTy)"
+          using \<open>fmlookup (TE_DataCtors env) ctorName = Some triple\<close> triple_eq by simp
         have tyArgs_wk: "list_all (is_well_kinded env) tyArgs"
           using "5.prems"(3) CoreTy_Datatype by (auto split: option.splits)
         have substituted_payload_wk:
           "is_well_kinded env (apply_subst (fmap_of_list (zip tyvars tyArgs)) payloadTy)"
-          using apply_subst_specializes_well_kinded[OF payload_wk_at_tyvars tyArgs_wk len_args[symmetric] abs_sub] .
+          using ctor_payload_specialized_well_kinded[OF "5.prems"(4) lk len_args tyArgs_wk] .
         \<comment> \<open>Runtime side: from is_runtime_type env (CoreTy_Datatype dtName tyArgs),
-            dtName is non-ghost and tyArgs all runtime. Then by tyenv_nonghost_payloads_runtime,
-            payloadTy is runtime in env extended with tyvars. Specialize with tyArgs. \<close>
+            dtName is non-ghost and tyArgs all runtime. \<close>
         have ng: "dtName \<notin> ghost_datatypes env"
           using "5.prems"(2) CoreTy_Datatype ty_match by auto
         have tyArgs_rt: "list_all (is_runtime_type env) tyArgs"
           using "5.prems"(2) CoreTy_Datatype by auto
-        have lk: "fmlookup (TE_DataCtors env) ctorName = Some (dtName, tyvars, payloadTy)"
-          using \<open>fmlookup (TE_DataCtors env) ctorName = Some triple\<close> triple_eq by simp
-        have fresh: "fset_of_list tyvars |\<inter>| TE_AbstractTypes env = {||}"
-          using "5.prems"(4) lk unfolding tyenv_well_formed_def tyenv_ctor_tyvars_fresh_def by blast
-        have payload_rt_at_tyvars:
-          "is_runtime_type (env\<lparr>TE_TypeVars := TE_AbstractTypes env |\<union>| fset_of_list tyvars,
-                                  TE_RuntimeTypeVars := (TE_AbstractTypes env |\<inter>| TE_RuntimeTypeVars env)
-                                                         |\<union>| fset_of_list tyvars\<rparr>) payloadTy"
-          using tyenv_nonghost_payloads_runtime[OF "5.prems"(4) lk ng] .
         have substituted_payload_rt:
           "is_runtime_type env (apply_subst (fmap_of_list (zip tyvars tyArgs)) payloadTy)"
-          using apply_subst_specializes_runtime[OF payload_rt_at_tyvars tyArgs_rt len_args[symmetric] fresh] .
+          using ctor_payload_specialized_runtime[OF "5.prems"(4) lk len_args tyArgs_rt ng] .
         show ?thesis
           by (simp add: "5.IH" "5.prems"(4) CoreTy_Datatype Some
               \<open>fmlookup (TE_DataCtors env) ctorName = Some triple\<close> inner_compat substituted_payload_rt
@@ -1176,20 +1131,12 @@ next
     have ctor_lookup_K:
       "fmlookup (TE_DataCtors envK) ctorName = Some (dtName, tyvars, payloadTy)"
       using ctor_lookup "7.prems"(3) by simp
-    have payload_wk:
-      "is_well_kinded (envK\<lparr>TE_TypeVars := TE_AbstractTypes envK |\<union>| fset_of_list tyvars\<rparr>)
-                      payloadTy"
-      using "7.prems"(2) ctor_lookup_K
-      unfolding tyenv_well_formed_def tyenv_payloads_well_kinded_def by force
-    have abs_sub: "TE_AbstractTypes envK |\<subseteq>| TE_TypeVars envK"
-      using "7.prems"(2)
-      unfolding tyenv_well_formed_def tyenv_abstract_types_subset_def by blast
     have tyArgs_wk: "list_all (is_well_kinded envK) tyArgs"
       using "7.prems"(4) scrut_eq by (auto split: option.splits)
     have len_eq: "length tyvars = length tyArgs"
       using shape_ok by simp
     have inst_wk: "is_well_kinded envK ?instPayloadTy"
-      using apply_subst_specializes_well_kinded[OF payload_wk tyArgs_wk len_eq abs_sub] .
+      using ctor_payload_specialized_well_kinded[OF "7.prems"(2) ctor_lookup_K len_eq[symmetric] tyArgs_wk] .
 
     have inner_compat: "dec_pattern_compatible env dpInner ?instPayloadTy"
       using "7.IH"[OF rpc refl refl refl scrut_eq shape_ok chk Some refl rec
@@ -1402,10 +1349,6 @@ proof -
     using wf tyenv_well_formed_extend_env_with_tyvars by blast
   have dcE: "TE_DataCtors ?envE = TE_DataCtors env"
     unfolding extend_env_with_tyvars_def by simp
-  have dtE: "TE_Datatypes env = TE_Datatypes ?envE"
-    unfolding extend_env_with_tyvars_def by simp
-  have gdE: "ghost_datatypes env \<subseteq> ghost_datatypes ?envE"
-    by (rule equalityD2[OF ghost_datatypes_extend_env_with_tyvars_fresh[OF bound wf]])
 
   \<comment> \<open>In the extended env, the variable types are well-kinded / runtime because
       the pattern is compatible with the (well-kinded / runtime) scrutinee type. \<close>
@@ -1442,7 +1385,7 @@ proof -
       have vTy_wkE: "is_well_kinded ?envE vTy"
         using wkE b_in by (auto simp: list_all_iff)
       show "is_well_kinded env vTy"
-        using is_well_kinded_transfer[OF vTy_wkE tvs_sub[OF b_in] dtE] .
+        by (rule is_well_kinded_extend_env_with_tyvars_drop[OF vTy_wkE tvs_sub[OF b_in]])
     qed
     thus ?thesis by (auto simp: list_all_iff)
   qed
@@ -1454,31 +1397,14 @@ proof -
     have rtE: "list_all (\<lambda>(_, _, vTy). is_runtime_type ?envE vTy)
                         (dec_pattern_var_bindings dp)"
       using dec_pattern_compatible_vars_runtime[OF compatE scrut_rt[OF ng] scrut_wk wfE] .
-    have rtvE: "TE_RuntimeTypeVars ?envE = TE_RuntimeTypeVars env |\<union>| mv_fset lo hi"
-      unfolding extend_env_with_tyvars_def using ng by simp
     have "\<And>vr n vTy. (vr, n, vTy) \<in> set (dec_pattern_var_bindings dp)
             \<Longrightarrow> is_runtime_type env vTy"
     proof -
       fix vr n vTy assume b_in: "(vr, n, vTy) \<in> set (dec_pattern_var_bindings dp)"
       have vTy_rtE: "is_runtime_type ?envE vTy"
         using rtE b_in by (auto simp: list_all_iff)
-      \<comment> \<open>Every type variable of vTy is in TE_TypeVars env, hence allocated below lo,
-          hence not one of the interval's metavariables; being a runtime type variable
-          of the extended env, it is therefore a runtime type variable of env. \<close>
-      have tvs_rt: "type_tyvars vTy \<subseteq> fset (TE_RuntimeTypeVars env)"
-      proof
-        fix k assume k_in: "k \<in> type_tyvars vTy"
-        have "k |\<in>| TE_TypeVars env" using tvs_sub[OF b_in] k_in by auto
-        hence "tyvar_fresh_ok k lo" using bound by simp
-        hence k_not_mv: "k |\<notin>| mv_fset lo hi"
-          by (rule tyvar_fresh_ok_notin_mv_fset)
-        have "k |\<in>| TE_RuntimeTypeVars ?envE"
-          using is_runtime_type_tyvars_subset[OF vTy_rtE] k_in by auto
-        thus "k \<in> fset (TE_RuntimeTypeVars env)"
-          using k_not_mv unfolding rtvE by auto
-      qed
       show "is_runtime_type env vTy"
-        using is_runtime_type_transfer[OF vTy_rtE tvs_rt gdE] .
+        by (rule is_runtime_type_extend_env_with_tyvars_drop[OF vTy_rtE tvs_sub[OF b_in] bound wf])
     qed
     thus "list_all (\<lambda>(_, _, vTy). is_runtime_type env vTy) (dec_pattern_var_bindings dp)"
       by (auto simp: list_all_iff)
@@ -1536,24 +1462,15 @@ proof (induction dp arbitrary: ty)
                           (apply_subst (fmap_of_list (zip tyvars tyArgs)) payloadTy)"
       using DP_Variant.prems(1) Some ctor_lookup ty_eq
       by (auto split: option.splits CoreType.splits)
-    \<comment> \<open>The substituted payload type is well-kinded: by
-        tyenv_payloads_well_kinded the stored payloadTy is well-kinded in
-        env with TypeVars set to tyvars; the tyArgs are well-kinded in env
-        (from is_well_kinded ty); apply_subst_specializes_well_kinded closes. \<close>
-    have payload_src_wk:
-      "is_well_kinded (env \<lparr> TE_TypeVars := TE_AbstractTypes env |\<union>| fset_of_list tyvars \<rparr>) payloadTy"
-      using DP_Variant.prems(3) ctor_lookup
-      unfolding tyenv_well_formed_def tyenv_payloads_well_kinded_def
-      by blast
-    have abs_sub: "TE_AbstractTypes env |\<subseteq>| TE_TypeVars env"
-      using DP_Variant.prems(3) unfolding tyenv_well_formed_def tyenv_abstract_types_subset_def by blast
+    \<comment> \<open>The substituted payload type is well-kinded, since the tyArgs are
+        well-kinded in env (from is_well_kinded ty). \<close>
     have tyArgs_wk: "list_all (is_well_kinded env) tyArgs"
       using DP_Variant.prems(2) ty_eq
       by (auto split: option.splits)
     have payload_wk:
       "is_well_kinded env
          (apply_subst (fmap_of_list (zip tyvars tyArgs)) payloadTy)"
-      using apply_subst_specializes_well_kinded[OF payload_src_wk tyArgs_wk len_eq[symmetric] abs_sub] .
+      using ctor_payload_specialized_well_kinded[OF DP_Variant.prems(3) ctor_lookup len_eq tyArgs_wk] .
     have IH: "pattern_compatible env (dec_to_core_pat inner)
                 (apply_subst (fmap_of_list (zip tyvars tyArgs)) payloadTy)"
       using DP_Variant.IH(1) Some inner_compat payload_wk DP_Variant.prems(3) by simp
@@ -1721,18 +1638,11 @@ next
     using "6.prems"(2) ctor_lookup baseTy_eq tyName_eq len_eq
     by simp
 
-  have stored_wk:
-    "is_well_kinded (env \<lparr> TE_TypeVars := TE_AbstractTypes env |\<union>| fset_of_list tyvars \<rparr>) stored_payloadTy"
-    using "6.prems"(3) ctor_lookup
-    unfolding tyenv_well_formed_def tyenv_payloads_well_kinded_def
-    by blast
-  have abs_sub: "TE_AbstractTypes env |\<subseteq>| TE_TypeVars env"
-    using "6.prems"(3) unfolding tyenv_well_formed_def tyenv_abstract_types_subset_def by blast
   have tyArgs_wk: "list_all (is_well_kinded env) tyArgs"
     using "6.prems"(4) baseTy_eq
     by (auto split: option.splits)
   have payloadTy_wk: "is_well_kinded env ?payloadTy"
-    using apply_subst_specializes_well_kinded[OF stored_wk tyArgs_wk len_eq[symmetric] abs_sub] .
+    using ctor_payload_specialized_well_kinded[OF "6.prems"(3) ctor_lookup len_eq tyArgs_wk] .
 
   show ?case
     using "6.IH"[OF inner_compat base'_typed "6.prems"(3) payloadTy_wk] "6.prems"(5)

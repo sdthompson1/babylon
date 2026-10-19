@@ -193,6 +193,52 @@ lemma ghost_datatypes_extend_env_with_tyvars_fresh:
   shows "ghost_datatypes (extend_env_with_tyvars env ghost lo hi) = ghost_datatypes env"
   using ghost_datatypes_extend_env_with_tyvars_eq[OF abstract_types_notin_mv_fset[OF bound wf]] .
 
+(* Under the same invariant, any set of type variables in scope misses the block. *)
+lemma in_scope_tyvars_disjoint_mv_fset:
+  assumes sub: "S \<subseteq> fset (TE_TypeVars env)"
+      and bound: "\<forall>n. n |\<in>| TE_TypeVars env \<longrightarrow> tyvar_fresh_ok n lo"
+  shows "S \<inter> fset (mv_fset lo hi) = {}"
+proof -
+  have False if "x \<in> S" and "x |\<in>| mv_fset lo hi" for x
+    using that sub bound tyvar_fresh_ok_notin_mv_fset by blast
+  thus ?thesis unfolding disjoint_iff by blast
+qed
+
+(* Dropping the block: a type whose type variables are all in scope in env is
+   well-kinded in env if it is well-kinded in the extended env ... *)
+lemma is_well_kinded_extend_env_with_tyvars_drop:
+  assumes wk: "is_well_kinded (extend_env_with_tyvars env ghost lo hi) ty"
+      and sub: "type_tyvars ty \<subseteq> fset (TE_TypeVars env)"
+  shows "is_well_kinded env ty"
+  using is_well_kinded_transfer[OF wk sub] by (simp add: extend_env_with_tyvars_def)
+
+(* ... and, under the freshness invariant, a runtime type in env if it is one
+   in the extended env. *)
+lemma is_runtime_type_extend_env_with_tyvars_drop:
+  assumes rt: "is_runtime_type (extend_env_with_tyvars env ghost lo hi) ty"
+      and sub: "type_tyvars ty \<subseteq> fset (TE_TypeVars env)"
+      and bound: "\<forall>n. n |\<in>| TE_TypeVars env \<longrightarrow> tyvar_fresh_ok n lo"
+      and wf: "tyenv_well_formed env"
+  shows "is_runtime_type env ty"
+proof -
+  have shape: "extend_env_with_tyvars env ghost lo hi
+        = env \<lparr> TE_TypeVars := TE_TypeVars env |\<union>| mv_fset lo hi,
+                TE_RuntimeTypeVars := TE_RuntimeTypeVars env
+                  |\<union>| (if ghost = NotGhost then mv_fset lo hi else {||}) \<rparr>"
+    unfolding extend_env_with_tyvars_def by simp
+  have disj: "type_tyvars ty \<inter> fset (mv_fset lo hi) = {}"
+    by (rule in_scope_tyvars_disjoint_mv_fset[OF sub bound])
+  have abs: "TE_AbstractTypes env |\<inter>| mv_fset lo hi = {||}"
+    by (rule abstract_types_notin_mv_fset[OF bound wf])
+  have rt_sub: "(if ghost = NotGhost then mv_fset lo hi else {||}) |\<subseteq>| mv_fset lo hi"
+    by simp
+  have abs_sub: "TE_AbstractTypes env |\<inter>| (if ghost = NotGhost then mv_fset lo hi else {||})
+                   |\<subseteq>| TE_RuntimeTypeVars env"
+    using abs by auto
+  show ?thesis
+    by (rule is_runtime_type_remove_unused_tyvars[OF rt[unfolded shape] disj rt_sub abs_sub])
+qed
+
 (* Well-formedness is preserved under extend_env_with_tyvars. *)
 lemma tyenv_well_formed_extend_env_with_tyvars:
   assumes "tyenv_well_formed env"

@@ -923,36 +923,7 @@ next
   qed
 
   have wf_ext: "tyenv_well_formed ?env_ext"
-  proof (cases ghost)
-    case NotGhost
-    from rhsTy_rt NotGhost have rt: "is_runtime_type calleeEnv rhsTy" by simp
-    from tyenv_well_formed_add_var[OF CoreTm_Let.prems(2) rhsTy_wk rt]
-    have wf':
-      "tyenv_well_formed
-         (calleeEnv \<lparr> TE_LocalVars := fmupd var rhsTy (TE_LocalVars calleeEnv),
-                      TE_GhostLocals := fminus (TE_GhostLocals calleeEnv) {|var|} \<rparr>)" .
-    from tyenv_well_formed_TE_ConstLocals_irrelevant[OF wf',
-            of "finsert var (TE_ConstLocals calleeEnv)"]
-    have "tyenv_well_formed
-            (calleeEnv \<lparr> TE_LocalVars := fmupd var rhsTy (TE_LocalVars calleeEnv),
-                         TE_GhostLocals := fminus (TE_GhostLocals calleeEnv) {|var|} \<rparr>
-                       \<lparr> TE_ConstLocals := finsert var (TE_ConstLocals calleeEnv) \<rparr>)" .
-    with NotGhost show ?thesis by simp
-  next
-    case Ghost
-    from tyenv_well_formed_add_ghost_var[OF CoreTm_Let.prems(2) rhsTy_wk]
-    have wf':
-      "tyenv_well_formed
-         (calleeEnv \<lparr> TE_LocalVars := fmupd var rhsTy (TE_LocalVars calleeEnv),
-                      TE_GhostLocals := finsert var (TE_GhostLocals calleeEnv) \<rparr>)" .
-    from tyenv_well_formed_TE_ConstLocals_irrelevant[OF wf',
-            of "finsert var (TE_ConstLocals calleeEnv)"]
-    have "tyenv_well_formed
-            (calleeEnv \<lparr> TE_LocalVars := fmupd var rhsTy (TE_LocalVars calleeEnv),
-                         TE_GhostLocals := finsert var (TE_GhostLocals calleeEnv) \<rparr>
-                       \<lparr> TE_ConstLocals := finsert var (TE_ConstLocals calleeEnv) \<rparr>)" .
-    with Ghost show ?thesis by simp
-  qed
+    by (rule tyenv_well_formed_declare_var[OF CoreTm_Let.prems(2) rhsTy_wk rhsTy_rt])
 
   \<comment> \<open>callee_env_subst_ok ?env_ext: same as for calleeEnv since we only changed
       TE_LocalVars / TE_GhostLocals / TE_ConstLocals, none of which appear in
@@ -1011,11 +982,8 @@ next
                                 TE_GhostLocals := finsert var (TE_GhostLocals calleeEnv),
                                 TE_ConstLocals := finsert var (TE_ConstLocals calleeEnv) \<rparr>"
 
-    \<comment> \<open>well-formedness of ?env_ext via tyenv_well_formed_add_ghost_var
-        (tyenv_well_formed does not read TE_ConstLocals) \<close>
     have wf_ext: "tyenv_well_formed ?env_ext"
-      by (rule tyenv_well_formed_TE_ConstLocals_irrelevant
-                 [OF tyenv_well_formed_add_ghost_var[OF CoreTm_Quantifier.prems(2) varTy_wk]])
+      by (rule tyenv_well_formed_declare_ghost[OF CoreTm_Quantifier.prems(2) varTy_wk])
 
     \<comment> \<open>callee_env_subst_ok ?env_ext: only TE_LocalVars / TE_GhostLocals /
         TE_ConstLocals changed, which callee_env_subst_ok doesn't reference. \<close>

@@ -63,16 +63,7 @@ proof -
   have free_sub: "core_term_free_tyvars tm \<subseteq> fset (TE_TypeVars env)"
     using inf unfolding term_inferred_def by (auto simp: list_all_iff)
   have disj: "core_term_free_tyvars tm \<inter> fset (mv_fset lo hi) = {}"
-  proof -
-    have "\<And>x. x \<in> core_term_free_tyvars tm \<Longrightarrow> x |\<in>| mv_fset lo hi \<Longrightarrow> False"
-    proof -
-      fix x assume x_free: "x \<in> core_term_free_tyvars tm" and x_mv: "x |\<in>| mv_fset lo hi"
-      have "tyvar_fresh_ok x lo" using free_sub x_free bound by auto
-      moreover obtain i where "lo \<le> i" and "x = mv_name i" using x_mv by auto
-      ultimately show False by simp
-    qed
-    thus ?thesis unfolding disjoint_iff by blast
-  qed
+    by (rule in_scope_tyvars_disjoint_mv_fset[OF free_sub bound])
   have envE_shape: "extend_env_with_tyvars env ghost lo hi
         = env \<lparr> TE_TypeVars := TE_TypeVars env |\<union>| mv_fset lo hi,
                 TE_RuntimeTypeVars := TE_RuntimeTypeVars env
@@ -96,37 +87,13 @@ lemma inferred_type_well_kinded_runtime:
     and wf: "tyenv_well_formed env"
   shows "is_well_kinded env ty \<and> (ghost = NotGhost \<longrightarrow> is_runtime_type env ty)"
 proof -
-  let ?envE = "extend_env_with_tyvars env ghost lo hi"
   have tvs_sub: "type_tyvars ty \<subseteq> fset (TE_TypeVars env)"
     using inf unfolding type_inferred_def
     by (auto simp: set_type_tyvars_list[symmetric] list_all_iff)
-  have dt_eq: "TE_Datatypes env = TE_Datatypes ?envE"
-    unfolding extend_env_with_tyvars_def by simp
   have wk': "is_well_kinded env ty"
-    using is_well_kinded_transfer[OF wk tvs_sub dt_eq] .
+    by (rule is_well_kinded_extend_env_with_tyvars_drop[OF wk tvs_sub])
   have rt': "ghost = NotGhost \<longrightarrow> is_runtime_type env ty"
-  proof
-    assume ng: "ghost = NotGhost"
-    have rtE: "is_runtime_type ?envE ty" using rt ng by simp
-    have rtv_eq: "fset (TE_RuntimeTypeVars ?envE)
-                    = fset (TE_RuntimeTypeVars env) \<union> mv_name ` {lo..<hi}"
-      using ng unfolding extend_env_with_tyvars_def
-      by (simp add: mv_fset_def fset_of_list.rep_eq image_image)
-    have tvs_in_rt: "type_tyvars ty \<subseteq> fset (TE_RuntimeTypeVars env)"
-    proof
-      fix n assume n_in: "n \<in> type_tyvars ty"
-      from n_in tvs_sub have "n |\<in>| TE_TypeVars env" by auto
-      hence n_fresh: "tyvar_fresh_ok n lo" using bound by simp
-      hence n_not_fresh: "n \<notin> mv_name ` {lo..<hi}" unfolding tyvar_fresh_ok_def by force
-      from n_in is_runtime_type_tyvars_subset[OF rtE] rtv_eq
-      have "n \<in> fset (TE_RuntimeTypeVars env) \<union> mv_name ` {lo..<hi}" by auto
-      with n_not_fresh show "n \<in> fset (TE_RuntimeTypeVars env)" by auto
-    qed
-    have gd: "ghost_datatypes env \<subseteq> ghost_datatypes ?envE"
-      by (rule equalityD2[OF ghost_datatypes_extend_env_with_tyvars_fresh[OF bound wf]])
-    show "is_runtime_type env ty"
-      using is_runtime_type_transfer[OF rtE tvs_in_rt gd] .
-  qed
+    using rt is_runtime_type_extend_env_with_tyvars_drop[OF _ tvs_sub bound wf] by blast
   from wk' rt' show ?thesis by blast
 qed
 
@@ -862,39 +829,18 @@ proof -
     using len_exp_vor len_vor_modes by simp
 
   \<comment> \<open>Expected types are well-kinded at ?env1 (each is apply_subst of a param type).\<close>
-  have abs_sub1: "TE_AbstractTypes ?env1 |\<subseteq>| TE_TypeVars ?env1"
-    using wf1 unfolding tyenv_well_formed_def tyenv_abstract_types_subset_def by blast
+  have fn_lookup1: "fmlookup (TE_Functions ?env1) fnName = Some funInfo"
+    using fn_lookup by (simp add: extend_env_with_tyvars_def)
   have exp_wk1: "list_all (is_well_kinded ?env1) expArgTypes"
-  proof -
-    have fi_args_wk_inner: "\<forall>ty \<in> fst ` set (FI_TmArgs funInfo).
-            is_well_kinded (?env1 \<lparr> TE_TypeVars := TE_AbstractTypes ?env1 |\<union>| fset_of_list (FI_TyArgs funInfo) \<rparr>) ty"
-      using wf1 fn_lookup unfolding tyenv_well_formed_def tyenv_fun_types_well_kinded_def
-      by (simp add: extend_env_with_tyvars_def)
-    have "list_all (\<lambda>(ty, _). is_well_kinded ?env1
-            (apply_subst (fmap_of_list (zip (FI_TyArgs funInfo) newTyArgs)) ty)) (FI_TmArgs funInfo)"
-    proof (unfold list_all_iff, intro ballI, clarify)
-      fix t v assume "(t, v) \<in> set (FI_TmArgs funInfo)"
-      hence "t \<in> fst ` set (FI_TmArgs funInfo)" by (force simp: rev_image_eqI)
-      with fi_args_wk_inner
-      have "is_well_kinded (?env1 \<lparr> TE_TypeVars := TE_AbstractTypes ?env1 |\<union>| fset_of_list (FI_TyArgs funInfo) \<rparr>) t" by blast
-      thus "is_well_kinded ?env1 (apply_subst (fmap_of_list (zip (FI_TyArgs funInfo) newTyArgs)) t)"
-        using apply_subst_specializes_well_kinded[OF _ newTyArgs_wk1 len_tyargs[symmetric] abs_sub1] by simp
-    qed
-    thus ?thesis using expArg_eq by (auto simp: list_all_iff)
-  qed
+    using fun_param_types_specialized_well_kinded[OF wf1 fn_lookup1 len_tyargs newTyArgs_wk1] expArg_eq
+    by (auto simp: list_all_iff)
 
   \<comment> \<open>In an executable call, the expected types of the plain arguments are
       runtime types: a plain argument belongs to a parameter that is not ghost.\<close>
   have pexp_rt1: "ghost = NotGhost \<longrightarrow> list_all (is_runtime_type ?env1) ?pExp"
   proof
     assume ng: "ghost = NotGhost"
-    hence fg_ng: "FI_Ghost funInfo = NotGhost" using GhostOrNot.exhaust ghost_ok by auto
-    have fi_args_rt_inner: "\<forall>ty vor. (ty, vor, NotGhost) \<in> set (FI_TmArgs funInfo) \<longrightarrow>
-            is_runtime_type (?env1 \<lparr> TE_TypeVars := TE_AbstractTypes ?env1 |\<union>| fset_of_list (FI_TyArgs funInfo),
-                                     TE_RuntimeTypeVars := (TE_AbstractTypes ?env1 |\<inter>| TE_RuntimeTypeVars ?env1)
-                                                            |\<union>| fset_of_list (FI_TyArgs funInfo) \<rparr>) ty"
-      using wf1 fn_lookup fg_ng unfolding tyenv_well_formed_def tyenv_fun_ghost_constraint_def
-      by (simp add: extend_env_with_tyvars_def Let_def)
+    hence not_ghost_fn: "FI_Ghost funInfo \<noteq> Ghost" using ghost_ok by simp
     have tyargs_rt: "list_all (is_runtime_type ?env1) newTyArgs" using newTyArgs_rt1 ng by simp
     show "list_all (is_runtime_type ?env1) ?pExp"
     proof (rule list_all_plain_argsI[OF flags_len])
@@ -908,18 +854,9 @@ proof -
       from pm ng have gh_eq: "gh = NotGhost" by simp
       have mem: "(t, vor, NotGhost) \<in> set (FI_TmArgs funInfo)"
         using nth_mem[OF i_fi] p_eq gh_eq by simp
-      from fi_args_rt_inner mem
-      have "is_runtime_type (?env1 \<lparr> TE_TypeVars := TE_AbstractTypes ?env1 |\<union>| fset_of_list (FI_TyArgs funInfo),
-                                     TE_RuntimeTypeVars := (TE_AbstractTypes ?env1 |\<inter>| TE_RuntimeTypeVars ?env1)
-                                                            |\<union>| fset_of_list (FI_TyArgs funInfo) \<rparr>) t" by blast
-      moreover have "fset_of_list (FI_TyArgs funInfo) |\<inter>| TE_AbstractTypes ?env1 = {||}"
-      proof -
-        have "fset_of_list (FI_TyArgs funInfo) |\<inter>| TE_AbstractTypes env = {||}"
-          using wf fn_lookup unfolding tyenv_well_formed_def tyenv_fun_tyvars_fresh_def by blast
-        then show ?thesis by (simp add: extend_env_with_tyvars_def)
-      qed
-      ultimately have "is_runtime_type ?env1 (apply_subst (fmap_of_list (zip (FI_TyArgs funInfo) newTyArgs)) t)"
-        using apply_subst_specializes_runtime[OF _ tyargs_rt len_tyargs[symmetric]] by simp
+      have "is_runtime_type ?env1 (apply_subst (fmap_of_list (zip (FI_TyArgs funInfo) newTyArgs)) t)"
+        by (rule fun_param_type_specialized_runtime[OF wf1 fn_lookup1 len_tyargs tyargs_rt
+                                                       not_ghost_fn mem])
       moreover have "expArgTypes ! i = apply_subst (fmap_of_list (zip (FI_TyArgs funInfo) newTyArgs)) t"
         using expArg_eq i_fi p_eq by simp
       ultimately show "is_runtime_type ?env1 (expArgTypes ! i)" by simp
@@ -1232,37 +1169,8 @@ lemma vardecl_add_local_fields [simp]:
   "TE_ReturnType (vardecl_add_local env ghost varName varTy) = TE_ReturnType env"
   by (simp_all add: vardecl_add_local_def)
 
-(* Adding a (well-kinded, and in the non-ghost case runtime) variable to a
-   well-formed env keeps it well-formed, for both ghost and non-ghost decls and
-   regardless of the TE_ConstLocals update — exactly the shape every successful
-   VarDecl branch produces. *)
-lemma tyenv_well_formed_vardecl_result:
-  assumes wf: "tyenv_well_formed env"
-    and wk: "is_well_kinded env varTy"
-    and rt: "ghost = NotGhost \<longrightarrow> is_runtime_type env varTy"
-  shows "tyenv_well_formed
-           (env \<lparr> TE_LocalVars := fmupd varName varTy (TE_LocalVars env),
-                  TE_GhostLocals := (if ghost = Ghost
-                                     then finsert varName (TE_GhostLocals env)
-                                     else fminus (TE_GhostLocals env) {|varName|}) \<rparr>
-              \<lparr> TE_ConstLocals := c \<rparr>)"
-proof (cases ghost)
-  case Ghost
-  from tyenv_well_formed_add_ghost_var[OF wf wk]
-  have "tyenv_well_formed (env \<lparr> TE_LocalVars := fmupd varName varTy (TE_LocalVars env),
-                                 TE_GhostLocals := finsert varName (TE_GhostLocals env) \<rparr>)" .
-  from tyenv_well_formed_TE_ConstLocals_irrelevant[OF this] Ghost show ?thesis by simp
-next
-  case NotGhost
-  with rt have rt': "is_runtime_type env varTy" by simp
-  from tyenv_well_formed_add_var[OF wf wk rt']
-  have "tyenv_well_formed (env \<lparr> TE_LocalVars := fmupd varName varTy (TE_LocalVars env),
-                                 TE_GhostLocals := fminus (TE_GhostLocals env) {|varName|} \<rparr>)" .
-  from tyenv_well_formed_TE_ConstLocals_irrelevant[OF this] NotGhost show ?thesis by simp
-qed
-
 (* vardecl_add_local applied to a well-kinded (runtime in NotGhost) type keeps
-   the env well-formed; it is exactly the shape tyenv_well_formed_vardecl_result
+   the env well-formed; it is exactly the shape tyenv_well_formed_declare_var
    covers (with c the cleared const set). *)
 lemma tyenv_well_formed_vardecl_add_local:
   assumes wf: "tyenv_well_formed env"
@@ -1270,7 +1178,7 @@ lemma tyenv_well_formed_vardecl_add_local:
     and rt: "ghost = NotGhost \<longrightarrow> is_runtime_type env varTy"
   shows "tyenv_well_formed (vardecl_add_local env ghost varName varTy)"
   unfolding vardecl_add_local_def
-  using tyenv_well_formed_vardecl_result[OF wf wk rt] by simp
+  by (rule tyenv_well_formed_declare_var[OF wf wk rt])
 
 (* Each VarDecl helper leaves the env's non-local-variable fields unchanged, with
    NO well-formedness hypotheses — every successful branch's result env is
@@ -3219,7 +3127,7 @@ proof (induction env elabEnv ghost stmt next_mv and env elabEnv ghost stmts next
        arbitrary: coreStmt env' next_mv' and coreStmts env' next_mv' and coreStmtss next_mv'
        rule: elab_statement_elab_statement_list_elab_statement_lists_with_envs.induct)
   \<comment> \<open>VarDecl: the chosen variable type is well-kinded (and runtime in NotGhost
-      mode), so the resulting env is well-formed by tyenv_well_formed_vardecl_result.
+      mode), so the resulting env is well-formed by tyenv_well_formed_declare_var.
       The per-helper *_env lemmas supply the variable type and its well-kindedness;
       the default-init branch handles its annotation type inline.\<close>
   case (1 env elabEnv ghost loc varName vorf tyOpt tmOpt next_mv)
@@ -3273,7 +3181,7 @@ proof (induction env elabEnv ghost stmt next_mv and env elabEnv ghost stmts next
   next
     case Ref
     \<comment> \<open>Ref: env' = (vardecl_add_local \<dots>) with TE_ConstLocals overridden — the shape
-        tyenv_well_formed_vardecl_result covers directly.\<close>
+        tyenv_well_formed_declare_var covers directly.\<close>
     from "1.prems"(1) Ref
     have rf: "elab_vardecl_ref env elabEnv ghost loc varName tyOpt tmOpt next_mv
                 = Inr (coreStmt, env', next_mv')" by simp
@@ -3282,13 +3190,13 @@ proof (induction env elabEnv ghost stmt next_mv and env elabEnv ghost stmts next
       wk: "is_well_kinded env varTy" and
       rt: "ghost = NotGhost \<longrightarrow> is_runtime_type env varTy"
       using elab_vardecl_ref_env[OF rf "1.prems"(2,3,4)] by blast
-    show ?thesis using env'_eq tyenv_well_formed_vardecl_result[OF "1.prems"(2) wk rt]
+    show ?thesis using env'_eq tyenv_well_formed_declare_var[OF "1.prems"(2) wk rt]
       by (simp add: vardecl_add_local_def)
   qed
 next
   \<comment> \<open>Fix: env' adds a const ghost local of type coreTy (the well-kinded Ghost-mode
       elaboration of the annotation) and rewrites the proof goal. Adding a well-kinded
-      ghost local keeps the env well-formed (tyenv_well_formed_vardecl_result, which
+      ghost local keeps the env well-formed (tyenv_well_formed_declare_ghost, which
       allows any TE_ConstLocals); the goal rewrite is irrelevant to well-formedness.\<close>
   case (2 env elabEnv ghost loc varName ty next_mv)
   have td_wf: "typedefs_well_formed env (EE_Typedefs elabEnv)"
@@ -3303,18 +3211,9 @@ next
              split: CoreTerm.splits Quantifier.splits option.splits sum.splits if_splits)
   have wk: "is_well_kinded env coreTy"
     using elab_type_is_well_kinded(1)[OF td_wf "2.prems"(2) ety] .
-  \<comment> \<open>Adding the ghost local (any TE_ConstLocals) keeps the env well-formed.\<close>
-  have wf1: "tyenv_well_formed
-               (env \<lparr> TE_LocalVars := fmupd varName coreTy (TE_LocalVars env),
-                      TE_GhostLocals := (if Ghost = Ghost
-                                         then finsert varName (TE_GhostLocals env)
-                                         else fminus (TE_GhostLocals env) {|varName|}) \<rparr>
-                  \<lparr> TE_ConstLocals := finsert varName (TE_ConstLocals env) \<rparr>)"
-    using tyenv_well_formed_vardecl_result[OF "2.prems"(2) wk, where ghost=Ghost] by blast
-  \<comment> \<open>The goal rewrite does not affect well-formedness.\<close>
-  show ?case
-    using tyenv_well_formed_TE_ProofGoal_irrelevant[OF wf1, where g="Some bodyTm"]
-    by (simp add: env'_eq)
+  show ?case unfolding env'_eq
+    by (rule tyenv_well_formed_TE_ProofGoal_irrelevant
+               [OF tyenv_well_formed_declare_ghost[OF "2.prems"(2) wk]])
 next
   \<comment> \<open>Obtain: env' = vardecl_add_local env Ghost varName coreTy, where coreTy is the
       Ghost-mode elaboration of the annotation (hence well-kinded). The runtime
@@ -4757,35 +4656,11 @@ next
   \<comment> \<open>?env1 invariants.\<close>
   have env1_wf: "tyenv_well_formed ?env1"
   proof -
+    have rt: "ghost = NotGhost \<longrightarrow> is_runtime_type env scrutTy"
+      using scrutTy_rt by blast
     have wf_eaf: "tyenv_well_formed envAfterFresh"
-    proof (cases "ghost = Ghost")
-      case True
-      have ext_eq: "envAfterFresh
-            = (env \<lparr> TE_LocalVars := fmupd freshName scrutTy (TE_LocalVars env),
-                     TE_GhostLocals := finsert freshName (TE_GhostLocals env) \<rparr>)
-                \<lparr> TE_ConstLocals := (if mode = Ref \<and> \<not> writable
-                                     then finsert freshName (TE_ConstLocals env)
-                                     else fminus (TE_ConstLocals env) {|freshName|}) \<rparr>"
-        using True unfolding scrut_facts(3) vardecl_add_local_def by simp
-      show ?thesis
-        using True tyenv_well_formed_add_ghost_var[OF "13.prems"(2) scrutTy_wk] ext_eq
-              tyenv_well_formed_TE_ConstLocals_irrelevant
-        by simp
-    next
-      case False
-      hence ng: "ghost = NotGhost" by (cases ghost) auto
-      have ext_eq: "envAfterFresh
-            = (env \<lparr> TE_LocalVars := fmupd freshName scrutTy (TE_LocalVars env),
-                     TE_GhostLocals := fminus (TE_GhostLocals env) {|freshName|} \<rparr>)
-                \<lparr> TE_ConstLocals := (if mode = Ref \<and> \<not> writable
-                                     then finsert freshName (TE_ConstLocals env)
-                                     else fminus (TE_ConstLocals env) {|freshName|}) \<rparr>"
-        using ng unfolding scrut_facts(3) vardecl_add_local_def by simp
-      show ?thesis
-        using tyenv_well_formed_add_var[OF "13.prems"(2) scrutTy_wk scrutTy_rt[OF ng]]
-              ext_eq tyenv_well_formed_TE_ConstLocals_irrelevant
-        by simp
-    qed
+      unfolding scrut_facts(3) vardecl_add_local_def
+      using tyenv_well_formed_declare_var[OF "13.prems"(2) scrutTy_wk rt] by simp
     thus ?thesis using tyenv_well_formed_TE_ProofTopLevel_irrelevant by blast
   qed
   have env1_tv: "TE_TypeVars ?env1 = TE_TypeVars env"

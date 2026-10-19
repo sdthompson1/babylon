@@ -1333,27 +1333,11 @@ proof -
     using core_term_type_well_kinded_and_runtime[OF scrut_typed ambient_wf] by blast
 
   have env'_wf: "tyenv_well_formed ?env'"
-  proof (cases "ghost = Ghost")
-    case True
-    have ext_eq: "?env' = (envAmbient \<lparr> TE_LocalVars := fmupd freshName scrutTy (TE_LocalVars envAmbient),
-                                         TE_GhostLocals := finsert freshName (TE_GhostLocals envAmbient) \<rparr>)
-                              \<lparr> TE_ConstLocals := finsert freshName (TE_ConstLocals envAmbient) \<rparr>"
-      using True by (simp add: extend_env_one_var_def)
-    show ?thesis
-      using True tyenv_well_formed_add_ghost_var[OF ambient_wf scrutTy_wk] ext_eq
-            tyenv_well_formed_TE_ConstLocals_irrelevant
-      by simp
-  next
-    case False
-    hence ng: "ghost = NotGhost" by (cases ghost) auto
-    have ext_eq: "?env' = (envAmbient \<lparr> TE_LocalVars := fmupd freshName scrutTy (TE_LocalVars envAmbient),
-                                         TE_GhostLocals := fminus (TE_GhostLocals envAmbient) {|freshName|} \<rparr>)
-                              \<lparr> TE_ConstLocals := finsert freshName (TE_ConstLocals envAmbient) \<rparr>"
-      using ng by (simp add: extend_env_one_var_def)
-    show ?thesis
-      using tyenv_well_formed_add_var[OF ambient_wf scrutTy_wk scrutTy_rt[OF ng]]
-            ext_eq tyenv_well_formed_TE_ConstLocals_irrelevant
-      by simp
+  proof -
+    have rt: "ghost = NotGhost \<longrightarrow> is_runtime_type envAmbient scrutTy"
+      using scrutTy_rt by blast
+    show ?thesis unfolding extend_env_one_var_def
+      using tyenv_well_formed_declare_var[OF ambient_wf scrutTy_wk rt] by simp
   qed
 
   have env'_tv: "TE_TypeVars ?env' = TE_TypeVars envAmbient"
@@ -2354,85 +2338,28 @@ next
     using core_term_type_extend_env_with_tyvars_mono[OF rhs_typing_sub, where lo'=next_mv and hi'=next_mv']
           mono_1 mono_2 next_mv_eq by simp
 
-  \<comment> \<open>Well-kindedness of rhsTy in env: follows directly from rhs_resolved via is_well_kinded_transfer.\<close>
+  \<comment> \<open>rhs_resolved pins rhsTy's type variables into env.TE_TypeVars, so rhsTy is
+     well-kinded in env, and (by freshness, prems(4)) runtime in env in non-ghost context.\<close>
+  have wf_sub: "tyenv_well_formed (extend_env_with_tyvars env ghost next_mv next_mv1)"
+    using "7.prems"(2) tyenv_well_formed_extend_env_with_tyvars by blast
+  have tyvars_in_env: "type_tyvars rhsTy \<subseteq> fset (TE_TypeVars env)"
+    using rhs_resolved
+    by (auto simp: set_type_tyvars_list[symmetric] list_all_iff fset_of_list_elem)
   have rhs_wk_env: "is_well_kinded env rhsTy"
-  proof -
-    have wf_sub: "tyenv_well_formed (extend_env_with_tyvars env ghost next_mv next_mv1)"
-      using "7.prems"(2) tyenv_well_formed_extend_env_with_tyvars by blast
-    have rhs_wk_sub: "is_well_kinded (extend_env_with_tyvars env ghost next_mv next_mv1) rhsTy"
-      using core_term_type_well_kinded[OF "7.IH"(1)[OF elab_rhs "7.prems"(2,3,4)] wf_sub] .
-    have tyvars_in_env: "type_tyvars rhsTy \<subseteq> fset (TE_TypeVars env)"
-      using rhs_resolved
-      by (auto simp: set_type_tyvars_list[symmetric] list_all_iff fset_of_list_elem)
-    show ?thesis
-      using is_well_kinded_transfer[OF rhs_wk_sub tyvars_in_env]
-      by (simp add: extend_env_with_tyvars_def)
-  qed
-
-  \<comment> \<open>In non-ghost context, rhsTy is also runtime in env.
-     rhs_resolved pins rhsTy's type variables into env.TE_TypeVars, and freshness (prems(4))
-     says those are all strictly below next_mv, so they're disjoint from the fresh
-     range [next_mv..<next_mv1]. Hence any type variable in rhsTy that's runtime in the
-     sub-extended env is also runtime in the original env.\<close>
+    using is_well_kinded_extend_env_with_tyvars_drop
+            [OF core_term_type_well_kinded[OF rhs_typing_sub wf_sub] tyvars_in_env] .
   have rhs_rt_env: "ghost = NotGhost \<longrightarrow> is_runtime_type env rhsTy"
   proof
     assume ng: "ghost = NotGhost"
-    have wf_sub: "tyenv_well_formed (extend_env_with_tyvars env ghost next_mv next_mv1)"
-      using "7.prems"(2) tyenv_well_formed_extend_env_with_tyvars by blast
     have rhs_rt_sub: "is_runtime_type (extend_env_with_tyvars env ghost next_mv next_mv1) rhsTy"
       using core_term_type_notghost_runtime ng rhs_typing_sub wf_sub by auto
-    \<comment> \<open>Every type variable in rhsTy is in env.TE_TypeVars (from rhs_resolved)\<close>
-    have tyvars_in_env_tv: "\<forall>n \<in> type_tyvars rhsTy. n |\<in>| TE_TypeVars env"
-      using rhs_resolved by (auto simp: set_type_tyvars_list[symmetric] list_all_iff)
-    \<comment> \<open>And every such type variable is fresh-ok at next_mv (by freshness)\<close>
-    have tyvars_fresh: "\<forall>n \<in> type_tyvars rhsTy. tyvar_fresh_ok n next_mv"
-      using tyvars_in_env_tv "7.prems"(4) by blast
-    \<comment> \<open>In the sub-extended env, TE_RuntimeTypeVars = env.TE_RuntimeTypeVars \<union> mv_fset next_mv next_mv1.
-       Combined with tyvars_fresh, any type variable in rhsTy that's runtime in the sub-extended env
-       is also in env.TE_RuntimeTypeVars (it cannot lie in the fresh interval).\<close>
-    have tyvars_in_env_rtv: "type_tyvars rhsTy \<subseteq> fset (TE_RuntimeTypeVars env)"
-    proof
-      fix n assume n_in: "n \<in> type_tyvars rhsTy"
-      \<comment> \<open>From rhs_rt_sub we know n is in the sub-extended env's RT set\<close>
-      have rhs_tyvars_rt: "type_tyvars rhsTy \<subseteq>
-                          fset (TE_RuntimeTypeVars (extend_env_with_tyvars env ghost next_mv next_mv1))"
-        using is_runtime_type_tyvars_subset[OF rhs_rt_sub] .
-      from rhs_tyvars_rt n_in
-      have "n |\<in>| TE_RuntimeTypeVars (extend_env_with_tyvars env ghost next_mv next_mv1)"
-        by auto
-      hence n_in_ext_rtv: "n |\<in>| TE_RuntimeTypeVars env |\<union>| mv_fset next_mv next_mv1"
-        using ng unfolding extend_env_with_tyvars_def by simp
-      from tyvars_fresh n_in have "tyvar_fresh_ok n next_mv" by blast
-      hence "n |\<notin>| mv_fset next_mv next_mv1" by (rule tyvar_fresh_ok_notin_mv_fset)
-      with n_in_ext_rtv have "n |\<in>| TE_RuntimeTypeVars env" by blast
-      thus "n \<in> fset (TE_RuntimeTypeVars env)" by simp
-    qed
     show "is_runtime_type env rhsTy"
-      using is_runtime_type_transfer[OF rhs_rt_sub tyvars_in_env_rtv
-              equalityD2[OF ghost_datatypes_extend_env_with_tyvars_fresh[OF "7.prems"(4) "7.prems"(2)]]] .
+      by (rule is_runtime_type_extend_env_with_tyvars_drop
+                 [OF rhs_rt_sub tyvars_in_env "7.prems"(4) "7.prems"(2)])
   qed
 
   have wf_body_env: "tyenv_well_formed ?body_env"
-  proof (cases "ghost = Ghost")
-    case True
-    thus ?thesis
-      using "7.prems"(2) rhs_wk_env tyenv_well_formed_add_ghost_var
-      by (simp add: tyenv_well_formed_TE_ConstLocals_irrelevant)
-  next
-    case False
-    hence ng: "ghost = NotGhost" by (cases ghost) simp_all
-    with rhs_rt_env have rhs_rt: "is_runtime_type env rhsTy" by simp
-    have wf_no_cn: "tyenv_well_formed (env \<lparr> TE_LocalVars := fmupd varName rhsTy (TE_LocalVars env),
-                                              TE_GhostLocals := fminus (TE_GhostLocals env) {|varName|} \<rparr>)"
-      using tyenv_well_formed_add_var[OF "7.prems"(2) rhs_wk_env rhs_rt] .
-    have env_rewrite: "?body_env =
-      (env \<lparr> TE_LocalVars := fmupd varName rhsTy (TE_LocalVars env),
-              TE_GhostLocals := fminus (TE_GhostLocals env) {|varName|} \<rparr>)
-      \<lparr> TE_ConstLocals := finsert varName (TE_ConstLocals env) \<rparr>"
-      using ng by simp
-    show ?thesis
-      using wf_no_cn tyenv_well_formed_TE_ConstLocals_irrelevant env_rewrite by simp
-  qed
+    by (rule tyenv_well_formed_declare_var[OF "7.prems"(2) rhs_wk_env rhs_rt_env])
 
   have td_wf_body: "elabenv_well_formed ?body_env elabEnv"
     using "7.prems"(3) elabenv_well_formed_cong_env[where env' = ?body_env and env = env]
@@ -2516,8 +2443,7 @@ next
 
   \<comment> \<open>body_env is well-formed (tyenv_well_formed does not read TE_ConstLocals)\<close>
   have wf_body_env: "tyenv_well_formed ?body_env"
-    by (rule tyenv_well_formed_TE_ConstLocals_irrelevant
-               [OF tyenv_well_formed_add_ghost_var[OF "8.prems"(2) varTy_wk]])
+    by (rule tyenv_well_formed_declare_ghost[OF "8.prems"(2) varTy_wk])
 
   \<comment> \<open>elabenv is well-formed w.r.t. body_env\<close>
   have td_wf_body: "elabenv_well_formed ?body_env elabEnv"
@@ -2558,8 +2484,7 @@ next
         nat_le_linear)
 
   have wf_body': "tyenv_well_formed ?env'_body"
-    by (rule tyenv_well_formed_TE_ConstLocals_irrelevant
-               [OF tyenv_well_formed_add_ghost_var[OF wf' varTy_wk']])
+    by (rule tyenv_well_formed_declare_ghost[OF wf' varTy_wk'])
 
   \<comment> \<open>bodySubst properties\<close>
   have bodySubst_dom_flex: "\<forall>n. n |\<in>| fmdom bodySubst \<longrightarrow> ?is_flex n"

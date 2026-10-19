@@ -37,119 +37,33 @@ lemma core_impure_call_type_fn_facts:
                                           (tmArgs ! i))
             \<and> (FI_Impure funInfo \<longrightarrow> ghost = NotGhost \<and> TE_FunctionImpure env)"
 proof -
-  from assms have unfolded:
-    "(case fmlookup (TE_Functions env) fnName of
-        None \<Rightarrow> None
-      | Some fi \<Rightarrow>
-          if length tyArgs \<noteq> length (FI_TyArgs fi) then None
-          else if \<not> list_all (is_well_kinded env) tyArgs then None
-          else if \<not> list_all is_complete_type tyArgs then None
-          else if ghost = NotGhost
-                  \<and> (\<not> list_all (is_runtime_type env) tyArgs
-                     \<or> FI_Ghost fi = Ghost) then None
-          else if FI_Impure fi
-                  \<and> (ghost = Ghost \<or> \<not> TE_FunctionImpure env) then None
-          else if length tmArgs \<noteq> length (FI_TmArgs fi) then None
-          else
-            let tySubst = fmap_of_list (zip (FI_TyArgs fi) tyArgs);
-                expectedArgTypes = map (\<lambda>(ty, _). apply_subst tySubst ty) (FI_TmArgs fi);
-                varOrRefs = map (\<lambda>(_, vor, _). vor) (FI_TmArgs fi);
-                argModes = map (\<lambda>(_, _, gh). param_mode ghost gh) (FI_TmArgs fi)
-            in if list_all2 (\<lambda>(tm, vor) (expectedTy, mode).
-                     case vor of
-                       Var \<Rightarrow>
-                         core_term_type env mode tm = Some expectedTy
-                     | Ref \<Rightarrow>
-                         is_writable_lvalue env tm
-                         \<and> ghost_lvalue_ok env mode tm
-                         \<and> core_term_type env mode tm = Some expectedTy)
-                   (zip tmArgs varOrRefs) (zip expectedArgTypes argModes)
-               then Some (apply_subst tySubst (FI_ReturnType fi))
-               else None) = Some ty"
-    unfolding core_impure_call_type_def by simp
-  from unfolded obtain fi where
+  from assms obtain fi where
     fi_lookup: "fmlookup (TE_Functions env) fnName = Some fi"
-    by (cases "fmlookup (TE_Functions env) fnName") auto
-  from unfolded fi_lookup have body:
-    "(if length tyArgs \<noteq> length (FI_TyArgs fi) then None
-      else if \<not> list_all (is_well_kinded env) tyArgs then None
-      else if \<not> list_all is_complete_type tyArgs then None
-      else if ghost = NotGhost
-              \<and> (\<not> list_all (is_runtime_type env) tyArgs
-                 \<or> FI_Ghost fi = Ghost) then None
-      else if FI_Impure fi
-              \<and> (ghost = Ghost \<or> \<not> TE_FunctionImpure env) then None
-      else if length tmArgs \<noteq> length (FI_TmArgs fi) then None
-      else
-        let tySubst = fmap_of_list (zip (FI_TyArgs fi) tyArgs);
-            expectedArgTypes = map (\<lambda>(ty, _). apply_subst tySubst ty) (FI_TmArgs fi);
-            varOrRefs = map (\<lambda>(_, vor, _). vor) (FI_TmArgs fi);
-            argModes = map (\<lambda>(_, _, gh). param_mode ghost gh) (FI_TmArgs fi)
-        in if list_all2 (\<lambda>(tm, vor) (expectedTy, mode).
-                 case vor of
-                   Var \<Rightarrow>
-                     core_term_type env mode tm = Some expectedTy
-                 | Ref \<Rightarrow>
-                     is_writable_lvalue env tm
-                     \<and> ghost_lvalue_ok env mode tm
-                     \<and> core_term_type env mode tm = Some expectedTy)
-               (zip tmArgs varOrRefs) (zip expectedArgTypes argModes)
-           then Some (apply_subst tySubst (FI_ReturnType fi))
-           else None) = Some ty"
-    by simp
-  have len_tyArgs: "length tyArgs = length (FI_TyArgs fi)"
-    using body by (metis option.distinct(1))
-  from body len_tyArgs have tyArgs_wk: "list_all (is_well_kinded env) tyArgs"
-    by (metis option.distinct(1))
-  from body len_tyArgs tyArgs_wk have tyArgs_cp: "list_all is_complete_type tyArgs"
-    by (metis option.distinct(1))
-  from body len_tyArgs tyArgs_wk tyArgs_cp have not_ghost_cond:
-    "\<not> (ghost = NotGhost
-        \<and> (\<not> list_all (is_runtime_type env) tyArgs
-           \<or> FI_Ghost fi = Ghost))"
-    by (metis option.distinct(1))
-  from body len_tyArgs tyArgs_wk tyArgs_cp not_ghost_cond have not_impure_cond:
-    "\<not> (FI_Impure fi \<and> (ghost = Ghost \<or> \<not> TE_FunctionImpure env))"
-    by (metis option.distinct(1))
-  from body len_tyArgs tyArgs_wk tyArgs_cp not_ghost_cond not_impure_cond have len_tmArgs:
-    "length tmArgs = length (FI_TmArgs fi)"
-    by (metis option.distinct(1))
-  from body len_tyArgs tyArgs_wk tyArgs_cp not_ghost_cond not_impure_cond len_tmArgs
-  have after_ifs:
-    "(let tySubst = fmap_of_list (zip (FI_TyArgs fi) tyArgs);
-          expectedArgTypes = map (\<lambda>(ty, _). apply_subst tySubst ty) (FI_TmArgs fi);
-          varOrRefs = map (\<lambda>(_, vor, _). vor) (FI_TmArgs fi);
-          argModes = map (\<lambda>(_, _, gh). param_mode ghost gh) (FI_TmArgs fi)
-      in if list_all2 (\<lambda>(tm, vor) (expectedTy, mode).
-               case vor of
-                 Var \<Rightarrow>
-                   core_term_type env mode tm = Some expectedTy
-               | Ref \<Rightarrow>
-                   is_writable_lvalue env tm
-                   \<and> ghost_lvalue_ok env mode tm
-                   \<and> core_term_type env mode tm = Some expectedTy)
-             (zip tmArgs varOrRefs) (zip expectedArgTypes argModes)
-         then Some (apply_subst tySubst (FI_ReturnType fi))
-         else None) = Some ty"
-    by auto
+    by (auto simp: core_impure_call_type_def split: option.splits)
   let ?tySubst = "fmap_of_list (zip (FI_TyArgs fi) tyArgs)"
   let ?vors = "map (\<lambda>(_, vor, _). vor) (FI_TmArgs fi)"
   let ?exps = "map (\<lambda>(ty, _). apply_subst ?tySubst ty) (FI_TmArgs fi)"
   let ?modes = "map (\<lambda>(_, _, gh). param_mode ghost gh) (FI_TmArgs fi)"
-  from after_ifs have argTms_l2_impure:
-    "list_all2 (\<lambda>(tm, vor) (expectedTy, mode).
-                  case vor of
-                    Var \<Rightarrow>
-                      core_term_type env mode tm = Some expectedTy
-                  | Ref \<Rightarrow>
-                      is_writable_lvalue env tm
-                      \<and> ghost_lvalue_ok env mode tm
-                      \<and> core_term_type env mode tm = Some expectedTy)
-               (zip tmArgs ?vors) (zip ?exps ?modes)"
-    by (simp add: Let_def split: if_splits)
-  from after_ifs have fn_ty_eq:
-    "ty = apply_subst ?tySubst (FI_ReturnType fi)"
-    by (simp add: Let_def split: if_splits)
+  from assms fi_lookup have
+    len_tyArgs: "length tyArgs = length (FI_TyArgs fi)" and
+    tyArgs_wk: "list_all (is_well_kinded env) tyArgs" and
+    tyArgs_cp: "list_all is_complete_type tyArgs" and
+    not_ghost_cond: "\<not> (ghost = NotGhost
+                        \<and> (\<not> list_all (is_runtime_type env) tyArgs \<or> FI_Ghost fi = Ghost))" and
+    not_impure_cond: "\<not> (FI_Impure fi \<and> (ghost = Ghost \<or> \<not> TE_FunctionImpure env))" and
+    len_tmArgs: "length tmArgs = length (FI_TmArgs fi)" and
+    argTms_l2_impure:
+      "list_all2 (\<lambda>(tm, vor) (expectedTy, mode).
+                    case vor of
+                      Var \<Rightarrow>
+                        core_term_type env mode tm = Some expectedTy
+                    | Ref \<Rightarrow>
+                        is_writable_lvalue env tm
+                        \<and> ghost_lvalue_ok env mode tm
+                        \<and> core_term_type env mode tm = Some expectedTy)
+                 (zip tmArgs ?vors) (zip ?exps ?modes)" and
+    fn_ty_eq: "ty = apply_subst ?tySubst (FI_ReturnType fi)"
+    by (auto simp: core_impure_call_type_def Let_def split: if_splits)
 
   \<comment> \<open>Per-index view of the impure check, with the i-th parameter destructured. \<close>
   have nth_check:
@@ -309,38 +223,12 @@ proof -
     ty_eq: "retTy = apply_subst (fmap_of_list (zip (FI_TyArgs funInfo) tyArgs))
                                 (FI_ReturnType funInfo)"
     by blast
-  \<comment> \<open>Well-kinded part: the declared return type is well-kinded under the module's
-      abstract types together with the function's type parameters, and the
-      (well-kinded) type args specialize it.\<close>
-  have abs_sub: "TE_AbstractTypes env |\<subseteq>| TE_TypeVars env"
-    using wf tyenv_well_formed_def tyenv_abstract_types_subset_def by blast
-  have "tyenv_fun_types_well_kinded env"
-    using wf tyenv_well_formed_def by blast
-  hence ret_wk: "is_well_kinded (env \<lparr> TE_TypeVars := TE_AbstractTypes env |\<union>| fset_of_list (FI_TyArgs funInfo) \<rparr>)
-                                (FI_ReturnType funInfo)"
-    using fn_lookup tyenv_fun_types_well_kinded_def by blast
-  have wk: "is_well_kinded env retTy"
-    using apply_subst_specializes_well_kinded[OF ret_wk tyargs_wk len_tyargs[symmetric] abs_sub] ty_eq by simp
-  \<comment> \<open>Runtime part (NotGhost only).\<close>
-  moreover have "ghost = NotGhost \<longrightarrow> is_runtime_type env retTy"
-  proof
-    assume ng: "ghost = NotGhost"
-    have "tyenv_fun_ghost_constraint env"
-      using wf tyenv_well_formed_def by blast
-    hence ret_rt: "is_runtime_type (env \<lparr> TE_TypeVars := TE_AbstractTypes env |\<union>| fset_of_list (FI_TyArgs funInfo),
-                                          TE_RuntimeTypeVars := (TE_AbstractTypes env |\<inter>| TE_RuntimeTypeVars env)
-                                                                 |\<union>| fset_of_list (FI_TyArgs funInfo) \<rparr>)
-                                  (FI_ReturnType funInfo)"
-      using fn_lookup not_ghost_fn[rule_format, OF ng] tyenv_fun_ghost_constraint_def Let_def
-      by (meson GhostOrNot.exhaust)
-    have fresh: "fset_of_list (FI_TyArgs funInfo) |\<inter>| TE_AbstractTypes env = {||}"
-      using wf fn_lookup unfolding tyenv_well_formed_def tyenv_fun_tyvars_fresh_def by blast
-    show "is_runtime_type env retTy"
-      using ty_eq apply_subst_specializes_runtime[OF ret_rt tyargs_rt[rule_format, OF ng]
-                                                     len_tyargs[symmetric] fresh]
-      by simp
-  qed
-  ultimately show ?thesis by blast
+  show ?thesis
+    unfolding ty_eq
+    using fun_return_type_specialized_well_kinded[OF wf fn_lookup len_tyargs tyargs_wk]
+          fun_return_type_specialized_runtime[OF wf fn_lookup len_tyargs]
+          tyargs_rt not_ghost_fn
+    by blast
 qed
 
 (* cast_result_type is preserved under adding type variables to the environment:
@@ -369,86 +257,23 @@ lemma core_impure_call_type_irrelevant_tyvar:
 proof -
   let ?env' = "env \<lparr> TE_TypeVars := TE_TypeVars env |\<union>| extraTV,
                      TE_RuntimeTypeVars := TE_RuntimeTypeVars env |\<union>| extraRT \<rparr>"
-  from core_impure_call_type_fn_facts[OF assms] obtain funInfo where
-    fi: "fmlookup (TE_Functions env) fnName = Some funInfo" and
-    len_ty: "length tyArgs = length (FI_TyArgs funInfo)" and
-    wk: "list_all (is_well_kinded env) tyArgs" and
-    cp: "list_all is_complete_type tyArgs" and
-    rt: "ghost = NotGhost \<longrightarrow> list_all (is_runtime_type env) tyArgs" and
-    fn_ng: "ghost = NotGhost \<longrightarrow> FI_Ghost funInfo \<noteq> Ghost" and
-    len_tm: "length tmArgs = length (FI_TmArgs funInfo)" and
-    ty_eq: "ty = apply_subst (fmap_of_list (zip (FI_TyArgs funInfo) tyArgs)) (FI_ReturnType funInfo)" and
-    l2_pure: "list_all2 (\<lambda>tm (expectedTy, mode). core_term_type env mode tm = Some expectedTy) tmArgs
-                (zip (map (\<lambda>(ty, _). apply_subst (fmap_of_list (zip (FI_TyArgs funInfo) tyArgs)) ty)
-                          (FI_TmArgs funInfo))
-                     (map (\<lambda>(_, _, gh). param_mode ghost gh) (FI_TmArgs funInfo)))" and
-    ref_lv: "\<forall>i < length tmArgs.
-                fst (snd (FI_TmArgs funInfo ! i)) = Ref
-                  \<longrightarrow> is_writable_lvalue env (tmArgs ! i)
-                      \<and> ghost_lvalue_ok env (param_mode ghost (snd (snd (FI_TmArgs funInfo ! i))))
-                                         (tmArgs ! i)" and
-    imp: "FI_Impure funInfo \<longrightarrow> ghost = NotGhost \<and> TE_FunctionImpure env"
-    by blast
-
-  \<comment> \<open>Transfer the embedded checks to the extended environment.\<close>
-  have fns_eq: "TE_Functions ?env' = TE_Functions env" by simp
-  have wk': "list_all (is_well_kinded ?env') tyArgs"
-    using wk is_well_kinded_extend_tyvars by (fastforce simp: list_all_iff)
-  have rt': "ghost = NotGhost \<longrightarrow> list_all (is_runtime_type ?env') tyArgs"
-    using rt is_runtime_type_extend_runtime_tyvars by (fastforce simp: list_all_iff)
-  let ?tySubst = "fmap_of_list (zip (FI_TyArgs funInfo) tyArgs)"
-  let ?exps = "map (\<lambda>(ty, _). apply_subst ?tySubst ty) (FI_TmArgs funInfo)"
-  let ?modes = "map (\<lambda>(_, _, gh). param_mode ghost gh) (FI_TmArgs funInfo)"
-  have l2_pure': "list_all2 (\<lambda>tm (expectedTy, mode).
-                      core_term_type ?env' mode tm = Some expectedTy) tmArgs (zip ?exps ?modes)"
-    by (rule list_all2_case_prod_mono[OF l2_pure]) (use core_term_type_irrelevant_tyvar in blast)
-
-  \<comment> \<open>Rebuild the full per-argument (Var/Ref) check for the extended env, by
-      proving each index from the pure list and the Ref-lvalue witnesses.\<close>
-  let ?P' = "\<lambda>(tm, vor) (expectedTy, mode).
-                 case vor of
-                   Var \<Rightarrow> core_term_type ?env' mode tm = Some expectedTy
-                 | Ref \<Rightarrow> is_writable_lvalue ?env' tm
-                          \<and> ghost_lvalue_ok ?env' mode tm
-                          \<and> core_term_type ?env' mode tm = Some expectedTy"
-  let ?zts = "zip tmArgs (map (\<lambda>(_, vor, _). vor) (FI_TmArgs funInfo))"
-  have len_zts: "length ?zts = length (zip ?exps ?modes)" using len_tm by simp
-  have nth_pred: "\<And>i. i < length ?zts \<Longrightarrow> ?P' (?zts ! i) (zip ?exps ?modes ! i)"
-  proof -
-    fix i assume i_lt: "i < length ?zts"
-    hence i_lt_tm: "i < length tmArgs" using len_tm by simp
-    with len_tm have i_lt_fi: "i < length (FI_TmArgs funInfo)" by simp
-    obtain ti vor gh where fi_arg: "FI_TmArgs funInfo ! i = (ti, vor, gh)"
-      by (cases "FI_TmArgs funInfo ! i") auto
-    have zip_nth: "?zts ! i = (tmArgs ! i, vor)"
-      using i_lt_tm i_lt_fi fi_arg by simp
-    have exp_nth: "zip ?exps ?modes ! i = (apply_subst ?tySubst ti, param_mode ghost gh)"
-      using i_lt_fi fi_arg by simp
-    have pure_i: "core_term_type ?env' (param_mode ghost gh) (tmArgs ! i)
-                    = Some (apply_subst ?tySubst ti)"
-      using list_all2_case_prod_nthD[OF l2_pure' i_lt_tm] exp_nth by simp
-    show "?P' (?zts ! i) (zip ?exps ?modes ! i)"
-    proof (cases vor)
-      case Var
-      with zip_nth exp_nth pure_i show ?thesis by simp
-    next
-      case Ref
-      have "is_writable_lvalue env (tmArgs ! i)"
-        using ref_lv i_lt_tm fi_arg Ref by simp
-      hence writ': "is_writable_lvalue ?env' (tmArgs ! i)" by simp
-      have "ghost_lvalue_ok env (param_mode ghost gh) (tmArgs ! i)"
-        using ref_lv i_lt_tm fi_arg Ref by auto
-      hence glv': "ghost_lvalue_ok ?env' (param_mode ghost gh) (tmArgs ! i)" by simp
-      with Ref zip_nth exp_nth writ' pure_i show ?thesis by simp
-    qed
-  qed
-  have l2_full': "list_all2 ?P' ?zts (zip ?exps ?modes)"
-    using len_zts nth_pred by (simp add: list_all2_conv_all_nth)
-
-  show ?thesis
+  \<comment> \<open>The per-argument check, parameterised by the env it runs in.\<close>
+  let ?P = "\<lambda>e. \<lambda>(tm, vor) (expectedTy, mode).
+               case vor of
+                 Var \<Rightarrow> core_term_type e mode tm = Some expectedTy
+               | Ref \<Rightarrow> is_writable_lvalue e tm
+                        \<and> ghost_lvalue_ok e mode tm
+                        \<and> core_term_type e mode tm = Some expectedTy"
+  have args_mono: "list_all2 (?P env) xs ys \<Longrightarrow> list_all2 (?P ?env') xs ys" for xs ys
+    by (erule list_all2_mono)
+       (auto split: VarOrRef.splits prod.splits intro: core_term_type_irrelevant_tyvar)
+  have wk_mono: "list_all (is_well_kinded env) ts \<Longrightarrow> list_all (is_well_kinded ?env') ts" for ts
+    using is_well_kinded_extend_tyvars by (fastforce simp: list_all_iff)
+  have rt_mono: "list_all (is_runtime_type env) ts \<Longrightarrow> list_all (is_runtime_type ?env') ts" for ts
+    using is_runtime_type_extend_runtime_tyvars by (fastforce simp: list_all_iff)
+  from assms show ?thesis
     unfolding core_impure_call_type_def
-    using fi wk' cp rt' fn_ng imp len_ty len_tm l2_full' ty_eq
-    by (auto simp: fns_eq Let_def)
+    by (auto simp: Let_def wk_mono rt_mono args_mono split: option.splits if_splits)
 qed
 
 
@@ -459,105 +284,11 @@ qed
 lemma core_statement_type_fixed_eq:
   assumes "core_statement_type env ghost stmt = Some env'"
   shows "tyenv_fixed_eq env env'"
-using assms proof (cases stmt)
-  case (CoreStmt_VarDecl declGhost varName varOrRef varTy initTm)
-  show ?thesis proof (cases varOrRef)
-    case Var
-    from assms CoreStmt_VarDecl Var have env'_eq:
-      "env' = env \<lparr> TE_LocalVars := fmupd varName varTy (TE_LocalVars env),
-                    TE_GhostLocals := (if declGhost = Ghost
-                                     then finsert varName (TE_GhostLocals env)
-                                     else fminus (TE_GhostLocals env) {|varName|}),
-                    TE_ConstLocals := fminus (TE_ConstLocals env) {|varName|} \<rparr>"
-      by (auto split: if_splits)
-    show ?thesis unfolding env'_eq tyenv_fixed_eq_def by simp
-  next
-    case Ref
-    from assms CoreStmt_VarDecl Ref have env'_eq:
-      "env' = env \<lparr> TE_LocalVars := fmupd varName varTy (TE_LocalVars env),
-                    TE_GhostLocals := (if declGhost = Ghost
-                                     then finsert varName (TE_GhostLocals env)
-                                     else fminus (TE_GhostLocals env) {|varName|}),
-                    TE_ConstLocals := (if is_writable_lvalue env initTm
-                                      then fminus (TE_ConstLocals env) {|varName|}
-                                      else finsert varName (TE_ConstLocals env)) \<rparr>"
-      by (auto split: if_splits)
-    show ?thesis unfolding env'_eq tyenv_fixed_eq_def by simp
-  qed
-next
-  case (CoreStmt_Assign assignGhost lhsTm rhsTm)
-  with assms have "env' = env" by (auto split: if_splits option.splits)
-  thus ?thesis by (simp add: tyenv_fixed_eq_refl)
-next
-  case (CoreStmt_AssignCall assignGhost lhsTm castOpt fnName tyArgs argTms)
-  with assms have "env' = env" by (auto split: if_splits option.splits)
-  thus ?thesis by (simp add: tyenv_fixed_eq_refl)
-next
-  case (CoreStmt_VarDeclCall declGhost varName varTy castOpt fnName tyArgs argTms)
-  from assms CoreStmt_VarDeclCall have env'_eq:
-    "env' = env \<lparr> TE_LocalVars := fmupd varName varTy (TE_LocalVars env),
-                  TE_GhostLocals := (if declGhost = Ghost
-                                   then finsert varName (TE_GhostLocals env)
-                                   else fminus (TE_GhostLocals env) {|varName|}),
-                  TE_ConstLocals := fminus (TE_ConstLocals env) {|varName|} \<rparr>"
-    by (auto split: if_splits option.splits)
-  show ?thesis unfolding env'_eq tyenv_fixed_eq_def by simp
-next
-  case (CoreStmt_Fix varName varTy)
-  from assms CoreStmt_Fix obtain bodyTm where
-    "env' = env \<lparr> TE_LocalVars   := fmupd varName varTy (TE_LocalVars env),
-                   TE_GhostLocals := finsert varName (TE_GhostLocals env),
-                   TE_ConstLocals := finsert varName (TE_ConstLocals env),
-                   TE_ProofGoal   := Some bodyTm \<rparr>"
-    by (auto split: option.splits CoreTerm.splits Quantifier.splits if_splits)
-  thus ?thesis unfolding tyenv_fixed_eq_def by simp
-next
-  case (CoreStmt_Obtain varName varTy condTm)
-  from assms CoreStmt_Obtain have env'_eq:
-    "env' = env \<lparr> TE_LocalVars := fmupd varName varTy (TE_LocalVars env),
-                  TE_GhostLocals := finsert varName (TE_GhostLocals env),
-                  TE_ConstLocals := fminus (TE_ConstLocals env) {|varName|} \<rparr>"
-    by (auto simp: Let_def split: if_splits)
-  show ?thesis unfolding env'_eq tyenv_fixed_eq_def by simp
-next
-  case (CoreStmt_Use witnessTm)
-  from assms CoreStmt_Use obtain bodyTm where
-    "env' = env \<lparr> TE_ProofGoal := Some bodyTm \<rparr>"
-    by (auto split: option.splits CoreTerm.splits Quantifier.splits if_splits)
-  thus ?thesis unfolding tyenv_fixed_eq_def by simp
-next
-  case (CoreStmt_Swap _ _ _)
-  with assms have "env' = env" by (auto split: if_splits option.splits)
-  thus ?thesis by (simp add: tyenv_fixed_eq_refl)
-next
-  case (CoreStmt_Return _)
-  with assms have "env' = env" by (auto split: if_splits)
-  thus ?thesis by (simp add: tyenv_fixed_eq_refl)
-next
-  case (CoreStmt_Assert _ _)
-  with assms have "env' = env" by (auto simp: Let_def split: if_splits option.splits)
-  thus ?thesis by (simp add: tyenv_fixed_eq_refl)
-next
-  case (CoreStmt_Assume _)
-  with assms have "env' = env" by (auto split: if_splits)
-  thus ?thesis by (simp add: tyenv_fixed_eq_refl)
-next
-  case (CoreStmt_While _ _ _ _ _)
-  with assms have "env' = env" by (auto split: if_splits option.splits CoreType.splits)
-  thus ?thesis by (simp add: tyenv_fixed_eq_refl)
-next
-  case (CoreStmt_Match _ _ _)
-  with assms have "env' = env" by (auto simp: Let_def split: if_splits option.splits)
-  thus ?thesis by (simp add: tyenv_fixed_eq_refl)
-next
-  case (CoreStmt_ShowHide _ _)
-  with assms have "env' = env" by (simp split: if_splits)
-  thus ?thesis by (simp add: tyenv_fixed_eq_refl)
-next
-  case (CoreStmt_Block _)
-  with assms have "env' = env" by (auto split: if_splits option.splits)
-  thus ?thesis by (simp add: tyenv_fixed_eq_refl)
-qed
+  using assms
+  by (cases "(env, ghost, stmt)" rule: core_statement_type.cases)
+     (auto simp: tyenv_fixed_eq_def Let_def
+           split: VarOrRef.splits option.splits if_splits CoreType.splits
+                  CoreTerm.splits Quantifier.splits)
 
 lemma core_statement_list_type_fixed_eq:
   assumes "core_statement_list_type env ghost stmts = Some env'"
@@ -603,8 +334,7 @@ lemma core_statement_list_type_append:
 (* ========================================================================== *)
 
 (* If there is no proof goal, typechecking a statement or statement-list does not
-   create one (the only statement that creates a proof goal is Assert, but the goal is
-   scoped only to the proof-block, so does not escape to statements below the Assert. *)
+   create one. *)
 lemma core_statement_type_preserves_proof_goal_none:
   assumes "core_statement_type env ghost stmt = Some env'"
     and "TE_ProofGoal env = None"
@@ -682,106 +412,43 @@ lemma core_statement_type_preserves_well_formed:
   shows "tyenv_well_formed env'"
 using assms proof (cases stmt)
   case (CoreStmt_VarDecl declGhost varName varOrRef varTy initTm)
+  \<comment> \<open>Both forms declare a local of type varTy; they differ only in TE_ConstLocals.\<close>
   show ?thesis proof (cases varOrRef)
     case Var
-    from assms CoreStmt_VarDecl Var obtain
+    from assms CoreStmt_VarDecl Var have
       wk: "is_well_kinded env varTy" and
-      rt: "declGhost = NotGhost \<longrightarrow> is_runtime_type env varTy"
+      rt: "declGhost = NotGhost \<longrightarrow> is_runtime_type env varTy" and
+      env'_eq: "env' = env \<lparr> TE_LocalVars := fmupd varName varTy (TE_LocalVars env),
+                             TE_GhostLocals := (if declGhost = Ghost
+                                              then finsert varName (TE_GhostLocals env)
+                                              else fminus (TE_GhostLocals env) {|varName|}),
+                             TE_ConstLocals := fminus (TE_ConstLocals env) {|varName|} \<rparr>"
       by (auto split: if_splits)
-    show ?thesis proof (cases declGhost)
-      case NotGhost
-      from rt NotGhost have "is_runtime_type env varTy" by simp
-      from tyenv_well_formed_add_var[OF assms(2) wk this]
-      have wf': "tyenv_well_formed (env \<lparr> TE_LocalVars := fmupd varName varTy (TE_LocalVars env),
-                                          TE_GhostLocals := fminus (TE_GhostLocals env) {|varName|} \<rparr>)" .
-      from assms CoreStmt_VarDecl Var NotGhost have env'_eq:
-        "env' = env \<lparr> TE_LocalVars := fmupd varName varTy (TE_LocalVars env),
-                      TE_GhostLocals := fminus (TE_GhostLocals env) {|varName|},
-                      TE_ConstLocals := fminus (TE_ConstLocals env) {|varName|} \<rparr>"
-        by (auto split: if_splits)
-      from tyenv_well_formed_TE_ConstLocals_irrelevant[OF wf']
-      have "tyenv_well_formed (env \<lparr> TE_LocalVars := fmupd varName varTy (TE_LocalVars env),
-                                     TE_GhostLocals := fminus (TE_GhostLocals env) {|varName|} \<rparr>
-                                  \<lparr> TE_ConstLocals := fminus (TE_ConstLocals env) {|varName|} \<rparr>)" .
-      hence "tyenv_well_formed env'" using env'_eq by simp
-      thus ?thesis .
-    next
-      case Ghost
-      from tyenv_well_formed_add_ghost_var[OF assms(2) wk]
-      have wf': "tyenv_well_formed (env \<lparr> TE_LocalVars := fmupd varName varTy (TE_LocalVars env),
-                                          TE_GhostLocals := finsert varName (TE_GhostLocals env) \<rparr>)" .
-      from tyenv_well_formed_TE_ConstLocals_irrelevant[OF wf']
-      have "tyenv_well_formed (env \<lparr> TE_LocalVars := fmupd varName varTy (TE_LocalVars env),
-                                     TE_GhostLocals := finsert varName (TE_GhostLocals env) \<rparr>
-                                  \<lparr> TE_ConstLocals := fminus (TE_ConstLocals env) {|varName|} \<rparr>)" .
-      with assms CoreStmt_VarDecl Var Ghost show ?thesis
-        by (auto split: if_splits)
-    qed
+    show ?thesis unfolding env'_eq
+      by (rule tyenv_well_formed_declare_var[OF assms(2) wk rt])
   next
     case Ref
-    from assms CoreStmt_VarDecl Ref obtain
+    from assms CoreStmt_VarDecl Ref have
       wk: "is_well_kinded env varTy" and
-      rt: "declGhost = NotGhost \<longrightarrow> is_runtime_type env varTy"
+      rt: "declGhost = NotGhost \<longrightarrow> is_runtime_type env varTy" and
+      env'_eq: "env' = env \<lparr> TE_LocalVars := fmupd varName varTy (TE_LocalVars env),
+                             TE_GhostLocals := (if declGhost = Ghost
+                                              then finsert varName (TE_GhostLocals env)
+                                              else fminus (TE_GhostLocals env) {|varName|}),
+                             TE_ConstLocals := (if is_writable_lvalue env initTm
+                                               then fminus (TE_ConstLocals env) {|varName|}
+                                               else finsert varName (TE_ConstLocals env)) \<rparr>"
       by (auto split: if_splits)
-    show ?thesis proof (cases declGhost)
-      case NotGhost
-      from rt NotGhost have "is_runtime_type env varTy" by simp
-      from tyenv_well_formed_add_var[OF assms(2) wk this]
-      have wf': "tyenv_well_formed (env \<lparr> TE_LocalVars := fmupd varName varTy (TE_LocalVars env),
-                                          TE_GhostLocals := fminus (TE_GhostLocals env) {|varName|} \<rparr>)" .
-      from assms CoreStmt_VarDecl Ref NotGhost have env'_eq:
-        "env' = env \<lparr> TE_LocalVars := fmupd varName varTy (TE_LocalVars env),
-                      TE_GhostLocals := fminus (TE_GhostLocals env) {|varName|},
-                      TE_ConstLocals := (if is_writable_lvalue env initTm
-                                        then fminus (TE_ConstLocals env) {|varName|}
-                                        else finsert varName (TE_ConstLocals env)) \<rparr>"
-        by (auto split: if_splits)
-      from tyenv_well_formed_TE_ConstLocals_irrelevant[OF wf']
-      have "tyenv_well_formed (env \<lparr> TE_LocalVars := fmupd varName varTy (TE_LocalVars env),
-                                     TE_GhostLocals := fminus (TE_GhostLocals env) {|varName|} \<rparr>
-                                  \<lparr> TE_ConstLocals := (if is_writable_lvalue env initTm
-                                                      then fminus (TE_ConstLocals env) {|varName|}
-                                                      else finsert varName (TE_ConstLocals env)) \<rparr>)" .
-      hence "tyenv_well_formed env'" using env'_eq by simp
-      thus ?thesis .
-    next
-      case Ghost
-      from tyenv_well_formed_add_ghost_var[OF assms(2) wk]
-      have wf': "tyenv_well_formed (env \<lparr> TE_LocalVars := fmupd varName varTy (TE_LocalVars env),
-                                          TE_GhostLocals := finsert varName (TE_GhostLocals env) \<rparr>)" .
-      from assms CoreStmt_VarDecl Ref Ghost have env'_eq:
-        "env' = env \<lparr> TE_LocalVars := fmupd varName varTy (TE_LocalVars env),
-                      TE_GhostLocals := finsert varName (TE_GhostLocals env),
-                      TE_ConstLocals := (if is_writable_lvalue env initTm
-                                        then fminus (TE_ConstLocals env) {|varName|}
-                                        else finsert varName (TE_ConstLocals env)) \<rparr>"
-        by (auto split: if_splits)
-      from tyenv_well_formed_TE_ConstLocals_irrelevant[OF wf']
-      have "tyenv_well_formed (env \<lparr> TE_LocalVars := fmupd varName varTy (TE_LocalVars env),
-                                     TE_GhostLocals := finsert varName (TE_GhostLocals env) \<rparr>
-                                  \<lparr> TE_ConstLocals := (if is_writable_lvalue env initTm
-                                                      then fminus (TE_ConstLocals env) {|varName|}
-                                                      else finsert varName (TE_ConstLocals env)) \<rparr>)" .
-      hence "tyenv_well_formed env'" using env'_eq by simp
-      thus ?thesis .
-    qed
+    show ?thesis unfolding env'_eq
+      by (rule tyenv_well_formed_declare_var[OF assms(2) wk rt])
   qed
-next
-  case (CoreStmt_Assign assignGhost lhsTm rhsTm)
-  with assms show ?thesis by (auto split: if_splits option.splits)
-next
-  case (CoreStmt_AssignCall assignGhost lhsTm castOpt fnName tyArgs argTms)
-  with assms have "env' = env" by (auto split: if_splits option.splits)
-  with assms show ?thesis by simp
 next
   case (CoreStmt_VarDeclCall declGhost varName varTy castOpt fnName tyArgs argTms)
   \<comment> \<open>The variable type is explicit and (by the rule) well-kinded, and runtime in
       NotGhost mode; env extends like VarDecl(Var).\<close>
-  from assms CoreStmt_VarDeclCall obtain retTy where
+  from assms CoreStmt_VarDeclCall have
     wk: "is_well_kinded env varTy" and
     rt: "declGhost = NotGhost \<longrightarrow> is_runtime_type env varTy" and
-    ct: "core_impure_call_type env declGhost fnName tyArgs argTms = Some retTy" and
-    cast: "cast_result_type env declGhost retTy castOpt = Some varTy" and
     env'_eq:
       "env' = env \<lparr> TE_LocalVars := fmupd varName varTy (TE_LocalVars env),
                     TE_GhostLocals := (if declGhost = Ghost
@@ -789,23 +456,8 @@ next
                                      else fminus (TE_GhostLocals env) {|varName|}),
                     TE_ConstLocals := fminus (TE_ConstLocals env) {|varName|} \<rparr>"
     by (auto split: if_splits option.splits)
-  show ?thesis
-  proof (cases declGhost)
-    case NotGhost
-    from rt NotGhost have rt': "is_runtime_type env varTy" by simp
-    from tyenv_well_formed_add_var[OF assms(2) wk rt']
-    have wf': "tyenv_well_formed (env \<lparr> TE_LocalVars := fmupd varName varTy (TE_LocalVars env),
-                                        TE_GhostLocals := fminus (TE_GhostLocals env) {|varName|} \<rparr>)" .
-    from tyenv_well_formed_TE_ConstLocals_irrelevant[OF wf'] NotGhost show ?thesis
-      by (simp add: env'_eq)
-  next
-    case Ghost
-    from tyenv_well_formed_add_ghost_var[OF assms(2) wk]
-    have wf': "tyenv_well_formed (env \<lparr> TE_LocalVars := fmupd varName varTy (TE_LocalVars env),
-                                        TE_GhostLocals := finsert varName (TE_GhostLocals env) \<rparr>)" .
-    from tyenv_well_formed_TE_ConstLocals_irrelevant[OF wf'] Ghost show ?thesis
-      by (simp add: env'_eq)
-  qed
+  show ?thesis unfolding env'_eq
+    by (rule tyenv_well_formed_declare_var[OF assms(2) wk rt])
 next
   case (CoreStmt_Fix varName varTy)
   from assms CoreStmt_Fix obtain bodyTm where
@@ -815,28 +467,17 @@ next
                    TE_ConstLocals := finsert varName (TE_ConstLocals env),
                    TE_ProofGoal   := Some bodyTm \<rparr>"
     by (auto split: option.splits CoreTerm.splits Quantifier.splits if_splits)
-  from tyenv_well_formed_add_ghost_var[OF assms(2) wk]
-  have "tyenv_well_formed (env \<lparr> TE_LocalVars := fmupd varName varTy (TE_LocalVars env),
-                                  TE_GhostLocals := finsert varName (TE_GhostLocals env) \<rparr>)" .
-  from tyenv_well_formed_TE_ProofGoal_irrelevant[OF
-        tyenv_well_formed_TE_ConstLocals_irrelevant[OF this]]
-  have "tyenv_well_formed (env \<lparr> TE_LocalVars := fmupd varName varTy (TE_LocalVars env),
-                                 TE_GhostLocals := finsert varName (TE_GhostLocals env) \<rparr>
-                              \<lparr> TE_ConstLocals := finsert varName (TE_ConstLocals env) \<rparr>
-                              \<lparr> TE_ProofGoal := Some bodyTm \<rparr>)" .
-  thus ?thesis using env'_eq by simp
+  show ?thesis unfolding env'_eq
+    by (rule tyenv_well_formed_TE_ProofGoal_irrelevant
+               [OF tyenv_well_formed_declare_ghost[OF assms(2) wk]])
 next
   case (CoreStmt_Obtain varName varTy condTm)
-  from assms CoreStmt_Obtain obtain
-    wk: "is_well_kinded env varTy"
+  from assms CoreStmt_Obtain have wk: "is_well_kinded env varTy"
     by (auto simp: Let_def split: if_splits)
-  from tyenv_well_formed_add_ghost_var[OF assms(2) wk]
-  have wf': "tyenv_well_formed (env \<lparr> TE_LocalVars := fmupd varName varTy (TE_LocalVars env),
-                                      TE_GhostLocals := finsert varName (TE_GhostLocals env) \<rparr>)" .
-  from tyenv_well_formed_TE_ConstLocals_irrelevant[OF wf']
+  from tyenv_well_formed_declare_ghost[OF assms(2) wk]
   have "tyenv_well_formed (env \<lparr> TE_LocalVars := fmupd varName varTy (TE_LocalVars env),
-                                 TE_GhostLocals := finsert varName (TE_GhostLocals env) \<rparr>
-                              \<lparr> TE_ConstLocals := fminus (TE_ConstLocals env) {|varName|} \<rparr>)" .
+                                 TE_GhostLocals := finsert varName (TE_GhostLocals env),
+                                 TE_ConstLocals := fminus (TE_ConstLocals env) {|varName|} \<rparr>)" .
   with assms CoreStmt_Obtain show ?thesis
     by (auto simp: Let_def split: if_splits)
 next
@@ -846,39 +487,8 @@ next
     by (auto split: option.splits CoreTerm.splits Quantifier.splits if_splits)
   from tyenv_well_formed_TE_ProofGoal_irrelevant[OF assms(2)]
   show ?thesis unfolding env'_eq .
-next
-  case (CoreStmt_Swap _ _ _)
-  with assms have "env' = env" by (auto split: if_splits option.splits)
-  with assms show ?thesis by simp
-next
-  case (CoreStmt_Return _)
-  with assms have "env' = env" by (auto split: if_splits)
-  with assms show ?thesis by simp
-next
-  case (CoreStmt_Assert _ _)
-  with assms have "env' = env" by (auto simp: Let_def split: if_splits option.splits)
-  with assms show ?thesis by simp
-next
-  case (CoreStmt_Assume _)
-  with assms have "env' = env" by (auto split: if_splits)
-  with assms show ?thesis by simp
-next
-  case (CoreStmt_While _ _ _ _ _)
-  with assms have "env' = env" by (auto split: if_splits option.splits CoreType.splits)
-  with assms show ?thesis by simp
-next
-  case (CoreStmt_Match _ _ _)
-  with assms have "env' = env" by (auto simp: Let_def split: if_splits option.splits)
-  with assms show ?thesis by simp
-next
-  case (CoreStmt_ShowHide _ _)
-  with assms have "env' = env" by (simp split: if_splits)
-  with assms show ?thesis by simp
-next
-  case (CoreStmt_Block _)
-  with assms have "env' = env" by (auto split: if_splits option.splits)
-  with assms show ?thesis by simp
-qed
+  \<comment> \<open>Every other statement leaves the env unchanged.\<close>
+qed (use assms in \<open>auto simp: Let_def split: if_splits option.splits CoreType.splits\<close>)
 
 (* core_statement_list_type preserves tyenv_well_formed *)
 lemma core_statement_list_type_preserves_well_formed:
@@ -908,9 +518,9 @@ qed
    core_statement_type accepts, and the resulting environment is the original
    result with the extra type variables added. *)
 
-(* This mirrors core_term_type_irrelevant_tyvar (CoreTypecheck.thy). The variant
-   phrased with extend_env_with_tyvars is in ExtendEnvWithTyvars.thy (which
-   imports this theory. *)
+(* This mirrors core_term_type_irrelevant_tyvar (CoreTypecheckLemmas.thy). The
+   variant phrased with extend_env_with_tyvars is in ExtendEnvWithTyvars.thy
+   (which imports this theory). *)
 
 lemma has_valid_decreases_type_irrelevant_tyvar:
   assumes "has_valid_decreases_type env decr"

@@ -466,14 +466,6 @@ qed
 
 section \<open>Arm patterns compatible: the main type-preservation lemma\<close>
 
-lemma list_all2_nth:
-  "list_all2 P xs ys \<Longrightarrow> c < length xs \<Longrightarrow> P (xs ! c) (ys ! c)"
-  by (simp add: list_all2_conv_all_nth)
-
-lemma list_all2_length:
-  "list_all2 P xs ys \<Longrightarrow> length xs = length ys"
-  by (simp add: list_all2_conv_all_nth)
-
 
 subsection \<open>Column-type lookup\<close>
 
@@ -500,7 +492,7 @@ proof -
     len: "length ps = length colTys" and
     pcs: "list_all2 (pattern_compatible env) ps colTys"
     by (auto simp: list_all_iff)
-  from list_all2_nth[OF pcs] assms(3) len
+  from list_all2_nthD[OF pcs] assms(3) len
     have "pattern_compatible env (ps ! c) (colTys ! c)" by simp
   with pc show ?thesis by simp
 qed
@@ -524,7 +516,7 @@ proof -
     len: "length ps = length colTys" and
     pcs: "list_all2 (pattern_compatible env) ps colTys"
     by (auto simp: list_all_iff)
-  from list_all2_nth[OF pcs] assms(3) len
+  from list_all2_nthD[OF pcs] assms(3) len
     have "pattern_compatible env (ps ! c) (colTys ! c)" by simp
   with pc show ?thesis by simp
 qed
@@ -551,7 +543,7 @@ proof -
     len: "length ps = length colTys" and
     pcs: "list_all2 (pattern_compatible env) ps colTys"
     by (auto simp: list_all_iff)
-  from list_all2_nth[OF pcs] assms(3) len
+  from list_all2_nthD[OF pcs] assms(3) len
     have pc: "pattern_compatible env (ps ! c) (colTys ! c)" by simp
   from pc pc_eq have
     "pattern_compatible env (CorePat_Variant h p) (colTys ! c)" by simp
@@ -587,7 +579,7 @@ proof -
     len: "length ps0 = length colTys" and
     pcs: "list_all2 (pattern_compatible env) ps0 colTys"
     by (auto simp: list_all_iff)
-  from list_all2_nth[OF pcs] c_lt len
+  from list_all2_nthD[OF pcs] c_lt len
     have "pattern_compatible env (ps0 ! c) (colTys ! c)" by simp
   with head_rec have
     "pattern_compatible env (CorePat_Record pflds) (colTys ! c)" by simp
@@ -702,7 +694,7 @@ lemma specialise_row_variant_inv:
          \<and> list_all2 (pattern_compatible env) (fst r') colTys'"
 proof -
   obtain ps body where r_split: "r = (ps, body)" by (cases r) auto
-  from list_all2_nth[OF assms(3)] assms(4) assms(2) r_split
+  from list_all2_nthD[OF assms(3)] assms(4) assms(2) r_split
     have pc_at_c: "pattern_compatible env (ps ! c) (colTys ! c)" by simp
   from assms(1) r_split
   consider
@@ -760,7 +752,7 @@ lemma expand_record_row_inv:
          \<and> list_all2 (pattern_compatible env) (fst r') colTys'"
 proof -
   obtain ps body where r_split: "r = (ps, body)" by (cases r) auto
-  from list_all2_nth[OF assms(2)] assms(3) assms(1) r_split
+  from list_all2_nthD[OF assms(2)] assms(3) assms(1) r_split
     have pc_at_c: "pattern_compatible env (ps ! c) (colTys ! c)" by simp
   show ?thesis
   proof (cases "ps ! c")
@@ -1002,7 +994,7 @@ proof -
        length ps = length colTys
      \<and> list_all2 (pattern_compatible env) ps colTys) rows"
     unfolding matrix_inv_def by auto
-  from list_all2_nth[OF sc_pc] assms(2) len
+  from list_all2_nthD[OF sc_pc] assms(2) len
     have sc_at_c: "core_term_type env g (scruts ! c) = Some (colTys ! c)" by simp
   with assms(3) have sc_at_c': "core_term_type env g (scruts ! c) = Some (CoreTy_Datatype dtName tyArgs)"
     by simp
@@ -1067,7 +1059,7 @@ proof -
        length ps = length colTys
      \<and> list_all2 (pattern_compatible env) ps colTys) rows"
     unfolding matrix_inv_def by auto
-  from list_all2_nth[OF sc_pc] assms(2) len
+  from list_all2_nthD[OF sc_pc] assms(2) len
     have sc_at_c: "core_term_type env g (scruts ! c) = Some (colTys ! c)" by simp
   with assms(3) have sc_at_c': "core_term_type env g (scruts ! c) = Some (CoreTy_Record fldTys)"
     by simp
@@ -1191,7 +1183,7 @@ proof (induction m arbitrary: colTys rule: compile_matrix.induct)
          length ps = length colTys
        \<and> list_all2 (pattern_compatible env) ps colTys) rows"
       unfolding matrix_inv_def by simp
-    from list_all2_nth[OF sc_pc] c_lt len_scruts
+    from list_all2_nthD[OF sc_pc] c_lt len_scruts
       have sc_at_c: "core_term_type env g (scruts ! c) = Some (colTys ! c)" by simp
     show ?thesis
     proof (cases "head_kind_of (hd ?nw_col_pats)")
@@ -1367,7 +1359,7 @@ proof (induction m arbitrary: colTys rule: compile_matrix.induct)
         from rows_inv r0_in r0_eq have
           ps0_pcs: "list_all2 (pattern_compatible env) ps0 colTys"
           by (auto simp: list_all_iff)
-        from list_all2_nth[OF ps0_pcs] c_lt
+        from list_all2_nthD[OF ps0_pcs] c_lt
         have ps0_at_c_pc: "pattern_compatible env (ps0 ! c) (colTys ! c)"
           using rows_inv r0_in r0_eq by (auto simp: list_all_iff)
         with ps0_c_eq have

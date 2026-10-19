@@ -1,5 +1,6 @@
 theory ConstFoldCorrect
   imports ConstFold "../core/CoreModuleTypecheck" "../interpreter/TypeSoundnessHelpers3"
+          "../util/ListExtras"
 begin
 
 (* This theory proves two important (families of) results:
@@ -18,28 +19,6 @@ begin
    separate compilation where there might be unresolved abstract types). However, we
    can re-use some of the interpreter's helper lemmas, e.g. eval_binop_sound.
 *)
-
-
-(* ========================================================================== *)
-(* Small helpers                                                              *)
-(* ========================================================================== *)
-
-(* Unpacking Option.those. *)
-lemma those_some_nth:
-  assumes "those xs = Some ys"
-  shows "length ys = length xs \<and> (\<forall>i < length xs. xs ! i = Some (ys ! i))"
-  using assms
-proof (induction xs arbitrary: ys)
-  case Nil
-  then show ?case by simp
-next
-  case (Cons x xs)
-  from Cons.prems obtain y ys' where
-    x_eq: "x = Some y" and rest: "those xs = Some ys'" and ys_eq: "ys = y # ys'"
-    by (auto split: option.splits)
-  from Cons.IH[OF rest] show ?case
-    by (auto simp: x_eq ys_eq nth_Cons split: nat.splits)
-qed
 
 
 (* ========================================================================== *)

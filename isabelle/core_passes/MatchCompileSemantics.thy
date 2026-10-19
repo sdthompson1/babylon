@@ -1580,7 +1580,7 @@ proof (induction m arbitrary: colTys rule: compile_matrix.induct)
             from rows_inv r_in r_split have
               row_pc: "list_all2 (pattern_compatible env) ps colTys"
               by (auto simp: list_all_iff case_prod_unfold)
-            from list_all2_nth[OF row_pc] c_lt
+            from list_all2_nthD[OF row_pc] c_lt
             have ps_c_pc: "pattern_compatible env (ps ! c) (colTys ! c)"
               by (simp add: list_all2_nthD2 row_pc)
             from ps_c_pc col_c_bool have pc_bool: "pattern_compatible env (ps ! c) CoreTy_Bool" by simp
@@ -1858,7 +1858,7 @@ proof (induction m arbitrary: colTys rule: compile_matrix.induct)
             from rows_inv r_in r_split have
               row_pc: "list_all2 (pattern_compatible env) ps colTys"
               by (auto simp: list_all_iff case_prod_unfold)
-            from list_all2_nth[OF row_pc] c_lt
+            from list_all2_nthD[OF row_pc] c_lt
             have ps_c_pc: "pattern_compatible env (ps ! c) (colTys ! c)"
               using list_all2_nthD2 row_pc by blast
             from ps_c_pc col_c_int have pc_int: "pattern_compatible env (ps ! c) (colTys ! c) \<and> is_integer_type (colTys ! c)" by simp
@@ -2112,7 +2112,7 @@ proof (induction m arbitrary: colTys rule: compile_matrix.induct)
             from rows_inv r_in r_split have
               row_pc: "list_all2 (pattern_compatible env) ps colTys"
               by (auto simp: list_all_iff case_prod_unfold)
-            from list_all2_nth[OF row_pc] c_lt
+            from list_all2_nthD[OF row_pc] c_lt
             have ps_c_pc: "pattern_compatible env (ps ! c) (colTys ! c)"
               by (simp add: list_all2_nthD2 row_pc)
             from ps_c_pc col_c_dt have pc_dt: "pattern_compatible env (ps ! c) (CoreTy_Datatype dtName tyArgs)" by simp
@@ -2380,7 +2380,7 @@ proof (induction m arbitrary: colTys rule: compile_matrix.induct)
         from rows_inv r0_in r0_eq have
           ps0_pcs: "list_all2 (pattern_compatible env) ps0 colTys"
           by (auto simp: list_all_iff)
-        from list_all2_nth[OF ps0_pcs] c_lt
+        from list_all2_nthD[OF ps0_pcs] c_lt
         have ps0_at_c_pc: "pattern_compatible env (ps0 ! c) (colTys ! c)"
           by (simp add: list_all2_nthD2 ps0_pcs)
         with ps0_c_eq have
@@ -2424,7 +2424,7 @@ proof (induction m arbitrary: colTys rule: compile_matrix.induct)
             from rows_inv r_in r_split have
               row_pc: "list_all2 (pattern_compatible env) ps colTys"
               by (auto simp: list_all_iff case_prod_unfold)
-            from list_all2_nth[OF row_pc] c_lt
+            from list_all2_nthD[OF row_pc] c_lt
             have ps_c_pc: "pattern_compatible env (ps ! c) (colTys ! c)"
               by (simp add: list_all2_nthD2 row_pc)
             from ps_c_pc col_c_rec have pc_rec: "pattern_compatible env (ps ! c) (CoreTy_Record fldTys)" by simp

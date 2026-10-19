@@ -151,6 +151,7 @@ session Babylon = "HOL-Library" +
     "util/FSetExtras"
     "util/FmapDisjointUnion"
     "util/IntRange"
+    "util/ListExtras"
     "util/NatToString"
     "util/Quantifier"
 

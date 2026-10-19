@@ -504,47 +504,14 @@ next
 next
   case (CoreTm_Record flds)
   note ext = CoreTm_Record.prems(1) and cons = CoreTm_Record.prems(2)
-  from CoreTm_Record.prems(3) obtain tys where
-    those_eq: "those (map (\<lambda>(name, tm). core_term_type env ghost tm) flds) = Some tys" and
-    ty_eq: "ty = CoreTy_Record (zip (map fst flds) tys)"
-    by (auto split: option.splits if_splits)
-  have IH: "\<And>nm tm ty'. (nm, tm) \<in> set flds \<Longrightarrow> core_term_type env ghost tm = Some ty' \<Longrightarrow>
-                         core_term_type env' ghost tm = Some ty'"
-  proof -
-    fix nm tm ty' assume mem: "(nm, tm) \<in> set flds"
-      and t: "core_term_type env ghost tm = Some ty'"
-    have "tm \<in> Basic_BNFs.snds (nm, tm)" by (simp add: snds.intros)
-    then show "core_term_type env' ghost tm = Some ty'"
-      using CoreTm_Record.IH[OF mem] ext cons t by blast
+  show ?case
+  proof (rule core_term_type_Record_transfer[OF CoreTm_Record.prems(3)])
+    fix nm tm T
+    assume mem: "(nm, tm) \<in> set flds" and t: "core_term_type env ghost tm = Some T"
+    have tm_in: "tm \<in> Basic_BNFs.snds (nm, tm)" by simp
+    show "core_term_type env' ghost tm = Some T"
+      by (rule CoreTm_Record.IH[OF mem tm_in ext cons t])
   qed
-  from those_eq have la2: "list_all2 (\<lambda>x y. x = Some y)
-                                      (map (\<lambda>(name, tm). core_term_type env ghost tm) flds) tys"
-    using those_eq_Some by blast
-  have all_some: "\<And>nm tm. (nm, tm) \<in> set flds \<Longrightarrow>
-                          \<exists>ty'. core_term_type env ghost tm = Some ty'"
-  proof -
-    fix nm tm assume mem: "(nm, tm) \<in> set flds"
-    then obtain i where i_lt: "i < length flds" and fld_i: "flds ! i = (nm, tm)"
-      by (auto simp: in_set_conv_nth)
-    from la2 i_lt have "map (\<lambda>(name, tm). core_term_type env ghost tm) flds ! i = Some (tys ! i)"
-      by (auto simp: list_all2_conv_all_nth)
-    thus "\<exists>ty'. core_term_type env ghost tm = Some ty'"
-      using i_lt fld_i by simp
-  qed
-  have map_eq: "map (\<lambda>(name, y). core_term_type env' ghost y) flds =
-                map (\<lambda>(name, y). core_term_type env ghost y) flds"
-  proof (rule map_cong, simp)
-    fix p assume p_in: "p \<in> set flds"
-    obtain nm tm where p_eq: "p = (nm, tm)" by (cases p)
-    from p_in p_eq all_some obtain ty' where
-      tm_ty: "core_term_type env ghost tm = Some ty'" by blast
-    from IH p_in p_eq tm_ty have
-      tm_ty': "core_term_type env' ghost tm = Some ty'" by blast
-    show "(case p of (name, y) \<Rightarrow> core_term_type env' ghost y) =
-          (case p of (name, y) \<Rightarrow> core_term_type env ghost y)"
-      using p_eq tm_ty tm_ty' by simp
-  qed
-  from CoreTm_Record.prems(3) show ?case by (auto simp: map_eq split: if_splits)
 next
   case (CoreTm_RecordProj tm fldName)
   from CoreTm_RecordProj.prems(3) obtain fieldTypes where
@@ -595,61 +562,22 @@ next
 next
   case (CoreTm_Match scrut arms)
   note ext = CoreTm_Match.prems(1) and cons = CoreTm_Match.prems(2)
-  from CoreTm_Match.prems(3) obtain scrutTy where
-    scrut_ty: "core_term_type env ghost scrut = Some scrutTy"
-    by (auto split: option.splits)
-  have scrut_ty': "core_term_type env' ghost scrut = Some scrutTy"
-    using CoreTm_Match.IH(1)[OF ext cons scrut_ty] .
-  from CoreTm_Match.prems(3) scrut_ty have arms_nonempty: "arms \<noteq> []"
-    by (auto split: option.splits if_splits)
-  let ?pats = "map fst arms"
-  from CoreTm_Match.prems(3) scrut_ty arms_nonempty have
-    pat_compat: "list_all (\<lambda>p. pattern_compatible env p scrutTy) ?pats"
-    by (auto split: option.splits if_splits simp: Let_def)
-  have pat_compat': "list_all (\<lambda>p. pattern_compatible env' p scrutTy) ?pats"
-    using pat_compat pattern_compatible_tyenv_extends[OF ext]
-    by (auto simp: list_all_iff)
-  have match_unfold: "core_term_type env ghost (CoreTm_Match scrut arms) =
-    (let pats = map fst arms; bodies = map snd arms in
-      if arms = [] then None
-      else if \<not> list_all (\<lambda>p. pattern_compatible env p scrutTy) pats then None
-      else (case core_term_type env ghost (snd (hd arms)) of
-              None \<Rightarrow> None
-            | Some resultTy \<Rightarrow>
-                if list_all (\<lambda>body. core_term_type env ghost body = Some resultTy) (tl bodies)
-                then Some resultTy
-                else None))"
-    using scrut_ty by simp
-  from CoreTm_Match.prems(3) match_unfold arms_nonempty pat_compat
-  obtain firstBodyTy where
-    first_ty: "core_term_type env ghost (snd (hd arms)) = Some firstBodyTy" and
-    ty_eq: "ty = firstBodyTy" and
-    rest_ty: "list_all (\<lambda>body. core_term_type env ghost body = Some firstBodyTy)
-                       (tl (map snd arms))"
-    by (auto simp: Let_def split: option.splits if_splits)
-  have hd_in: "snd (hd arms) \<in> snd ` set arms"
-    using arms_nonempty by (cases arms) auto
-  have bodies_IH: "\<And>body ty'. body \<in> snd ` set arms \<Longrightarrow>
-                              core_term_type env ghost body = Some ty' \<Longrightarrow>
-                              core_term_type env' ghost body = Some ty'"
-    using CoreTm_Match.IH(2) ext cons by fastforce
-  have first_ty': "core_term_type env' ghost (snd (hd arms)) = Some firstBodyTy"
-    using bodies_IH[OF hd_in first_ty] .
-  have tl_in: "\<And>body. body \<in> set (tl (map snd arms)) \<Longrightarrow> body \<in> snd ` set arms"
-    by (cases arms) auto
-  have rest_ty': "list_all (\<lambda>body. core_term_type env' ghost body = Some firstBodyTy)
-                           (tl (map snd arms))"
-    unfolding list_all_iff
-  proof
-    fix x assume x_in: "x \<in> set (tl (map snd arms))"
-    have "core_term_type env ghost x = Some firstBodyTy"
-      using rest_ty x_in by (simp add: list_all_iff)
-    then show "core_term_type env' ghost x = Some firstBodyTy"
-      using bodies_IH[OF tl_in[OF x_in]] by blast
-  qed
   show ?case
-    using scrut_ty' arms_nonempty pat_compat' first_ty' rest_ty' ty_eq
-    by (simp add: Let_def)
+  proof (rule core_term_type_Match_transfer[OF CoreTm_Match.prems(3)])
+    fix T assume s: "core_term_type env ghost scrut = Some T"
+    show "core_term_type env' ghost scrut = Some T"
+      by (rule CoreTm_Match.IH(1)[OF ext cons s])
+  next
+    fix p t assume "pattern_compatible env p t"
+    thus "pattern_compatible env' p t"
+      by (rule pattern_compatible_tyenv_extends[OF ext])
+  next
+    fix b T assume b_in: "b \<in> snd ` set arms" and b_ty: "core_term_type env ghost b = Some T"
+    from b_in obtain p where arm_in: "(p, b) \<in> set arms" by auto
+    have b_snd: "b \<in> Basic_BNFs.snds (p, b)" by simp
+    show "core_term_type env' ghost b = Some T"
+      by (rule CoreTm_Match.IH(2)[OF arm_in b_snd ext cons b_ty])
+  qed
 next
   case (CoreTm_Sizeof tm)
   from CoreTm_Sizeof.prems(3) obtain elemTy dims where

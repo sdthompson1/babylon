@@ -1,5 +1,5 @@
 theory EraseGhostTyping
-  imports EraseGhost
+  imports EraseGhost "../util/ListExtras"
 begin
 
 (* This file proves that well-kinded runtime types remain well-kinded and runtime
@@ -305,16 +305,8 @@ proof (induction p arbitrary: ty)
       ng: "dtName \<notin> ghost_datatypes env" and
       rts: "list_all (is_runtime_type env) tyArgs"
     by simp_all
-  have payload_rt:
-    "is_runtime_type
-       (env \<lparr> TE_TypeVars := TE_AbstractTypes env |\<union>| fset_of_list tyvars,
-              TE_RuntimeTypeVars := (TE_AbstractTypes env |\<inter>| TE_RuntimeTypeVars env)
-                                     |\<union>| fset_of_list tyvars \<rparr>) payloadTy"
-    by (rule tyenv_nonghost_payloads_runtime[OF wf lk ng])
-  have fresh: "fset_of_list tyvars |\<inter>| TE_AbstractTypes env = {||}"
-    using wf lk unfolding tyenv_well_formed_def tyenv_ctor_tyvars_fresh_def by blast
   have rt': "is_runtime_type env (apply_subst (fmap_of_list (zip tyvars tyArgs)) payloadTy)"
-    by (rule apply_subst_specializes_runtime[OF payload_rt rts len[symmetric] fresh])
+    by (rule ctor_payload_specialized_runtime[OF wf lk len rts ng])
   have pcE: "pattern_compatible envE payloadPat
                (apply_subst (fmap_of_list (zip tyvars tyArgs)) payloadTy)"
     by (rule CorePat_Variant.IH[OF pc rt'])
@@ -372,10 +364,6 @@ lemma ghost_lvalue_ok_erase_ghost_term [simp]:
 (* Terms: the ghost-erasure of a term typed in NotGhost mode is well-typed,
    with the same NotGhost type. *)
 (* ========================================================================== *)
-
-lemma those_Some_all_Some:
-  "those xs = Some ys \<Longrightarrow> x \<in> set xs \<Longrightarrow> \<exists>y. x = Some y"
-  by (induction xs arbitrary: ys) (auto split: option.splits)
 
 (* The per-argument check of a call, written as a relation between the actuals
    and the parameter list. *)
@@ -535,17 +523,12 @@ next
     by (auto simp: Let_def split: option.splits)
   have rk: "is_well_kinded env rhsTy" by (rule core_term_type_well_kinded[OF r wf])
   have rr: "is_runtime_type env rhsTy" by (rule core_term_type_notghost_runtime[OF r wf])
-  have wf0: "tyenv_well_formed
-               (env \<lparr> TE_LocalVars := fmupd var rhsTy (TE_LocalVars env),
-                      TE_GhostLocals := TE_GhostLocals env |-| {|var|} \<rparr>)"
-    by (rule tyenv_well_formed_add_var[OF wf rk rr])
   have wf': "tyenv_well_formed
                (env \<lparr> TE_LocalVars := fmupd var rhsTy (TE_LocalVars env),
                       TE_GhostLocals := TE_GhostLocals env |-| {|var|},
                       TE_ConstLocals := finsert var (TE_ConstLocals env) \<rparr>)"
-    using tyenv_well_formed_TE_ConstLocals_irrelevant[
-            OF wf0, where c = "finsert var (TE_ConstLocals env)"]
-    by simp
+    by (rule tyenv_well_formed_TE_ConstLocals_irrelevant
+               [OF tyenv_well_formed_add_var[OF wf rk rr]])
   have rE: "core_term_type envE NotGhost (erase_ghost_term (TE_Functions env) rhs)
               = Some rhsTy"
     by (rule CoreTm_Let.IH(1)[OF r wf rel])
