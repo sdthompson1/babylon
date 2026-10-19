@@ -24,7 +24,7 @@ begin
 
 
 (* ========================================================================== *)
-(* Theorems about type_datatypes (RuntimeType.thy) *)
+(* Theorems about type_datatypes (CoreFreeVars.thy) *)
 (* ========================================================================== *)
 
 (* A well-kinded type mentions only declared datatypes. *)

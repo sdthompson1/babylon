@@ -3,6 +3,22 @@ theory CoreFreeVars
 begin
 
 (* ========================================================================== *)
+(* Datatypes mentioned by a type                                              *)
+(* ========================================================================== *)
+
+fun type_datatypes :: "CoreType \<Rightarrow> string set" where
+  "type_datatypes (CoreTy_Datatype dt args) = insert dt (\<Union>(set (map type_datatypes args)))"
+| "type_datatypes CoreTy_Bool = {}"
+| "type_datatypes (CoreTy_FiniteInt _ _) = {}"
+| "type_datatypes CoreTy_MathInt = {}"
+| "type_datatypes CoreTy_MathReal = {}"
+| "type_datatypes (CoreTy_Record flds) = \<Union>(set (map (type_datatypes \<circ> snd) flds))"
+| "type_datatypes (CoreTy_Array elemTy dims) = type_datatypes elemTy"
+| "type_datatypes (CoreTy_Var n) = {}"
+| "type_datatypes (CoreTy_Extern _ _) = {}"
+
+
+(* ========================================================================== *)
 (* Type variables of a type                                                   *)
 (* ========================================================================== *)
 
