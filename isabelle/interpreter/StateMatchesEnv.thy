@@ -1,5 +1,5 @@
 theory StateMatchesEnv
-  imports CoreInterp "../core/CoreStmtTypecheckLemmas"
+  imports CoreInterp ExternContract "../core/CoreStmtTypecheckLemmas"
           "../core/ModuleBodyEnv" "../core/CoreContractTypecheck"
 begin
 
@@ -118,86 +118,6 @@ definition global_var_in_state_with_type :: "'w InterpState \<Rightarrow> CoreTy
     (case fmlookup (IS_Globals state) name of
       Some val \<Rightarrow> value_has_type env val ty
     | None \<Rightarrow> False)"
-
-(* The contract of an external function is a conjunction of named parts, one
-   per property. Discharging it is the responsibility of whoever provides the
-   ExternFunc; the soundness proof for extern calls consumes it. *)
-
-(* Typing: for every valid input (type args, term args, world), the extern
-   function returns a valid return value of the (substituted) return type, and
-   a valid list of ref updates (one per Ref parameter) at the (substituted)
-   Ref-parameter types.
-   The type arguments are not required to be runtime types: ghost code may call
-   the function at any ground, well-kinded type arguments. *)
-definition extern_fun_well_typed :: "CoreTyEnv \<Rightarrow> FunInfo \<Rightarrow> 'w ExternFunc \<Rightarrow> bool" where
-  "extern_fun_well_typed env funInfo externFun =
-   (\<forall>tySubst world vals.
-       \<comment> \<open>tySubst maps exactly the callee's type arguments to ground,
-           well-kinded types in the caller's env.\<close>
-       fmdom tySubst = fset_of_list (FI_TyArgs funInfo) \<and>
-       (\<forall>ty' \<in> fmran' tySubst. type_tyvars ty' = {}
-                              \<and> is_well_kinded env ty') \<and>
-       \<comment> \<open>Term arguments (vals) have the substituted parameter types.\<close>
-       list_all2 (value_has_type env)
-                 vals
-                 (map (\<lambda>(ty, _). apply_subst tySubst ty) (FI_TmArgs funInfo))
-       \<longrightarrow>
-       (case externFun world vals of (newWorld, refUpdates, retVal) \<Rightarrow>
-          \<comment> \<open>Return value has the substituted return type.\<close>
-          value_has_type env retVal (apply_subst tySubst (FI_ReturnType funInfo)) \<and>
-          \<comment> \<open>One ref update per Ref parameter, in IF_Args order, at the substituted type.\<close>
-          list_all2 (value_has_type env)
-                    refUpdates
-                    (map (\<lambda>(ty, _). apply_subst tySubst ty)
-                         (filter (\<lambda>(_, vor, _). vor = Ref) (FI_TmArgs funInfo)))))"
-
-(* Purity: the world is opaque to soundness, so the contract says only one
-   thing about it: a pure function (one that is not marked impure) returns the
-   world it was given. This holds for every input, not only for well-typed
-   arguments. *)
-definition extern_fun_respects_purity :: "FunInfo \<Rightarrow> 'w ExternFunc \<Rightarrow> bool" where
-  "extern_fun_respects_purity funInfo externFun =
-   (\<not> FI_Impure funInfo \<longrightarrow> (\<forall>world vals. fst (externFun world vals) = world))"
-
-(* Ghost independence: ghost erasure removes the ghost arguments of a call,
-   so an extern function must not depend on them. Called with the ghost
-   arguments removed, it returns the same world and return value, and the
-   same ref updates except those of the ghost Ref parameters. This holds for
-   every input with one value per parameter, not only for well-typed
-   arguments. *)
-definition extern_fun_ghost_independent :: "FunInfo \<Rightarrow> 'w ExternFunc \<Rightarrow> bool" where
-  "extern_fun_ghost_independent funInfo externFun =
-   (\<forall>world vals. length vals = length (FI_TmArgs funInfo) \<longrightarrow>
-      (case externFun world vals of (newWorld, refUpdates, retVal) \<Rightarrow>
-         externFun world (drop_ghost (param_ghost_flags funInfo) vals)
-           = (newWorld, drop_ghost (ref_param_ghost_flags funInfo) refUpdates, retVal)))"
-
-definition extern_fun_contract :: "CoreTyEnv \<Rightarrow> FunInfo \<Rightarrow> 'w ExternFunc \<Rightarrow> bool" where
-  "extern_fun_contract env funInfo externFun =
-   (extern_fun_well_typed env funInfo externFun \<and>
-    extern_fun_respects_purity funInfo externFun \<and>
-    extern_fun_ghost_independent funInfo externFun)"
-
-(* A pure extern function returns the world it was given. *)
-lemma extern_fun_contract_pure_world:
-  assumes "extern_fun_contract env funInfo externFun" and "\<not> FI_Impure funInfo"
-  shows "fst (externFun world vals) = world"
-  using assms unfolding extern_fun_contract_def extern_fun_respects_purity_def by simp
-
-(* An extern function called without its ghost arguments returns the same
-   world and value, and the ref updates of the parameters that are not
-   ghost. *)
-lemma extern_fun_ghost_independentD:
-  assumes "extern_fun_ghost_independent funInfo externFun"
-    and "length vals = length (FI_TmArgs funInfo)"
-    and "externFun world vals = (newWorld, refUpdates, retVal)"
-  shows "externFun world (drop_ghost (param_ghost_flags funInfo) vals)
-           = (newWorld, drop_ghost (ref_param_ghost_flags funInfo) refUpdates, retVal)"
-proof -
-  note inst = assms(1)[unfolded extern_fun_ghost_independent_def,
-                       THEN spec[where x = world], THEN spec[where x = vals]]
-  from inst assms(2) show ?thesis by (simp add: assms(3))
-qed
 
 (* This says that a given FunInfo and an InterpFun match, in a given type environment.
    The env is needed for typechecking the function body, if there is one. *)

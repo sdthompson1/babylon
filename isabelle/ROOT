@@ -136,6 +136,7 @@ session Babylon = "HOL-Library" +
     "interpreter/CoreInterpWorld"
     "interpreter/CoreInterpFuelMono"
     "interpreter/CoreInterpPreservation"
+    "interpreter/ExternContract"
     "interpreter/InterpState"
     "interpreter/MakeInterpState"
     "interpreter/MakeInterpStateCorrect"
