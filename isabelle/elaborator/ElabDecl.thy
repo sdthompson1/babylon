@@ -1,6 +1,6 @@
 theory ElabDecl
   imports ElabStmt ConstFold "../core/CoreModuleTypecheck" "../core/CoreAllocLevel"
-    "../bab_passes/BabContractRename" "../bab_passes/BabMapDims"
+    BabContractRename BabMapDims
 begin
 
 (* Declaration elaborator.

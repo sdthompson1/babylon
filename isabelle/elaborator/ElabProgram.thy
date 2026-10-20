@@ -1,5 +1,5 @@
 theory ElabProgram
-  imports "../bab_passes/BabDependency" "../bab_passes/BabStringHoist" ElabModule
+  imports BabDependency BabStringHoist ElabModule
 begin
 
 (* Whole-program elaborator.

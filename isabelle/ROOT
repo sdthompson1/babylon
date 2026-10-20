@@ -2,7 +2,6 @@ session Babylon = "HOL-Library" +
   directories
     "bab"
     "bab_loader"
-    "bab_passes"
     "core"
     "core_passes"
     "elaborator"
@@ -26,13 +25,6 @@ session Babylon = "HOL-Library" +
     "bab_loader/BabParser"
     "bab_loader/BabToken"
     "bab_loader/BasicParser"
-
-    (* bab_passes *)
-    "bab_passes/BabContractRename"
-    "bab_passes/BabDependency"
-    "bab_passes/BabMapDims"
-    "bab_passes/BabRenamer"
-    "bab_passes/BabStringHoist"
 
     (* core *)
     "core/AllocLevelSubst"
@@ -80,6 +72,10 @@ session Babylon = "HOL-Library" +
     "core_passes/MatchCompileTyping"
 
     (* elaborator *)
+    "elaborator/BabContractRename"
+    "elaborator/BabDependency"
+    "elaborator/BabMapDims"
+    "elaborator/BabStringHoist"
     "elaborator/ConstFold"
     "elaborator/ConstFoldCorrect"
     "elaborator/ElabDecl"
@@ -157,6 +153,7 @@ session Babylon = "HOL-Library" +
     "util/Quantifier"
 
     (* front_end *)
+    "front_end/BabRenamer"
     "front_end/FrontEnd"
     "front_end/ShowError"
     "front_end/CodeExport"
