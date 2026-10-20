@@ -1,11 +1,12 @@
 theory ElabProgram
-  imports "../bab_passes/BabDependency" ElabModule
+  imports "../bab_passes/BabDependency" "../bab_passes/BabStringHoist" ElabModule
 begin
 
 (* Whole-program elaborator.
 
    `elab_program`: Turns a list of BabModules (already loaded and renamed by the front end)
-   into elaborated CoreModules.
+   into elaborated CoreModules. String literals are hoisted out of lvalue positions first
+   (see BabStringHoist.thy), since Core has no string-literal lvalues.
 
    `whole_program_link`: Links the output of elab_program into a single closed CoreModule,
    from which an InterpState can be generated.
@@ -139,14 +140,14 @@ fun pipeline_fold ::
 (* elab_program *)
 (* ========================================================================== *)
 
-(* Sort the modules into dependency order, then elaborate them.
+(* Hoist string literals, sort the modules into dependency order, then elaborate them.
    Returns the final pipeline state, which is basically a dictionary mapping each
    module-name to a pair of elaborated CoreModules (one for the interface, one for
    the implementation). *)
 definition elab_program ::
   "BabModule list \<Rightarrow> PipelineError + PipelineState" where
   "elab_program modules =
-     (case analyze_dependencies modules of
+     (case analyze_dependencies (map hoist_module modules) of
         Inl err \<Rightarrow> Inl (PE_DependencyError err)
       | Inr sortedModules \<Rightarrow>
           pipeline_fold fmempty sortedModules)"

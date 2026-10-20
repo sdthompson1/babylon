@@ -1349,7 +1349,7 @@ lemma pipeline_fold_preserves:
 lemma elab_program_Inr_elim:
   assumes ok: "elab_program modules = Inr ps"
   obtains sortedMods where
-    "analyze_dependencies modules = Inr sortedMods"
+    "analyze_dependencies (map hoist_module modules) = Inr sortedMods"
     "pipeline_fold fmempty sortedMods = Inr ps"
   using assms unfolding elab_program_def
   by (auto split: sum.splits)
@@ -1727,7 +1727,7 @@ theorem elab_program_well_typed:
   shows "core_module_well_typed prog"
 proof -
   obtain sortedMods where
-      ad: "analyze_dependencies modules = Inr sortedMods"
+      ad: "analyze_dependencies (map hoist_module modules) = Inr sortedMods"
       and fold: "pipeline_fold fmempty sortedMods = Inr ps"
     using cp by (rule elab_program_Inr_elim)
   note st = elab_program_state[OF ad fold]
@@ -2438,7 +2438,7 @@ theorem elab_program_closed:
   shows "core_module_closed prog"
 proof -
   obtain sortedMods where
-      ad: "analyze_dependencies modules = Inr sortedMods"
+      ad: "analyze_dependencies (map hoist_module modules) = Inr sortedMods"
       and fold: "pipeline_fold fmempty sortedMods = Inr ps"
     using cp by (rule elab_program_Inr_elim)
   note st = elab_program_state[OF ad fold]
@@ -2696,7 +2696,7 @@ theorem module_impl_link_well_typed:
   shows "core_module_well_typed m"
 proof -
   obtain sortedMods where
-      ad: "analyze_dependencies modules = Inr sortedMods"
+      ad: "analyze_dependencies (map hoist_module modules) = Inr sortedMods"
       and fold: "pipeline_fold fmempty sortedMods = Inr ps"
     using cp by (rule elab_program_Inr_elim)
   have ok: "pipeline_state_ok ps"

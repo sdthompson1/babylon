@@ -1,15 +1,13 @@
 (* FrontEnd implements the unverified stages of the compiler, including:
-   lexer, parser, import resolution ("loader"), renamer, and string-literal
-   hoisting.
+   lexer, parser, import resolution ("loader"), and renamer.
 
    The input to the FrontEnd is a list of RawPackages (essentially unparsed Babylon
-   code strings), and the output is a list of parsed, renamed and hoisted BabModules,
+   code strings), and the output is a list of parsed and renamed BabModules,
    ready to be consumed by later stages.
 *)
 
 theory FrontEnd
   imports Main "../bab_loader/BabLoader" "../bab_passes/BabRenamer"
-          "../bab_passes/BabStringHoist"
 begin
 
 (* Combined error type for the front end *)
@@ -105,6 +103,6 @@ fun compiler_front_end :: "RawPackage list \<Rightarrow> string \<Rightarrow> st
       (let renameResults = map (\<lambda>module. rename_module module loadedModules) loadedModules
        in case sequence_sum renameResults of
             Inl renameErrs \<Rightarrow> Inl (map FrontEndError_Renamer renameErrs)
-            | Inr renamedModules \<Rightarrow> Inr (map hoist_module renamedModules)))"
+            | Inr renamedModules \<Rightarrow> Inr renamedModules))"
 
 end
