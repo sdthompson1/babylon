@@ -565,6 +565,9 @@ fun any_allocated :: "(InterpError + bool) list \<Rightarrow> InterpError + bool
      - An allocatable array is allocated iff all of its sizes are non-zero.
      - Any other array, a record or a variant is allocated iff some component
        (element, field or payload) is.
+        - Note: technically this is incorrect for incomplete-typed ("T[]") arrays,
+          as "allocated" is undefined on these. But a well-typed program will never
+          evaluate "allocated" at an incomplete type, so this does not matter.
      - Scalars are never allocated.
      - A value CV_Extern n l k of an extern type is decided by the allocation
        oracle, except in cases where the type already implies that the value
