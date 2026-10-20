@@ -9,7 +9,7 @@ paths = []            # Local directories to search for Babylon packages
 cc = "gcc"                  # C compiler command
 ld = "gcc"                  # Linker command
 pkg-config = "pkg-config"   # pkg-config command
-cflags = ["-Wno-overflow", "-Wno-div-by-zero"]  # C compiler additional arguments (needed for some tests)
+cflags = ["-Wno-overflow", "-Wno-div-by-zero", "-Wno-stringop-overread"]  # C compiler additional arguments (needed for some tests)
 libs = []                   # Linker additional arguments
 
 [verifier]
