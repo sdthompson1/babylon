@@ -8,7 +8,7 @@ begin
 datatype CoreAllocLevel =
   CoreAlloc_Never
   | CoreAlloc_IfNotDefault
-  | CoreAlloc_Always
+  | CoreAlloc_Unknown
 
 (* Array dimension *)
 datatype CoreDimension =

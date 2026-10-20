@@ -9,7 +9,7 @@ begin
 fun alloc_level_to_core :: "AllocLevel \<Rightarrow> CoreAllocLevel" where
   "alloc_level_to_core AllocNever = CoreAlloc_Never"
 | "alloc_level_to_core AllocIfNotDefault = CoreAlloc_IfNotDefault"
-| "alloc_level_to_core AllocAlways = CoreAlloc_Always"
+| "alloc_level_to_core AllocUnknown = CoreAlloc_Unknown"
 
 (* Elaborate a single array dimension.
    BabDim_Fixed must contain a literal integer within uint64 range;

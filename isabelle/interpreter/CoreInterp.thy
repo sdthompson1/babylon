@@ -613,7 +613,7 @@ function is_allocated :: "(string, string \<times> string list \<times> CoreType
     Inr (case l of
            CoreAlloc_Never \<Rightarrow> False
          | CoreAlloc_IfNotDefault \<Rightarrow> k \<noteq> 0 \<and> extAlloc n l k
-         | CoreAlloc_Always \<Rightarrow> extAlloc n l k)"
+         | CoreAlloc_Unknown \<Rightarrow> extAlloc n l k)"
   by pat_completeness auto
 
 termination is_allocated

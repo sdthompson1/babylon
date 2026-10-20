@@ -10,9 +10,9 @@ begin
    every value x of a type:
      - Never \<Rightarrow> "not allocated(x)" for all x;
      - IfNotDefault \<Rightarrow> "not allocated(default)";
-     - Always \<Rightarrow> nothing may be assumed.
+     - Unknown \<Rightarrow> nothing may be assumed.
 
-   The alloc levels are ordered: Never < IfNotDefault < Always, where lower levels
+   The alloc levels are ordered: Never < IfNotDefault < Unknown, where lower levels
    in the order provide more facts.
 
    The alloc level of a realization of an abstract type must have an alloc level \<le>
@@ -24,7 +24,7 @@ begin
 fun alloc_level_rank :: "CoreAllocLevel \<Rightarrow> nat" where
   "alloc_level_rank CoreAlloc_Never = 0"
 | "alloc_level_rank CoreAlloc_IfNotDefault = 1"
-| "alloc_level_rank CoreAlloc_Always = 2"
+| "alloc_level_rank CoreAlloc_Unknown = 2"
 
 definition alloc_level_le :: "CoreAllocLevel \<Rightarrow> CoreAllocLevel \<Rightarrow> bool" where
   "alloc_level_le l1 l2 = (alloc_level_rank l1 \<le> alloc_level_rank l2)"
@@ -48,7 +48,7 @@ lemma alloc_level_le_total:
 lemma alloc_level_le_Never [simp]: "alloc_level_le CoreAlloc_Never l"
   unfolding alloc_level_le_def by (cases l) simp_all
 
-lemma alloc_level_le_Always [simp]: "alloc_level_le l CoreAlloc_Always"
+lemma alloc_level_le_Unknown [simp]: "alloc_level_le l CoreAlloc_Unknown"
   unfolding alloc_level_le_def by (cases l) simp_all
 
 (* The larger of two levels (fewer facts). *)
@@ -109,11 +109,11 @@ lemma alloc_level_max_mono:
    alloc_level_le (alloc_level_max a1 b1) (alloc_level_max a2 b2)"
   by (cases a1; cases a2; cases b1; cases b2) (simp_all add: alloc_level_max_def alloc_level_le_def)
 
-(* A datatype is only CoreAlloc_Always if the first payload is. If any other payload
-   is CoreAlloc_Always, that only makes the datatype CoreAlloc_IfNotDefault, because
+(* A datatype is only CoreAlloc_Unknown if the first payload is. If any other payload
+   is CoreAlloc_Unknown, that only makes the datatype CoreAlloc_IfNotDefault, because
    the default value (the first constructor) doesn't carry that payload. *)
 fun downgrade_nonfirst :: "CoreAllocLevel \<Rightarrow> CoreAllocLevel" where
-  "downgrade_nonfirst CoreAlloc_Always = CoreAlloc_IfNotDefault"
+  "downgrade_nonfirst CoreAlloc_Unknown = CoreAlloc_IfNotDefault"
 | "downgrade_nonfirst l = l"
 
 lemma downgrade_nonfirst_le: "alloc_level_le (downgrade_nonfirst l) l"
@@ -136,7 +136,7 @@ lemma downgrade_nonfirst_mono:
     - allocatable array T[*]: CoreAlloc_IfNotDefault (regardless of element type);
     - fixed-sized array T[n]: the level of the element type;
     - type variable: the level from TE_AbstractAllocLevels if present (an abstract
-        type), otherwise CoreAlloc_Always (a function-level type parameter, about
+        type), otherwise CoreAlloc_Unknown (a function-level type parameter, about
         whose values nothing is known);
     - extern type (CoreTy_Extern n l): the level l, carried by the type. *)
 
@@ -179,7 +179,7 @@ lemma downgrade_nonfirst_mono:
     - T appears in the first constructor, so it has Mode_Always (if T's alloc level is X,
         then Foo's alloc level must be at least X);
     - U appears in non-first position, so it has Mode_Downgrade (if U's alloc level is
-        Alloc_Always, then Foo is still only at least Alloc_IfNotDefault, because U doesn't
+        Alloc_Unknown, then Foo is still only at least Alloc_IfNotDefault, because U doesn't
         appear in Foo1, the default constructor).
 
    The modes are ordered: Never < Downgrade < Identity.
@@ -272,10 +272,10 @@ type_synonym AllocSummary = "CoreAllocLevel \<times> AllocMode list"
 definition summary_const :: "CoreAllocLevel \<Rightarrow> nat \<Rightarrow> AllocSummary" where
   "summary_const l n = (l, replicate n Mode_Never)"
 
-(* The "top" summary: CoreAlloc_Always, regardless of the type arguments.
+(* The "top" summary: CoreAlloc_Unknown, regardless of the type arguments.
    This says that nothing at all is known about the datatype's alloc level. *)
 definition summary_top :: "nat \<Rightarrow> AllocSummary" where
-  "summary_top n = (CoreAlloc_Always, replicate n Mode_Identity)"
+  "summary_top n = (CoreAlloc_Unknown, replicate n Mode_Identity)"
 
 lemma summary_const_length [simp]: "length (snd (summary_const l n)) = n"
   by (simp add: summary_const_def)
@@ -389,7 +389,7 @@ qed
    parameters params, reading the datatype summaries from info. A type
    variable that is one of the params contributes through its mode; any other
    type variable contributes its declared level if it is an abstract type, and
-   CoreAlloc_Always if it has no entry (a function-level type parameter). *)
+   CoreAlloc_Unknown if it has no entry (a function-level type parameter). *)
 fun summarize ::
   "CoreTyEnv \<Rightarrow> (string \<Rightarrow> AllocSummary) \<Rightarrow> string list \<Rightarrow> CoreType \<Rightarrow> AllocSummary" where
   "summarize env info params (CoreTy_Datatype dt args) =
@@ -410,7 +410,7 @@ fun summarize ::
       then (CoreAlloc_Never, map (\<lambda>p. if p = v then Mode_Identity else Mode_Never) params)
       else summary_const
              (case fmlookup (TE_AbstractAllocLevels env) v of
-                None \<Rightarrow> CoreAlloc_Always
+                None \<Rightarrow> CoreAlloc_Unknown
               | Some l \<Rightarrow> l)
              (length params))"
 | "summarize env info params (CoreTy_Extern n l) = summary_const l (length params)"
@@ -643,7 +643,7 @@ fun atom_name :: "AllocAtom \<Rightarrow> string" where
 | "atom_name (AA_Mode dt _ _) = dt"
 
 definition all_levels :: "CoreAllocLevel list" where
-  "all_levels = [CoreAlloc_Never, CoreAlloc_IfNotDefault, CoreAlloc_Always]"
+  "all_levels = [CoreAlloc_Never, CoreAlloc_IfNotDefault, CoreAlloc_Unknown]"
 
 definition all_modes :: "AllocMode list" where
   "all_modes = [Mode_Never, Mode_Downgrade, Mode_Identity]"
@@ -663,7 +663,7 @@ qed
 (* Decoding: the largest atom present. *)
 definition decode_level :: "AllocAtom set \<Rightarrow> string \<Rightarrow> CoreAllocLevel" where
   "decode_level A dt =
-     (if AA_Base dt CoreAlloc_Always \<in> A then CoreAlloc_Always
+     (if AA_Base dt CoreAlloc_Unknown \<in> A then CoreAlloc_Unknown
       else if AA_Base dt CoreAlloc_IfNotDefault \<in> A then CoreAlloc_IfNotDefault
       else CoreAlloc_Never)"
 
@@ -917,7 +917,7 @@ lemma alloc_level_compatible_info_eq:
   by (simp add: alloc_level_compatible_def alloc_level_compatible_info_def alloc_level_of_type_def)
 
 (* Scalar and extern types have a fixed level; a type variable has its
-   declared level, or CoreAlloc_Always if it has none. *)
+   declared level, or CoreAlloc_Unknown if it has none. *)
 lemma alloc_level_of_type_scalar [simp]:
   "alloc_level_of_type env CoreTy_Bool = CoreAlloc_Never"
   "alloc_level_of_type env (CoreTy_FiniteInt sign bits) = CoreAlloc_Never"
@@ -929,19 +929,19 @@ lemma alloc_level_of_type_scalar [simp]:
 lemma alloc_level_of_type_Var [simp]:
   "alloc_level_of_type env (CoreTy_Var n) =
      (case fmlookup (TE_AbstractAllocLevels env) n of
-        None \<Rightarrow> CoreAlloc_Always
+        None \<Rightarrow> CoreAlloc_Unknown
       | Some l \<Rightarrow> l)"
   by (cases "fmlookup (TE_AbstractAllocLevels env) n")
      (simp_all add: alloc_level_of_type_def alloc_level_of_type_info_def summary_const_def)
 
 (* Look up the declared alloc level of an abstract type in the type environment.
-   If the name isn't found in TE_AbstractAllocLevels, then return CoreAlloc_Always
+   If the name isn't found in TE_AbstractAllocLevels, then return CoreAlloc_Unknown
    (but this shouldn't happen, as this function is only intended to be called on
    valid abstract type names). *)
 definition declared_alloc_level :: "CoreTyEnv \<Rightarrow> string \<Rightarrow> CoreAllocLevel" where
   "declared_alloc_level env name =
      (case fmlookup (TE_AbstractAllocLevels env) name of
-        None \<Rightarrow> CoreAlloc_Always
+        None \<Rightarrow> CoreAlloc_Unknown
       | Some l \<Rightarrow> l)"
 
 lemma alloc_level_of_type_Var_declared:

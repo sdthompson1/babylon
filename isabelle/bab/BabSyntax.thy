@@ -111,7 +111,10 @@ datatype BabStatement =
   | BabStmt_ShowHide Location ShowOrHide string
   | BabStmt_Ghost Location BabStatement   (* inner statement runs in Ghost mode *)
 
-datatype AllocLevel = AllocNever | AllocIfNotDefault | AllocAlways
+datatype AllocLevel = 
+  AllocNever           (* no `allocated` marker *)
+  | AllocIfNotDefault  (* `(allocated)` *)
+  | AllocUnknown       (* `(allocated\<star>)` *)   
 
 record DeclConst =
   DC_Location :: Location

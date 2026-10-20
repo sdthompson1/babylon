@@ -497,8 +497,8 @@ lemma link_runtime_ok_mset_cong:
    whose alloc level is \<le> L (alloc_level_compatible, CoreAllocLevel.thy).
 
    Edge cases: A target mentioning a type variable that no input declares as
-   an abstract type has level CoreAlloc_Always, so it is compatible only with
-   a declared level of CoreAlloc_Always. A resolved name that no input declares
+   an abstract type has level CoreAlloc_Unknown, so it is compatible only with
+   a declared level of CoreAlloc_Unknown. A resolved name that no input declares
    is not checked. *)
 definition link_alloc_ok :: "CoreModule list \<Rightarrow> TypeSubst \<Rightarrow> bool" where
   "link_alloc_ok ms \<sigma> =

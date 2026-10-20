@@ -1024,7 +1024,7 @@ definition parse_typedef_rhs :: "(BabType option \<times> AllocLevel) Parser" wh
 definition parse_typedef_alloc :: "(BabType option \<times> AllocLevel) Parser" where
   "parse_typedef_alloc = parens (
     (expect (KEYWORD KW_ALLOCATED) \<then> (
-      (expect STAR \<then> return (None, AllocAlways))
+      (expect STAR \<then> return (None, AllocUnknown))
       <|> return (None, AllocIfNotDefault))
     )
   )"
