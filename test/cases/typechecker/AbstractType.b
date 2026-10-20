@@ -39,7 +39,7 @@ interface {
     type Abs1;
     type Abs2;
     type Abs3 (allocated);
-    type Abs4 (allocated_always);
+    type Abs4 (allocated*);
     type Abs5;
     type Abs6;
     type Abs7 (allocated);
@@ -89,7 +89,7 @@ type Abs1 = {x: i32[], y: bool};  // Illegal, can't use an incomplete type to im
 
 type Abs2 = i32[*];   // Illegal, can't use allocatable type when wasn't declared in the interface.
 
-extern type AlwaysAlloc (allocated_always);
+extern type AlwaysAlloc (allocated*);
 type Abs3 = AlwaysAlloc;  // Error, does not match "allocated" declaration in interface.
 
 type Abs4 = i32;   // This is fine, the interface is "conservative" but that's ok.

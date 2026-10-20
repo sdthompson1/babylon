@@ -3,7 +3,7 @@ module Imported
 import Test;
 
 interface {
-    type T (allocated_always);
+    type T (allocated*);
 
     datatype MaybeT = Nothing | Just(T);
 
@@ -17,7 +17,7 @@ interface {
         requires allocated(x);
 }
 
-// An (allocated_always) type can be realized by any type whatsoever;
+// An (allocated*) type can be realized by any type whatsoever;
 // here, we choose to realize it by i32.
 type T = i32;
 

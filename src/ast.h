@@ -659,9 +659,9 @@ struct DeclData_Datatype {
 // Alloc levels are ordered: ALLOC_NEVER < ALLOC_IF_NOT_DEFAULT < ALLOC_UNKNOWN,
 // where lower levels provide more facts about allocated(x).
 enum AllocLevel {
-    ALLOC_NEVER,           // allocated(x) is always false
-    ALLOC_IF_NOT_DEFAULT,  // allocated(default) is false
-    ALLOC_UNKNOWN          // nothing is known (e.g. type variables, "allocated_always" types)
+    ALLOC_NEVER,           // allocated(x) is always false (e.g. bool, i32)
+    ALLOC_IF_NOT_DEFAULT,  // allocated(default) is false (e.g. T[*] arrays, "allocated" types)
+    ALLOC_UNKNOWN          // nothing is known (e.g. type variables, "allocated*" types)
 };
 
 struct DeclData_Typedef {
@@ -676,7 +676,7 @@ struct DeclData_Typedef {
     bool is_extern;
 
     // This determines whether the type has "allocated" or
-    // "allocated_always" (applicable only if rhs == NULL)
+    // "allocated*" (applicable only if rhs == NULL)
     enum AllocLevel alloc_level;
 };
 

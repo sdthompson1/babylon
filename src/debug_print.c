@@ -871,7 +871,7 @@ static void print_decls(int indent_level, FILE *file, struct Decl *decl)
             } else if (decl->typedef_data.alloc_level != ALLOC_NEVER) {
                 fprintf(file, " (");
                 if (decl->typedef_data.alloc_level == ALLOC_UNKNOWN) {
-                    fprintf(file, "allocated_always");
+                    fprintf(file, "allocated*");
                 } else if (decl->typedef_data.alloc_level == ALLOC_IF_NOT_DEFAULT) {
                     fprintf(file, "allocated");
                 } else {

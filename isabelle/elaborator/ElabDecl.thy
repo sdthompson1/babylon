@@ -895,10 +895,9 @@ definition elab_datatype_decl ::
 (* ========================================================================== *)
 
 (* Elaborate a typedef declaration. Cases:
-    - A new extern type - `extern type T;`, `extern type T (allocated);` or
-      `extern type T (allocated_always);`. This cannot be ghost and cannot have
-      type variables. If T was previously declared as an abstract type then this
-      also realizes the abstract type by the new extern type.
+    - A new extern type - `extern type T;` (with or without an alloc-level).
+      This cannot be ghost and cannot have type variables. If T was previously declared
+      as an abstract type then this also realizes the abstract type by the new extern type.
 
     - Realization - `type T = Foo;` after a previous `type T;` (or `ghost type T;`).
       Type variables are not allowed. If the type T was declared runtime (non-ghost), then

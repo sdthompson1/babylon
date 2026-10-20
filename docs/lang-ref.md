@@ -2032,23 +2032,23 @@ that relies on knowing what the concrete type underlying the name
 `Foo` actually is.
 
 It is also possible to declare an abstract type using the syntax `type
-Foo (allocated);` or `type Foo (allocated_always);`. The `(allocated)`
+Foo (allocated);` or `type Foo (allocated*);`. The `(allocated)`
 marker means that `allocated(x)` is only known to be false when `x`
 equals the default value of type `Foo`; for any other value,
-`allocated(x)` might or might not be true. The `(allocated_always)`
-marker is even stricter: the verifier will assume nothing at all about
+`allocated(x)` might or might not be true. The `(allocated*)` marker
+is even stricter: the verifier will assume nothing at all about
 whether `allocated(x)` is true or false.
 
 It is a rule of the language that the "allocated level" of an abstract
 type must be compatible with the implementation given for it. If the
 abstract type (in the interface) is declared with neither
-`(allocated)` nor `(allocated_always)`, then the concrete type (in the
+`(allocated)` nor `(allocated*)`, then the concrete type (in the
 implementation) must not include any allocatable array type anywhere
 within it, nor must it include any type that is itself `(allocated)`
-or `(allocated_always)`. If the abstract type is declared
-`(allocated)` then the concrete type must not include anything marked
-`(allocated_always)`. If the abstract type is `(allocated_always)`
-then the concrete type can be any type whatsoever.
+or `(allocated*)`. If the abstract type is declared `(allocated)` then
+the concrete type must not include anything marked `(allocated*)`. If
+the abstract type is `(allocated*)` then the concrete type can be any
+type whatsoever.
 
 By default, abstract types are assumed to be runtime-compatible types
 (i.e., not `int` or `real` nor anything containing those types). Thus,
@@ -2086,22 +2086,22 @@ inside" the type to see what the `void *` pointer contains or what it
 points to.
 
 It is also possible to declare an extern type as `extern type Foo
-(allocated);` or `extern type Foo (allocated_always);`. The
-`(allocated)` case means that if the `void *` pointer (on the C side)
-is equal to `NULL`, then the value (on the Babylon side) will be
-considered non-allocated; but nothing would be assumed about the
-"allocated-ness" of non-NULL pointer values. The `(allocated_always)`
-case is stricter: the verifier assumes nothing at all about whether an
-extern value of this type is allocated or not.
+(allocated);` or `extern type Foo (allocated*);`. The `(allocated)`
+case means that if the `void *` pointer (on the C side) is equal to
+`NULL`, then the value (on the Babylon side) will be considered
+non-allocated; but nothing would be assumed about the "allocated-ness"
+of non-NULL pointer values. The `(allocated*)` case is stricter: the
+verifier assumes nothing at all about whether an extern value of this
+type is allocated or not.
 
 The `(allocated)` case is useful if the C `void *` value represents
 some sort of pointer to allocated memory, with `NULL` meaning that no
 memory has been allocated (as is usual in C); this will prevent the
 pointer from being leaked or duplicated on the Babylon side. The
-`(allocated_always)` case prevents the Babylon side from creating a
-value of the type at all, which is useful when the `void *` represents
-some sort of handle, where the C code only ever wants to see handles
-that it itself created.
+`(allocated*)` case prevents the Babylon side from creating a value of
+the type at all, which is useful when the `void *` represents some
+sort of handle, where the C code only ever wants to see handles that
+it itself created.
 
 If a type is declared using `extern type` in the module interface,
 then no `type` or `datatype` declaration bearing the same name may

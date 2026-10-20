@@ -1,7 +1,7 @@
 module Main
 
 // Regression test for previously unsound behaviour of "type T
-// (allocated_always);" (now fixed).
+// (allocated*);" (now fixed).
 
 interface {
     function main();
@@ -12,7 +12,7 @@ import Test;
 
 function main()
 {
-    // If T is declared as "type T (allocated_always);", this means
+    // If T is declared as "type T (allocated*);", this means
     // that allocated(x) can neither be proven nor disproven, for
     // any value x of type T.
 

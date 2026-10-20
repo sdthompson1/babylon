@@ -1,10 +1,10 @@
 module AllocatedAbstract2
 
 interface {
-    type T (allocated_always);
+    type T (allocated*);
 
     function test1() {
-        var x: T;   // Error, T is allocated_always, as far as the interface knows.
+        var x: T;   // Error, T is allocated*, as far as the interface knows.
     }
 }
 

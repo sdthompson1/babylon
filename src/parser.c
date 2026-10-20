@@ -2433,16 +2433,12 @@ static struct Decl * parse_typedef_decl(struct ParserState *state, bool extern_f
 
     } else if (state->token->type == TOK_LPAREN) {
         advance(state);
-        if (state->token->type == TOK_KW_ALLOCATED) {
-            alloc_level = ALLOC_IF_NOT_DEFAULT;
-        } else if (state->token->type == TOK_NAME && strcmp(state->token->data, "allocated_always") == 0) {
+        expect(state, TOK_KW_ALLOCATED, "'allocated'");
+        alloc_level = ALLOC_IF_NOT_DEFAULT;
+        if (state->token->type == TOK_TIMES) {
+            advance(state);
             alloc_level = ALLOC_UNKNOWN;
-        } else {
-            expect(state, TOK_KW_ALLOCATED, "'allocated' or 'allocated_always'"); // show error message
-            free_tyvar_list(tyvars);
-            return NULL;
         }
-        advance(state);
         expect(state, TOK_RPAREN, "')'");
     }
 

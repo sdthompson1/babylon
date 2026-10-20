@@ -70,7 +70,7 @@ ghost function f8()
 
 
 // Allocated 'extern' types.
-extern type Foo (allocated_always);
+extern type Foo (allocated*);
 
 datatype MaybeFoo = Nothing | Just(Foo);
 
