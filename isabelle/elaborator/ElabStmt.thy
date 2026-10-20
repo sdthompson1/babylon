@@ -600,6 +600,27 @@ definition elab_use ::
           | _ \<Rightarrow> Inl [TyErr_UseNoExistsGoal loc])"
 
 
+(* ----- If / While condition helper ----- *)
+
+(* Elaborate the condition of an if or while statement. It is elaborated in the ambient
+   ghost mode and its type unified with Bool (as in Assume); the unifier is applied and
+   the result must contain no unresolved metavariables. Returns the condition and the
+   advanced counter. *)
+definition elab_condition ::
+  "CoreTyEnv \<Rightarrow> ElabEnv \<Rightarrow> GhostOrNot \<Rightarrow> Location \<Rightarrow> BabTerm \<Rightarrow> nat
+   \<Rightarrow> TypeError list + (CoreTerm \<times> nat)" where
+  "elab_condition env elabEnv ghost loc cond next_mv =
+    (case elab_term env elabEnv ghost cond next_mv of
+       Inl errs \<Rightarrow> Inl errs
+     | Inr (coreCond, condTy, next_mv1) \<Rightarrow>
+         (case unify (\<lambda>n. n |\<notin>| TE_TypeVars env) condTy CoreTy_Bool of
+            None \<Rightarrow> Inl [TyErr_TypeMismatch loc CoreTy_Bool condTy]
+          | Some subst \<Rightarrow>
+              if \<not> term_inferred env (apply_subst_to_term subst coreCond)
+              then Inl [TyErr_CannotInferType loc]
+              else Inr (apply_subst_to_term subst coreCond, next_mv1)))"
+
+
 (* ----- While branch helpers ----- *)
 
 (* Validate a while loop's attribute list and split it into the invariant terms (in
@@ -662,37 +683,31 @@ fun elab_while_decreases ::
          then Inl [TyErr_CannotInferType (bab_term_location decr)]
          else Inr (Some coreDecr, next_mv'))"
 
-(* Elaborate the "header" of a while loop, given the invariant terms and the optional
-   decreases term already extracted from the attribute list. The condition is elaborated in
-   the ambient ghost mode and coerced to Bool (like BabStmt_If); the invariants are each
-   elaborated in Ghost mode and coerced to Bool; the decreases term (if any) is elaborated
-   in Ghost mode and must have a valid decreases type. None of the elaborated terms may
-   contain unresolved metavariables. Returns the condition, the invariant terms, the
-   optional decreases term, and the advanced counter. The body elaboration (which
-   recurses into elab_statement_list) is left to the main clause. *)
+(* Elaborate the "header" of a while loop. The attribute list is validated and split
+   into the invariant terms and the optional decreases term; the condition is elaborated
+   by elab_condition (like BabStmt_If); the invariants are each elaborated in Ghost mode
+   and coerced to Bool; the decreases term (if any) is elaborated in Ghost mode and must
+   have a valid decreases type. None of the elaborated terms may contain unresolved
+   metavariables. Returns the condition, the invariant terms, the optional decreases
+   term, and the advanced counter. The body elaboration (which recurses into
+   elab_statement_list) is left to the main clause. *)
 definition elab_while_header ::
-  "CoreTyEnv \<Rightarrow> ElabEnv \<Rightarrow> GhostOrNot \<Rightarrow> Location \<Rightarrow> BabTerm \<Rightarrow> BabTerm list \<Rightarrow> BabTerm option
+  "CoreTyEnv \<Rightarrow> ElabEnv \<Rightarrow> GhostOrNot \<Rightarrow> Location \<Rightarrow> BabTerm \<Rightarrow> BabAttribute list
    \<Rightarrow> nat \<Rightarrow> TypeError list + (CoreTerm \<times> CoreTerm list \<times> CoreTerm option \<times> nat)" where
-  "elab_while_header env elabEnv ghost loc cond invs decr next_mv =
-    (case elab_term env elabEnv ghost cond next_mv of
+  "elab_while_header env elabEnv ghost loc cond attrs next_mv =
+    (case collect_while_attributes loc attrs of
        Inl errs \<Rightarrow> Inl errs
-     | Inr (coreCond, condTy, next_mv1) \<Rightarrow>
-         (case unify (\<lambda>n. n |\<notin>| TE_TypeVars env) condTy CoreTy_Bool of
-            None \<Rightarrow> Inl [TyErr_TypeMismatch loc CoreTy_Bool condTy]
-          | Some subst \<Rightarrow>
-              if \<not> term_inferred env (apply_subst_to_term subst coreCond)
-              then Inl [TyErr_CannotInferType loc]
-              else
+     | Inr (invs, decr) \<Rightarrow>
+         (case elab_condition env elabEnv ghost loc cond next_mv of
+            Inl errs \<Rightarrow> Inl errs
+          | Inr (coreCond, next_mv1) \<Rightarrow>
               (case elab_while_invariants env elabEnv invs next_mv1 of
                  Inl errs \<Rightarrow> Inl errs
                | Inr (coreInvars, next_mv2) \<Rightarrow>
                    (case elab_while_decreases env elabEnv decr next_mv2 of
                       Inl errs \<Rightarrow> Inl errs
                     | Inr (coreDecr, next_mv3) \<Rightarrow>
-                        Inr (apply_subst_to_term subst coreCond,
-                             coreInvars,
-                             coreDecr,
-                             next_mv3)))))"
+                        Inr (coreCond, coreInvars, coreDecr, next_mv3)))))"
 
 
 (* ========================================================================== *)
@@ -788,6 +803,11 @@ definition finalize_match_stmt ::
 (* ========================================================================== *)
 (* Main statement elaboration functions *)
 (* ========================================================================== *)
+
+(* The errors of a result (none, if it is a success). *)
+fun result_errors :: "'e list + 'a \<Rightarrow> 'e list" where
+  "result_errors (Inl errs) = errs"
+| "result_errors (Inr _) = []"
 
 (* elab_statement translates a Babylon AST statement (BabStatement) into a 
    Core statement (CoreStatement). Like elab_term, it threads a metavariable  
@@ -972,46 +992,47 @@ where
   (* If-then-else: Evaluate a boolean condition and branch to one of two statement blocks.
      Each block creates a new variable scope. Elaborates to CoreStmt_Match. *)
 | "elab_statement env elabEnv ghost (BabStmt_If loc cond thenB elseB) next_mv =
-    (case elab_term env elabEnv ghost cond next_mv of
-       Inl errs \<Rightarrow> Inl errs
-     | Inr (coreCond, condTy, next_mv1) \<Rightarrow>
-         (case unify (\<lambda>n. n |\<notin>| TE_TypeVars env) condTy CoreTy_Bool of
-            None \<Rightarrow> Inl [TyErr_TypeMismatch loc CoreTy_Bool condTy]
-          | Some subst \<Rightarrow>
-              if \<not> term_inferred env (apply_subst_to_term subst coreCond)
-              then Inl [TyErr_CannotInferType loc]
-              else
-              (let armEnv = env \<lparr> TE_ProofTopLevel := False \<rparr>
-               in case elab_statement_list armEnv elabEnv ghost thenB next_mv1 of
+    (case elab_condition env elabEnv ghost loc cond next_mv of
+       Inl errs \<Rightarrow>
+         \<comment> \<open>Elaborate both blocks anyway, solely to collect their errors.\<close>
+         Inl (errs
+              @ result_errors (elab_statement_list (env \<lparr> TE_ProofTopLevel := False \<rparr>)
+                                                   elabEnv ghost thenB next_mv)
+              @ result_errors (elab_statement_list (env \<lparr> TE_ProofTopLevel := False \<rparr>)
+                                                   elabEnv ghost elseB next_mv))
+     | Inr (coreCond, next_mv1) \<Rightarrow>
+         (let armEnv = env \<lparr> TE_ProofTopLevel := False \<rparr>
+          in case elab_statement_list armEnv elabEnv ghost thenB next_mv1 of
+               Inl errs \<Rightarrow>
+                 \<comment> \<open>Elaborate the else-block anyway, solely to collect its errors.\<close>
+                 Inl (errs @ result_errors (elab_statement_list armEnv elabEnv ghost elseB next_mv1))
+             | Inr (coreThen, _, next_mv2) \<Rightarrow>
+                 (case elab_statement_list armEnv elabEnv ghost elseB next_mv2 of
                     Inl errs \<Rightarrow> Inl errs
-                  | Inr (coreThen, _, next_mv2) \<Rightarrow>
-                      (case elab_statement_list armEnv elabEnv ghost elseB next_mv2 of
-                         Inl errs \<Rightarrow> Inl errs
-                       | Inr (coreElse, _, next_mv3) \<Rightarrow>
-                           Inr (CoreStmt_Match ghost
-                                  (apply_subst_to_term subst coreCond)
-                                  [(CorePat_Bool True, coreThen),
-                                   (CorePat_Bool False, coreElse)],
-                                env, next_mv3)))))"
+                  | Inr (coreElse, _, next_mv3) \<Rightarrow>
+                      Inr (CoreStmt_Match ghost coreCond
+                             [(CorePat_Bool True, coreThen),
+                              (CorePat_Bool False, coreElse)],
+                           env, next_mv3))))"
 
   (* While: loop while a condition remains true. The cond must be boolean. The attrs can
      include only "invariant" and "decreases" (with proper types) and there must be at
      most one "decreases". The body is typechecked in a new scope. *)
 | "elab_statement env elabEnv ghost (BabStmt_While loc cond attrs body) next_mv =
-    \<comment> \<open>Validate the attribute list (at most one `decreases`).\<close>
-    (case collect_while_attributes loc attrs of
-       Inl errs \<Rightarrow> Inl errs
-     | Inr (invs, decr) \<Rightarrow>
-         \<comment> \<open>Elaborate the condition / invariants / decreases (header), then the body.\<close>
-         (case elab_while_header env elabEnv ghost loc cond invs decr next_mv of
-            Inl errs \<Rightarrow> Inl errs
-          | Inr (coreCond, coreInvars, coreDecr, next_mv3) \<Rightarrow>
-              (let bodyEnv = env \<lparr> TE_ProofTopLevel := False \<rparr>
-               in case elab_statement_list bodyEnv elabEnv ghost body next_mv3 of
-                    Inl errs \<Rightarrow> Inl errs
-                  | Inr (coreBody, _, next_mv4) \<Rightarrow>
-                      Inr (CoreStmt_While ghost coreCond coreInvars coreDecr coreBody,
-                           env, next_mv4))))"
+    \<comment> \<open>Elaborate the condition / invariants / decreases (header), then the body.\<close>
+    (case elab_while_header env elabEnv ghost loc cond attrs next_mv of
+       Inl errs \<Rightarrow>
+         \<comment> \<open>Elaborate the body anyway, solely to collect its errors.\<close>
+         Inl (errs
+              @ result_errors (elab_statement_list (env \<lparr> TE_ProofTopLevel := False \<rparr>)
+                                                   elabEnv ghost body next_mv))
+     | Inr (coreCond, coreInvars, coreDecr, next_mv3) \<Rightarrow>
+         (let bodyEnv = env \<lparr> TE_ProofTopLevel := False \<rparr>
+          in case elab_statement_list bodyEnv elabEnv ghost body next_mv3 of
+               Inl errs \<Rightarrow> Inl errs
+             | Inr (coreBody, _, next_mv4) \<Rightarrow>
+                 Inr (CoreStmt_While ghost coreCond coreInvars coreDecr coreBody,
+                      env, next_mv4)))"
 
   (* Call a function, disregarding the return value. Elaborates to a CoreStmt_Block
      containing a single CoreStmt_VarDeclCall whose temporary immediately goes out
@@ -1133,7 +1154,7 @@ proof (relation
                  (case_sum (\<lambda>(_, _, _, stmts, _). size_list size stmts)
                            (\<lambda>(jobs, _, _, _). size_list (size_list size \<circ> snd) jobs)))",
        goal_cases)
-  case (7 env elabEnv ghost loc scrut arms next_mv b x y xa ya ba dps
+  case (11 env elabEnv ghost loc scrut arms next_mv b x y xa ya ba dps
           bb mode yb freshName yc writable yd envAfterFresh mv2 bodyJobs)
   \<comment> \<open>BabStmt_Match body-elaboration sub-call: bodies (taken syntactically from
       arms, zipped with the per-arm envs) sum to less than the whole
@@ -1145,7 +1166,7 @@ proof (relation
                (map snd arms))
           \<le> size_list (size_prod (\<lambda>x. 0) (size_list size)) arms"
     by (rule size_list_stmts_snd_zip_map_snd_le)
-  with 7 show ?case by simp
+  with 11 show ?case by simp
 qed (simp_all add: comp_def)
 
 end

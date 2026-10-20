@@ -211,11 +211,6 @@ definition item_deps ::
             then concat (map deps (filter (\<lambda>c. tagged_decl_name c = tagged_decl_name d) ctxDecls))
             else []))"
 
-(* The errors of a result (none, if it is a success). *)
-fun result_errors :: "'e list + 'a \<Rightarrow> 'e list" where
-  "result_errors (Inl errs) = errs"
-| "result_errors (Inr _) = []"
-
 (* This goes through the SCCs (from Kosaraju) and fishes out the declarations in
    dependency order. Only the items tagged True are kept (see sort_items).
    Errors are checked:
