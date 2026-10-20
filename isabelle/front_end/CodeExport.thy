@@ -33,7 +33,7 @@ datatype CompileResult =
 
    This runs the front end (lexer, parser, loader, renamer), and then, if that
    succeeds, elaborates all the modules to Core (which includes typechecking
-   them). *)
+   them) and runs the whole-program link. *)
 fun run_compiler :: "(string \<times> string) list \<Rightarrow> CompileResult"
   where
 "run_compiler [] = CR_Errors [''no input modules'']"
@@ -47,7 +47,10 @@ fun run_compiler :: "(string \<times> string) list \<Rightarrow> CompileResult"
       | Inr babModules \<Rightarrow>
           (case elab_program babModules of
              Inl err \<Rightarrow> CR_Errors (pipeline_error_to_strings err)
-           | Inr _ \<Rightarrow> CR_Success))"
+           | Inr ps \<Rightarrow> 
+              (case whole_program_link ps of
+                Inl err \<Rightarrow> CR_Errors (whole_program_link_error_to_strings err)
+              | Inr _ \<Rightarrow> CR_Success)))"
 
 export_code run_compiler CR_Success CR_Errors
   in Haskell

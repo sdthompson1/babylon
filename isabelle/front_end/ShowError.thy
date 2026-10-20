@@ -490,4 +490,10 @@ fun pipeline_error_to_strings :: "PipelineError \<Rightarrow> string list" where
 | "pipeline_error_to_strings (PE_ElabError modName err) =
      elab_module_error_to_strings modName err"
 
+(* The whole-program link is not expected to fail; if it does, there is a bug
+   somewhere in the compiler. *)
+definition whole_program_link_error_to_strings :: "LinkError \<Rightarrow> string list" where
+  "whole_program_link_error_to_strings err =
+    [''internal compiler error: whole-program link failed: '' @ link_error_to_string err]"
+
 end
