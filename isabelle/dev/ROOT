@@ -1,0 +1,3 @@
+session BabylonDev = Babylon +
+  theories
+    "MatchCompilePass"
