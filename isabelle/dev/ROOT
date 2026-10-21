@@ -1,3 +1,7 @@
-session BabylonDev = Babylon +
+session BabylonDev1 in "d1" = Babylon +
   theories
     "MatchCompilePass"
+
+session BabylonDev2 in "d2" = BabylonDev1 +
+  theories
+    "MatchCompilePassFlat"

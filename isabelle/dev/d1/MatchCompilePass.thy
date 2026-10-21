@@ -144,7 +144,7 @@ fun match_compile_term :: "CoreTerm \<Rightarrow> CoreTerm" where
     (let arms' = map (\<lambda>(p, b). (p, match_compile_term b)) arms
      in if arms_flat arms
         then CoreTm_Match (match_compile_term scrut) arms'
-        else compile_match_term scrut arms')"
+        else compile_match_term (match_compile_term scrut) arms')"
 | "match_compile_term (CoreTm_Sizeof tm) = CoreTm_Sizeof (match_compile_term tm)"
 | "match_compile_term (CoreTm_Allocated ty tm) = CoreTm_Allocated ty (match_compile_term tm)"
 | "match_compile_term (CoreTm_Default ty) = CoreTm_Default ty"
@@ -192,7 +192,7 @@ and match_compile_statement_list :: "CoreStatement list \<Rightarrow> CoreStatem
     (let arms' = map (\<lambda>(p, body). (p, match_compile_statement_list body)) arms
      in if arms_flat arms
         then [CoreStmt_Match g (match_compile_term scrut) arms']
-        else compile_match_statement g scrut arms')"
+        else compile_match_statement g (match_compile_term scrut) arms')"
 | "match_compile_statement (CoreStmt_ShowHide sh name) = [CoreStmt_ShowHide sh name]"
 | "match_compile_statement (CoreStmt_Block body) =
     [CoreStmt_Block (match_compile_statement_list body)]"
