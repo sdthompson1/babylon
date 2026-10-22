@@ -20,3 +20,18 @@ session BabylonDev5 in "d5" = BabylonDev4 +
   options [timeout = 900]
   theories
     "MatchCompilePassSimTerms"
+
+session BabylonDev6 in "d6" = BabylonDev5 +
+  options [timeout = 900]
+  theories
+    "MatchCompilePassSimStmts"
+
+session BabylonDev7 in "d7" = BabylonDev6 +
+  options [timeout = 900]
+  theories
+    "MatchCompilePassSimCall"
+
+session BabylonDev8 in "d8" = BabylonDev7 +
+  options [timeout = 900]
+  theories
+    "MatchCompilePassSimulation"
