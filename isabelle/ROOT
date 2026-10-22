@@ -70,6 +70,14 @@ session Babylon = "HOL-Library" +
     "core_passes/MatchCompileFlat"
     "core_passes/MatchCompileSemantics"
     "core_passes/MatchCompileTyping"
+    "core_passes/MatchCompilePass"
+    "core_passes/MatchCompilePassFlat"
+    "core_passes/MatchCompilePassTyping"
+    "core_passes/MatchCompilePassState"
+    "core_passes/MatchCompilePassSimTerms"
+    "core_passes/MatchCompilePassSimStmts"
+    "core_passes/MatchCompilePassSimCall"
+    "core_passes/MatchCompilePassSimulation"
 
     (* elaborator *)
     "elaborator/BabContractRename"

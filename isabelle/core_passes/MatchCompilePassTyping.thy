@@ -1,6 +1,6 @@
 theory MatchCompilePassTyping
-  imports BabylonDev2.MatchCompilePassFlat Babylon.CoreModuleTypecheck
-    Babylon.CoreStmtTypecheckLemmas
+  imports MatchCompilePassFlat "../core/CoreModuleTypecheck"
+    "../core/CoreStmtTypecheckLemmas"
 begin
 
 (* Type preservation for the match compilation pass.

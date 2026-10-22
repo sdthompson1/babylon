@@ -1,5 +1,5 @@
 theory MatchCompilePassFlat
-  imports BabylonDev1.MatchCompilePass Babylon.MatchCompileTyping
+  imports MatchCompilePass MatchCompileTyping
 begin
 
 (* This file proves that the output of match_compile_module satisfies the

@@ -1,5 +1,5 @@
 theory MatchCompilePassSimCall
-  imports BabylonDev6.MatchCompilePassSimStmts
+  imports MatchCompilePassSimStmts
 begin
 
 (* The simulation for the match compilation pass: the function call case of

@@ -1,5 +1,5 @@
 theory MatchCompilePassSimulation
-  imports BabylonDev7.MatchCompilePassSimCall Babylon.MakeInterpStateCorrect
+  imports MatchCompilePassSimCall "../interpreter/MakeInterpStateCorrect"
 begin
 
 (* The simulation theorem for the match compilation pass.

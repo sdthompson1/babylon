@@ -1,5 +1,5 @@
 theory MatchCompilePassSimStmts
-  imports BabylonDev5.MatchCompilePassSimTerms
+  imports MatchCompilePassSimTerms
 begin
 
 (* The simulation for the match compilation pass: the statement, statement

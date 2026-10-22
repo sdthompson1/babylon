@@ -1,7 +1,7 @@
 theory MatchCompilePassState
-  imports BabylonDev3.MatchCompilePassTyping Babylon.MatchCompileSemantics
-    Babylon.ErasedSteps Babylon.TypeSoundness Babylon.CoreInterpFuelMono
-    Babylon.TypeSubstHelpers
+  imports MatchCompilePassTyping MatchCompileSemantics
+    "../ghost_erasure/ErasedSteps" "../interpreter/TypeSoundness" "../interpreter/CoreInterpFuelMono"
+    "../core/TypeSubstHelpers"
 begin
 
 (* The semantics of the match compilation pass: the state relation and the

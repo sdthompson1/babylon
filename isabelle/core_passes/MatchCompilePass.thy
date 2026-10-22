@@ -1,5 +1,5 @@
 theory MatchCompilePass
-  imports Babylon.MatchCompile Babylon.CoreModule Babylon.GhostFree
+  imports MatchCompile "../core/CoreModule" "../ghost_erasure/GhostFree"
 begin
 
 (* The match-compilation pass as a whole-module Core-to-Core transformation.
@@ -422,6 +422,14 @@ lemma core_statement_list_match_scrutinees_ok_append [simp]:
      = (core_statement_list_match_scrutinees_ok stmts1
         \<and> core_statement_list_match_scrutinees_ok stmts2)"
   by (induction stmts1) simp_all
+
+(* The scrutinee test, in executable form for the code generator. (The code
+   preprocessor rewrites the inner equality to HOL.equal before it looks at
+   the quantifier, hence the second form.) *)
+lemma ex_var_term_code [code_unfold]:
+  "(\<exists>x. tm = CoreTm_Var x) \<longleftrightarrow> (case tm of CoreTm_Var _ \<Rightarrow> True | _ \<Rightarrow> False)"
+  "(\<exists>x. HOL.equal tm (CoreTm_Var x)) \<longleftrightarrow> (case tm of CoreTm_Var _ \<Rightarrow> True | _ \<Rightarrow> False)"
+  unfolding equal_eq by (cases tm; simp)+
 
 definition core_module_match_scrutinees_ok :: "CoreModule \<Rightarrow> bool" where
   "core_module_match_scrutinees_ok m =
