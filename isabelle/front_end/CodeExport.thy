@@ -36,11 +36,13 @@ datatype CompileResult =
    This runs the front end (lexer, parser, loader, renamer), and then, if that
    succeeds, elaborates all the modules to Core (which includes typechecking
    them), runs the whole-program link, erases ghost code and compiles the
-   pattern matches to flat ones (match_compile_module). The hypothesis of the
-   match compilation pass (every non-flat match has a variable scrutinee,
-   which the elaborator guarantees) and the flatness of its result (which
-   the theorems guarantee) are also checked at runtime, and an internal
-   error is reported if a check fails. *)
+   pattern matches to flat ones (match_compile_module).
+
+   The link should always succeed on elaborator output, and the hypothesis of the
+   match compilation pass (every non-flat match has a variable scrutinee) should
+   also always be true, but neither of these facts is proved yet. Therefore, they
+   are checked at runtime below, and an internal compiler error is reported if
+   a check fails. *)
 fun run_compiler :: "(string \<times> string) list \<Rightarrow> CompileResult"
   where
 "run_compiler [] = CR_Errors [''no input modules'']"
@@ -61,8 +63,6 @@ fun run_compiler :: "(string \<times> string) list \<Rightarrow> CompileResult"
                   (let erased = erase_ghost_module linked
                    in if \<not> core_module_match_scrutinees_ok erased
                       then CR_Errors [''internal error: match scrutinee is not a variable'']
-                      else if \<not> core_module_flat (match_compile_module erased)
-                      then CR_Errors [''internal error: match compilation left a non-flat pattern'']
                       else CR_Success))))"
 
 export_code run_compiler CR_Success CR_Errors
