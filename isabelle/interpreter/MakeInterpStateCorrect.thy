@@ -117,6 +117,67 @@ next
   then show ?case using acc_none by simp
 qed
 
+(* Every entry of the built map comes from a listed function: the fields of
+   make_interp_fun, with the Core body, or the supplied ExternFunc for an
+   extern function. *)
+lemma build_interp_funs_lookup_inv:
+  assumes "build_interp_funs externs env pairs = Inr funs"
+      and "fmlookup funs name = Some f"
+  shows "\<exists>info cf body.
+           fmlookup (TE_Functions env) name = Some info \<and> (name, cf) \<in> set pairs
+           \<and> f = make_interp_fun info cf body
+           \<and> (case CF_Body cf of
+                  Some stmts \<Rightarrow> body = Inl stmts
+                | None \<Rightarrow> (\<exists>externFun. fmlookup externs name = Some externFun
+                                      \<and> body = Inr externFun))"
+  using assms
+proof (induction pairs arbitrary: funs)
+  case Nil
+  thus ?case by simp
+next
+  case (Cons p pairs)
+  obtain n cf where p: "p = (n, cf)" by (cases p)
+  from Cons.prems(1) p obtain info acc where
+    info: "fmlookup (TE_Functions env) n = Some info" and
+    acc: "build_interp_funs externs env pairs = Inr acc"
+    by (auto split: option.splits sum.splits)
+  \<comment> \<open>The body of the new entry.\<close>
+  have "\<exists>body. funs = fmupd n (make_interp_fun info cf body) acc
+          \<and> (case CF_Body cf of Some stmts \<Rightarrow> body = Inl stmts | None \<Rightarrow> \<exists>ext. fmlookup externs n = Some ext \<and> body = Inr ext)"
+  proof (cases "CF_Body cf")
+    case (Some stmts)
+    with Cons.prems(1) p info acc have "funs = fmupd n (make_interp_fun info cf (Inl stmts)) acc"
+      by simp
+    with Some show ?thesis by auto
+  next
+    case None
+    with Cons.prems(1) p info acc obtain ext where
+      "fmlookup externs n = Some ext" and "funs = fmupd n (make_interp_fun info cf (Inr ext)) acc"
+      by (auto split: option.splits)
+    with None show ?thesis by auto
+  qed
+  then obtain body where
+    funs: "funs = fmupd n (make_interp_fun info cf body) acc" and
+    body: "case CF_Body cf of Some stmts \<Rightarrow> body = Inl stmts | None \<Rightarrow> \<exists>ext. fmlookup externs n = Some ext \<and> body = Inr ext"
+    by blast
+  show ?case
+  proof (cases "name = n")
+    case True
+    with funs Cons.prems(2) have "f = make_interp_fun info cf body" by simp
+    with True info p body show ?thesis
+      by (intro exI[of _ info] exI[of _ cf] exI[of _ body]) (auto split: option.splits)
+  next
+    case False
+    with funs Cons.prems(2) have "fmlookup acc name = Some f" by simp
+    from Cons.IH[OF acc this] obtain info' cf' body' where
+      "fmlookup (TE_Functions env) name = Some info'" and "(name, cf') \<in> set pairs"
+      and "f = make_interp_fun info' cf' body'"
+      and "case CF_Body cf' of Some stmts \<Rightarrow> body' = Inl stmts | None \<Rightarrow> \<exists>ext. fmlookup externs name = Some ext \<and> body' = Inr ext"
+      by blast
+    thus ?thesis by (intro exI[of _ info'] exI[of _ cf'] exI[of _ body']) simp
+  qed
+qed
+
 
 (* ========================================================================== *)
 (* sorted_list_of_fmap                                                        *)
