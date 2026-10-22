@@ -10,7 +10,8 @@ begin
    pure and need no fuel (eval_expr returns None for undefined behaviour).
    Statements are executed by a mutually recursive, fuelled family of functions
    whose result distinguishes a normal result (Inr), insufficient fuel
-   (Inl MErr_Fuel) and undefined behaviour (Inl MErr_UB).
+   (Inl MErr_Fuel), undefined behaviour (Inl MErr_UB) and a trap, i.e. a
+   deliberate abort() by the program (Inl MErr_Trap; see MS_Trap).
 
    "Undefined behaviour" means anything that a C compiler would be allowed to
    miscompile, plus anything the C standard leaves implementation-defined that
