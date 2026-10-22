@@ -15,3 +15,8 @@ session BabylonDev4 in "d4" = BabylonDev3 +
   options [timeout = 900]
   theories
     "MatchCompilePassState"
+
+session BabylonDev5 in "d5" = BabylonDev4 +
+  options [timeout = 900]
+  theories
+    "MatchCompilePassSimTerms"
