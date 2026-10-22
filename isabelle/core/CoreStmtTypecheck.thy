@@ -147,18 +147,16 @@ where
   (* Assignment.
      The rhs is an ordinary (pure) term. Impure function-call rhs's use
      CoreStmt_AssignCall instead.
+     The type annotation must be the type of the lhs (and of the rhs).
      A non-ghost assignment must be at a complete type. *)
-| "core_statement_type env ghost (CoreStmt_Assign assignGhost lhsTm rhsTm) =
+| "core_statement_type env ghost (CoreStmt_Assign assignGhost ty lhsTm rhsTm) =
     (if (ghost = Ghost \<longrightarrow> assignGhost = Ghost)
         \<and> is_writable_lvalue env lhsTm
         \<and> ghost_lvalue_ok env assignGhost lhsTm
-     then (case core_term_type env assignGhost lhsTm of
-             Some lhsTy \<Rightarrow>
-               if (assignGhost = NotGhost \<longrightarrow> is_complete_type lhsTy)
-                  \<and> core_term_type env assignGhost rhsTm = Some lhsTy
-               then Some env
-               else None
-           | None \<Rightarrow> None)
+        \<and> core_term_type env assignGhost lhsTm = Some ty
+        \<and> (assignGhost = NotGhost \<longrightarrow> is_complete_type ty)
+        \<and> core_term_type env assignGhost rhsTm = Some ty
+     then Some env
      else None)"
 
   (* Assignment whose rhs is an impure function call.

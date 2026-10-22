@@ -34,7 +34,7 @@ next
   case (CoreStmt_Use witnessTm)
   show ?case by simp
 next
-  case (CoreStmt_Assign assignGhost lhsTm rhsTm)
+  case (CoreStmt_Assign assignGhost ty lhsTm rhsTm)
   show ?case by (cases assignGhost) simp_all
 next
   case (CoreStmt_AssignCall assignGhost lhsTm castOpt fnName tyArgs argTms)

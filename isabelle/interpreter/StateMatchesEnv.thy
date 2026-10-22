@@ -131,8 +131,10 @@ definition fun_info_matches_interp_fun :: "CoreTyEnv \<Rightarrow> FunInfo \<Rig
               (FI_TmArgs funInfo) (IF_Args interpFun) \<and>
     \<comment> \<open>Parameter names are distinct.\<close>
     distinct (map fst (IF_Args interpFun)) \<and>
-    \<comment> \<open>Impure flag matches\<close>
+    \<comment> \<open>Impure flag, ghost flag and return type match\<close>
     FI_Impure funInfo = IF_Impure interpFun \<and>
+    FI_Ghost funInfo = IF_Ghost interpFun \<and>
+    FI_ReturnType funInfo = IF_ReturnType interpFun \<and>
     \<comment> \<open>The contract matches, and it typechecks (CoreContractTypecheck.thy) in
         the body envs of the contract signatures.\<close>
     FI_Requires funInfo = IF_Requires interpFun \<and>

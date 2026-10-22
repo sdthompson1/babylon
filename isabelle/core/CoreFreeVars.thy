@@ -217,7 +217,7 @@ and core_statement_list_free_vars :: "CoreStatement list \<Rightarrow> string fs
 | "core_statement_free_vars (CoreStmt_Obtain varName _ condTm) =
     core_term_free_vars condTm |-| {|varName|}"
 | "core_statement_free_vars (CoreStmt_Use witnessTm) = core_term_free_vars witnessTm"
-| "core_statement_free_vars (CoreStmt_Assign _ lhsTm rhsTm) =
+| "core_statement_free_vars (CoreStmt_Assign _ _ lhsTm rhsTm) =
     core_term_free_vars lhsTm |\<union>| core_term_free_vars rhsTm"
 | "core_statement_free_vars (CoreStmt_AssignCall _ lhsTm _ _ _ argTms) =
     core_term_free_vars lhsTm |\<union>| ffUnion (fset_of_list (map core_term_free_vars argTms))"

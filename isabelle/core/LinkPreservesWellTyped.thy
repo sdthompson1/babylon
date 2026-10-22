@@ -215,8 +215,8 @@ next
   case (5 s1 witnessTm)
   show ?case by (simp add: apply_subst_to_term_cong_subst[OF "5.prems"])
 next
-  case (6 s1 ghost lhsTm rhsTm)
-  show ?case by (simp add: apply_subst_to_term_cong_subst[OF "6.prems"])
+  case (6 s1 ghost ty lhsTm rhsTm)
+  show ?case by (simp add: "6.prems" apply_subst_to_term_cong_subst[OF "6.prems"])
 next
   case (7 s1 ghost lhsTm castOpt fnName tyArgs argTms)
   show ?case

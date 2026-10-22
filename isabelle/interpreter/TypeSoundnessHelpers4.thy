@@ -2,6 +2,22 @@ theory TypeSoundnessHelpers4
   imports TypeSoundnessHelpers3
 begin
 
+(*-----------------------------------------------------------------------------*)
+(* copy_check never gives a TypeError on a well-typed value *)
+(*-----------------------------------------------------------------------------*)
+
+(* copy_check_sound (TypeSoundnessHelpers3.thy), for a state that matches env. *)
+lemma copy_check_sound_sme:
+  assumes sme: "state_matches_env state env storeTyping"
+      and val_typed: "value_has_type env val (apply_subst (IS_TyArgs state) ty)"
+  shows "copy_check ghost state ty val = None
+         \<or> copy_check ghost state ty val = Some RuntimeError"
+proof -
+  from sme have dc: "IS_DataCtors state = TE_DataCtors env"
+    unfolding state_matches_env_def tables_match_def by simp
+  from copy_check_sound[OF dc val_typed] show ?thesis .
+qed
+
 (* Checking the value of a decreases-term is not a TypeError when the value
    has a valid decreases type. (It can still be a RuntimeError: a mathematical
    integer in it can be negative.) *)
@@ -1025,6 +1041,18 @@ next
               from init_sound Inr
               have val_typed: "value_has_type env initialVal
                                  (apply_subst (IS_TyArgs state) varTy)" by simp
+              show ?thesis
+              proof (cases "copy_check declGhost state varTy initialVal")
+                case (Some err)
+                \<comment> \<open>An improper copy of an allocated value: a RuntimeError. \<close>
+                with copy_check_sound_sme[where ghost = declGhost, OF "4.prems"(1) val_typed]
+                have err_eq: "err = RuntimeError" by simp
+                have "interp_statement d (Suc fuel) state
+                    (CoreStmt_VarDecl declGhost varName Var varTy initTm) = Inl RuntimeError"
+                  using Inr Some err_eq by simp
+                with CoreStmt_VarDecl Var show ?thesis by simp
+              next
+              case None
               obtain state' addr where alloc_eq: "(state', addr) = alloc_store state initialVal"
                 by (cases "alloc_store state initialVal") auto
               let ?state'' = "state' \<lparr> IS_Locals := fmupd varName addr (IS_Locals state'),
@@ -1033,7 +1061,7 @@ next
               have interp_eq: "interp_statement d (Suc fuel) state
                   (CoreStmt_VarDecl declGhost varName Var varTy initTm) =
                   Inr (Continue ?state'')"
-                using Inr alloc_eq by (simp add: case_prod_beta)
+                using Inr None alloc_eq by (simp add: case_prod_beta)
               let ?subVarTy = "apply_subst (IS_TyArgs state) varTy"
               have sme_X: "state_matches_env ?state'' ?envX (storeTyping @ [?subVarTy])"
                 using state_matches_env_add_nonconst_local[OF "4.prems"(1) val_typed
@@ -1044,6 +1072,7 @@ next
                 using storeTyping_extends_append .
               from new_sme ext interp_eq CoreStmt_VarDecl Var
               show ?thesis by auto
+              qed
             qed
         next
           case Ref
@@ -1329,16 +1358,16 @@ next
             qed
           qed
       next
-        case (CoreStmt_Assign assignGhost lhsTm rhsTm)
+        case (CoreStmt_Assign assignGhost lhsTy lhsTm rhsTm)
           \<comment> \<open>Assign (ghost or not): rhs is an ordinary (pure) term. Evaluate lhs
-              lvalue and rhs term, then update the store. (Impure-call rhs's are
-              handled by CoreStmt_AssignCall.)\<close>
-          from typing CoreStmt_Assign obtain lhsTy where
+              lvalue and rhs term, check the copy, then update the store.
+              (Impure-call rhs's are handled by CoreStmt_AssignCall.)\<close>
+          from typing CoreStmt_Assign have
             lhs_writable: "is_writable_lvalue env lhsTm" and
             lhs_ty0: "core_term_type env assignGhost lhsTm = Some lhsTy" and
             rhs_ty0: "core_term_type env assignGhost rhsTm = Some lhsTy" and
             env'_eq: "env' = env"
-            by (auto split: if_splits option.splits)
+            by (auto split: if_splits)
           have lhs_ty: "core_term_type env Ghost lhsTm = Some lhsTy"
             by (rule core_term_type_NotGhost_imp_Ghost[OF lhs_ty0])
           have rhs_ty: "core_term_type env Ghost rhsTm = Some lhsTy"
@@ -1367,7 +1396,7 @@ next
               case (Inl err)
               with rhs_sound have err_sound: "sound_error_result err" by simp
               have interp_err: "interp_statement d (Suc fuel) state
-                  (CoreStmt_Assign assignGhost lhsTm rhsTm) = Inl err"
+                  (CoreStmt_Assign assignGhost lhsTy lhsTm rhsTm) = Inl err"
                 using Inl \<open>interp_writable_lvalue d fuel state lhsTm = Inr addrPath\<close> ap_eq by simp
               with err_sound CoreStmt_Assign show ?thesis by simp
             next
@@ -1379,13 +1408,26 @@ next
               have old_slot_typed: "value_has_type env (IS_Store state ! addr) (storeTyping ! addr)"
                 unfolding state_matches_env_def store_well_typed_def by simp
               show ?thesis
+              proof (cases "copy_check assignGhost state lhsTy rhsVal")
+                case (Some err)
+                \<comment> \<open>An improper copy of an allocated value: a RuntimeError. \<close>
+                with copy_check_sound_sme[where ghost = assignGhost, OF "4.prems"(1) rhs_typed]
+                have err_eq: "err = RuntimeError" by simp
+                have "interp_statement d (Suc fuel) state
+                    (CoreStmt_Assign assignGhost lhsTy lhsTm rhsTm) = Inl RuntimeError"
+                  using Inr Some err_eq \<open>interp_writable_lvalue d fuel state lhsTm = Inr addrPath\<close>
+                        ap_eq by simp
+                with CoreStmt_Assign show ?thesis by simp
+              next
+              case None
+              show ?thesis
               proof (cases "update_value_at_path (IS_Store state ! addr) path rhsVal")
                 case (Inl err)
                 from update_value_at_path_error_is_runtime[OF old_slot_typed path_ty Inl rhs_typed]
                 have err_eq: "err = RuntimeError" .
                 have interp_err: "interp_statement d (Suc fuel) state
-                    (CoreStmt_Assign assignGhost lhsTm rhsTm) = Inl RuntimeError"
-                  using Inl Inr \<open>interp_writable_lvalue d fuel state lhsTm = Inr addrPath\<close>
+                    (CoreStmt_Assign assignGhost lhsTy lhsTm rhsTm) = Inl RuntimeError"
+                  using Inl Inr None \<open>interp_writable_lvalue d fuel state lhsTm = Inr addrPath\<close>
                         ap_eq err_eq by simp
                 with CoreStmt_Assign show ?thesis by simp
               next
@@ -1394,8 +1436,8 @@ next
                 have new_slot_typed: "value_has_type env newVal (storeTyping ! addr)" .
                 let ?state' = "state \<lparr> IS_Store := (IS_Store state)[addr := newVal] \<rparr>"
                 have interp_eq: "interp_statement d (Suc fuel) state
-                    (CoreStmt_Assign assignGhost lhsTm rhsTm) = Inr (Continue ?state')"
-                  using Inr \<open>interp_term d fuel state rhsTm = Inr rhsVal\<close>
+                    (CoreStmt_Assign assignGhost lhsTy lhsTm rhsTm) = Inr (Continue ?state')"
+                  using Inr None \<open>interp_term d fuel state rhsTm = Inr rhsVal\<close>
                     \<open>interp_writable_lvalue d fuel state lhsTm = Inr addrPath\<close> ap_eq by simp
                 from state_matches_env_update_store[OF "4.prems"(1) addr_valid
                     new_slot_typed refl]
@@ -1404,6 +1446,7 @@ next
                   using storeTyping_extends_refl .
                 from new_sme ext interp_eq env'_eq CoreStmt_Assign
                 show ?thesis by auto
+              qed
               qed
             qed
           qed

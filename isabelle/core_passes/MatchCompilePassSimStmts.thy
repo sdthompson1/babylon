@@ -187,13 +187,14 @@ next
   from typing g have t: "core_term_type env NotGhost initTm = Some ty" by (auto split: if_splits)
   from ok have ok': "core_term_match_scrutinees_ok initTm" by simp
   from ev obtain v where v: "interp_term d fuel full initTm = Inr v"
+    and cc: "copy_check g full ty v = None"
     and res_eq: "res = Continue (bind_mutable_local x v full)"
-    by (auto split: sum.splits)
+    by (auto split: sum.splits option.splits)
   from term_simD[OF IH fe fs sme wf t ok' v] obtain f1 where
     f1: "interp_term d f1 (mc_state full) (match_compile_term initTm) = Inr v" by auto
   have "interp_statement d (Suc f1) (mc_state full) (CoreStmt_VarDecl g x Var ty (match_compile_term initTm))
           = Inr (mc_result res)"
-    using f1 res_eq by simp
+    using f1 cc res_eq by simp
   thus "\<exists>fuel'. interp_statement d (Suc fuel') (mc_state full)
                   (CoreStmt_VarDecl g x Var ty (match_compile_term initTm)) = Inr (mc_result res)"
     by blast
@@ -354,31 +355,32 @@ qed
 
 lemma sim_Assign:
   assumes IHl: "lvalue_sim fuel lhs" and IH: "term_sim fuel rhs"
-  shows "stmt_sim (Suc fuel) (CoreStmt_Assign g lhs rhs)"
+  shows "stmt_sim (Suc fuel) (CoreStmt_Assign g ty lhs rhs)"
 proof (rule stmt_sim_single)
-  show "match_compile_statement (CoreStmt_Assign g lhs rhs)
-          = [CoreStmt_Assign g (match_compile_term lhs) (match_compile_term rhs)]" by simp
+  show "match_compile_statement (CoreStmt_Assign g ty lhs rhs)
+          = [CoreStmt_Assign g ty (match_compile_term lhs) (match_compile_term rhs)]" by simp
 next
   fix env env' storeTyping and full :: "'w InterpState" and res
   assume fe: "TE_Functions env = TE_Functions genv" and fs: "IS_Functions full = funs"
     and sme: "state_matches_env full env storeTyping" and wf: "tyenv_well_formed env"
-    and typing: "core_statement_type env NotGhost (CoreStmt_Assign g lhs rhs) = Some env'"
-    and gf: "core_statement_ghost_free (CoreStmt_Assign g lhs rhs)"
-    and ok: "core_statement_match_scrutinees_ok (CoreStmt_Assign g lhs rhs)"
-    and ev: "interp_statement d (Suc fuel) full (CoreStmt_Assign g lhs rhs) = Inr res"
+    and typing: "core_statement_type env NotGhost (CoreStmt_Assign g ty lhs rhs) = Some env'"
+    and gf: "core_statement_ghost_free (CoreStmt_Assign g ty lhs rhs)"
+    and ok: "core_statement_match_scrutinees_ok (CoreStmt_Assign g ty lhs rhs)"
+    and ev: "interp_statement d (Suc fuel) full (CoreStmt_Assign g ty lhs rhs) = Inr res"
   from gf have g: "g = NotGhost" by simp
-  from typing g obtain lhsTy where
-    tl: "core_term_type env NotGhost lhs = Some lhsTy" and
-    tr: "core_term_type env NotGhost rhs = Some lhsTy"
-    by (auto split: if_splits option.splits)
+  from typing g have
+    tl: "core_term_type env NotGhost lhs = Some ty" and
+    tr: "core_term_type env NotGhost rhs = Some ty"
+    by (auto split: if_splits)
   from ok have okl: "core_term_match_scrutinees_ok lhs" and okr: "core_term_match_scrutinees_ok rhs"
     by simp_all
   from ev obtain addr path v newVal where
     ap: "interp_writable_lvalue d fuel full lhs = Inr (addr, path)" and
     v: "interp_term d fuel full rhs = Inr v" and
+    cc: "copy_check g full ty v = None" and
     upd: "update_value_at_path (IS_Store full ! addr) path v = Inr newVal" and
     res_eq: "res = Continue (full \<lparr> IS_Store := (IS_Store full)[addr := newVal] \<rparr>)"
-    by (auto simp: Let_def split: sum.splits)
+    by (auto simp: Let_def split: sum.splits option.splits)
   from lvalue_simD[OF IHl fe fs sme wf tl okl ap] obtain f1 where
     f1: "interp_writable_lvalue d f1 (mc_state full) (match_compile_term lhs) = Inr (addr, path)" by auto
   from term_simD[OF IH fe fs sme wf tr okr v] obtain f2 where
@@ -389,10 +391,10 @@ next
   have f2': "interp_term d ?F (mc_state full) (match_compile_term rhs) = Inr v"
     by (rule interp_term_Inr_more_fuel[OF f2]) simp
   have "interp_statement d (Suc ?F) (mc_state full)
-          (CoreStmt_Assign g (match_compile_term lhs) (match_compile_term rhs)) = Inr (mc_result res)"
-    using f1' f2' upd res_eq by (simp add: Let_def)
+          (CoreStmt_Assign g ty (match_compile_term lhs) (match_compile_term rhs)) = Inr (mc_result res)"
+    using f1' f2' cc upd res_eq by (simp add: Let_def)
   thus "\<exists>fuel'. interp_statement d (Suc fuel') (mc_state full)
-                  (CoreStmt_Assign g (match_compile_term lhs) (match_compile_term rhs))
+                  (CoreStmt_Assign g ty (match_compile_term lhs) (match_compile_term rhs))
                 = Inr (mc_result res)"
     by blast
 qed

@@ -161,8 +161,9 @@ datatype CoreStatement =
   (* Use: specify a witness for an existential variable in a proof. *)
   | CoreStmt_Use CoreTerm
   
-  (* Assignment. Rhs must be a pure term; lhs must be an lvalue. *)
-  | CoreStmt_Assign GhostOrNot CoreTerm CoreTerm
+  (* Assignment. Rhs must be a pure term; lhs must be an lvalue. The type is
+     the (common) type of the lhs and rhs. *)
+  | CoreStmt_Assign GhostOrNot CoreType CoreTerm CoreTerm
   
   (* Assignment whose rhs is an impure function call.
      assignGhost, lhs (must be lvalue), optional cast type for the return value,

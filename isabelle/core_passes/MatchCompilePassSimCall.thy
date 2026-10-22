@@ -303,10 +303,11 @@ proof (rule call_simI)
     \<comment> \<open>A Babylon body: run the compiled body in the compiled frame.\<close>
     from bodyF Inl obtain postF where
       bodyEval: "interp_statement_list d fuel preF body = Inr (Return postF retVal)" and
+      cc: "copy_check (IF_Ghost f) preF (IF_ReturnType f) retVal = None" and
       newFull_eq: "newFull = restore_scope full postF"
-      by (auto simp: call_body_def split: sum.splits ExecResult.splits)
+      by (auto simp: call_body_def split: sum.splits ExecResult.splits option.splits)
     from fi_match Inl have "core_statement_list_type ?envB (FI_Ghost funInfo) body \<noteq> None"
-      unfolding fun_info_matches_interp_fun_def by simp
+      unfolding fun_info_matches_interp_fun_def by auto
     then obtain envB' where bodyT: "core_statement_list_type ?envB NotGhost body = Some envB'"
       using ngF by auto
     from body_props[OF Inl] have gfB: "core_statement_list_ghost_free body"
@@ -324,7 +325,7 @@ proof (rule call_simI)
                 (map (interp_writable_lvalue d ?G (mc_state full)) (map match_compile_term argTms))
                 (map (interp_term d ?G (mc_state full)) (map match_compile_term argTms))
                 (mc_state preF) = Inr (mc_state newFull, retVal)"
-      unfolding call_body_def mc_interp_fun_simps using Inl F1' newFull_eq by simp
+      unfolding call_body_def mc_interp_fun_simps using Inl F1' cc newFull_eq by simp
     have "interp_function_call d (Suc ?G) (mc_state full) fnName tyArgs (map match_compile_term argTms)
             = Inr (mc_state newFull, retVal)"
       by (rule interp_function_call_I[OF lk lenA lenT compiled_fold[OF agreeG] req' ens' cb])

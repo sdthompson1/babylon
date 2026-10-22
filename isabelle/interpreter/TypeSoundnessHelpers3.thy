@@ -2,6 +2,138 @@ theory TypeSoundnessHelpers3
   imports TypeSoundnessHelpers2 "../core/TypeSubstTerm"
 begin
 
+(* ========================================================================== *)
+(* Allocated *)
+(* ========================================================================== *)
+
+(* any_allocated succeeds whenever every component check succeeded. *)
+lemma any_allocated_Inr:
+  assumes "\<forall>r \<in> set rs. \<exists>b. r = Inr b"
+  shows "\<exists>b. any_allocated rs = Inr b"
+using assms proof (induction rs)
+  case Nil show ?case by (rule exI[of _ False]) simp
+next
+  case (Cons r rs)
+  from Cons.prems obtain b where r_eq: "r = Inr b" by auto
+  from Cons obtain b' where rest_eq: "any_allocated rs = Inr b'" by auto
+  show ?case using r_eq rest_eq by simp
+qed
+
+(* is_allocated never fails on a well-typed value, provided the constructor
+   table is the one the value was typed against. Groundness is not needed:
+   is_allocated only fails on a type variable or an unknown constructor, and
+   value_has_type already rules out both. The allocation oracle is total, so
+   an extern value never fails either. *)
+lemma is_allocated_sound:
+  assumes "value_has_type env val ty"
+      and "ctors = TE_DataCtors env"
+  shows "\<exists>b. is_allocated ctors extAlloc val ty = Inr b"
+using assms proof (induction val arbitrary: ty)
+  case (CV_Bool b) show ?case by (rule exI[of _ False]) simp
+next
+  case (CV_FiniteInt sign bits i) show ?case by (rule exI[of _ False]) simp
+next
+  case (CV_Int i) show ?case by (rule exI[of _ False]) simp
+next
+  case (CV_Real r) show ?case by (rule exI[of _ False]) simp
+next
+  case (CV_Extern n l k) show ?case by simp
+next
+  case (CV_Record fieldValues)
+  from CV_Record.prems(1) obtain fieldTypes where
+    ty_eq: "ty = CoreTy_Record fieldTypes" and
+    all2: "list_all2 (\<lambda>(name1, fldVal) (name2, fldTy). name1 = name2 \<and> value_has_type env fldVal fldTy)
+             fieldValues fieldTypes"
+    by (cases ty) auto
+  have IH: "\<And>v t. v \<in> snd ` set fieldValues \<Longrightarrow> value_has_type env v t \<Longrightarrow>
+              \<exists>b. is_allocated ctors extAlloc v t = Inr b"
+    using CV_Record.IH CV_Record.prems(2) by auto
+  have each: "\<forall>r \<in> set (map (\<lambda>p. is_allocated ctors extAlloc (snd (fst p)) (snd (snd p)))
+                              (zip fieldValues fieldTypes)). \<exists>b. r = Inr b"
+  proof
+    fix r assume "r \<in> set (map (\<lambda>p. is_allocated ctors extAlloc (snd (fst p)) (snd (snd p)))
+                              (zip fieldValues fieldTypes))"
+    then obtain p where p_in: "p \<in> set (zip fieldValues fieldTypes)" and
+      r_eq: "r = is_allocated ctors extAlloc (snd (fst p)) (snd (snd p))" by auto
+    from p_in obtain i where
+      fv_i: "fieldValues ! i = fst p" and ft_i: "fieldTypes ! i = snd p" and
+      i_lt: "i < length fieldValues"
+      by (auto simp: in_set_zip)
+    from list_all2_nthD[OF all2 i_lt] fv_i ft_i
+    have typed: "value_has_type env (snd (fst p)) (snd (snd p))"
+      by (auto simp: case_prod_beta)
+    from p_in have "fst p \<in> set fieldValues" by (metis set_zip_leftD prod.collapse)
+    hence "snd (fst p) \<in> snd ` set fieldValues" by simp
+    from IH[OF this typed] r_eq show "\<exists>b. r = Inr b" by simp
+  qed
+  show ?case using ty_eq any_allocated_Inr[OF each] by simp
+next
+  case (CV_Variant ctor payload)
+  from CV_Variant.prems(1) obtain dtName argTypes tyvars payloadTy where
+    ty_eq: "ty = CoreTy_Datatype dtName argTypes" and
+    lookup: "fmlookup (TE_DataCtors env) ctor = Some (dtName, tyvars, payloadTy)" and
+    len_eq: "length tyvars = length argTypes" and
+    payload_typed: "value_has_type env payload
+                      (apply_subst (fmap_of_list (zip tyvars argTypes)) payloadTy)"
+    by (cases ty) (auto split: option.splits prod.splits)
+  from CV_Variant.IH[OF payload_typed CV_Variant.prems(2)]
+  show ?case using ty_eq lookup CV_Variant.prems(2) len_eq by simp
+next
+  case (CV_Array sizes valuesMap)
+  from CV_Array.prems(1) obtain elemTy dims where
+    ty_eq: "ty = CoreTy_Array elemTy dims" and
+    elems_typed: "\<forall>idx v. fmlookup valuesMap idx = Some v \<longrightarrow> value_has_type env v elemTy" and
+    fms: "fmap_matches_sizes sizes valuesMap"
+    by (cases ty) auto
+  have IH: "\<And>v t. v \<in> fmran' valuesMap \<Longrightarrow> value_has_type env v t \<Longrightarrow>
+              \<exists>b. is_allocated ctors extAlloc v t = Inr b"
+    using CV_Array.IH CV_Array.prems(2) by auto
+  show ?case
+  proof (cases "list_ex (\<lambda>d. d = CoreDim_Allocatable) dims")
+    case True
+    with ty_eq show ?thesis by simp
+  next
+    case False
+    let ?check = "\<lambda>idx. case fmlookup valuesMap idx of
+                          Some v \<Rightarrow> is_allocated ctors extAlloc v elemTy
+                        | None \<Rightarrow> Inl TypeError"
+    have each: "\<forall>r \<in> set (map ?check (all_indices sizes)). \<exists>b. r = Inr b"
+    proof
+      fix r assume "r \<in> set (map ?check (all_indices sizes))"
+      then obtain idx where idx_in: "idx \<in> set (all_indices sizes)" and
+        r_eq: "r = ?check idx" by auto
+      from idx_in fms have "idx |\<in>| fmdom valuesMap"
+        by (simp add: fmap_matches_sizes_def fset_of_list_elem)
+      then obtain v where lk: "fmlookup valuesMap idx = Some v"
+        by (cases "fmlookup valuesMap idx") (auto dest: fmdom_notI)
+      from elems_typed lk have typed: "value_has_type env v elemTy" by blast
+      from lk have "v \<in> fmran' valuesMap" by (rule fmran'I)
+      from IH[OF this typed] r_eq lk show "\<exists>b. r = Inr b" by simp
+    qed
+    show ?thesis using ty_eq False any_allocated_Inr[OF each] by simp
+  qed
+qed
+
+(* copy_check never gives a TypeError on a well-typed value: the type it
+   passes to is_allocated is the value's type resolved through IS_TyArgs state,
+   on which is_allocated_sound applies. *)
+lemma copy_check_sound:
+  assumes dc: "IS_DataCtors state = TE_DataCtors env"
+      and val_typed: "value_has_type env val (apply_subst (IS_TyArgs state) ty)"
+  shows "copy_check ghost state ty val = None
+         \<or> copy_check ghost state ty val = Some RuntimeError"
+proof (cases ghost)
+  case Ghost
+  then show ?thesis by simp
+next
+  case NotGhost
+  from is_allocated_sound[OF val_typed dc] obtain b where
+    "is_allocated (IS_DataCtors state) (IS_ExternAlloc state) val
+       (apply_subst (IS_TyArgs state) ty) = Inr b" by blast
+  with NotGhost show ?thesis by (cases b) simp_all
+qed
+
+
 (*-----------------------------------------------------------------------------*)
 (* Type soundness for terms *)
 (*-----------------------------------------------------------------------------*)
@@ -2178,8 +2310,40 @@ proof -
             and ext_post: "storeTyping_extends bodyStoreTyping postStoreTyping"
             by auto
 
+          \<comment> \<open>The copy check on the returned value (a non-ghost function must not
+              return an allocated value) cannot give a TypeError: the value has
+              the function's return type at IS_TyArgs postCallState. \<close>
+          have if_ret: "IF_ReturnType f = FI_ReturnType funInfo"
+            using fi_match unfolding fun_info_matches_interp_fun_def by simp
+          have dc_pre:
+            "IS_DataCtors preCallState
+               = TE_DataCtors (body_env_for env (map fst (IF_Args f)) funInfo)"
+            using sme_body unfolding state_matches_env_def tables_match_def by simp
+          have tyargs_post_pre: "IS_TyArgs postCallState = IS_TyArgs preCallState"
+            using body_Inr Return
+                  static_parts_eqD(3)[OF interp_statement_list_static[of d fuel preCallState bodyStmts]]
+            by simp
+          have ret_typed_bodyEnv':
+            "value_has_type (body_env_for env (map fst (IF_Args f)) funInfo) retVal
+               (apply_subst (IS_TyArgs preCallState) (IF_ReturnType f))"
+            using ret_typed_bodyEnv by (simp add: body_env_for_def if_ret tyargs_post_pre)
+          note cc_sound = copy_check_sound[where ghost = "IF_Ghost f", OF dc_pre ret_typed_bodyEnv']
+
+          show ?thesis
+          proof (cases "copy_check (IF_Ghost f) preCallState (IF_ReturnType f) retVal")
+            case (Some err)
+            \<comment> \<open>The function returned an allocated value: a RuntimeError. \<close>
+            with cc_sound have err_eq: "err = RuntimeError" by simp
+            from body_babylon body_Inr Return Some err_eq
+            have "call_body (interp_statement_list d fuel) state f?refResults ?valResults preCallState
+                    = Inl RuntimeError"
+              by (simp add: call_body_def)
+            thus ?thesis by simp
+          next
+          case None
+
           \<comment> \<open>Concrete form of the body result. \<close>
-          from body_babylon body_Inr Return
+          from body_babylon body_Inr Return None
           have interp_result:
             "call_body (interp_statement_list d fuel) state f?refResults ?valResults preCallState
                = Inr (restore_scope state postCallState, retVal)"
@@ -2306,6 +2470,7 @@ proof -
             using sme_rs ext_id tyargs_rs ret_final by blast
           from witness interp_result
           show ?thesis by simp
+          qed
         qed
       qed
     next
@@ -3674,118 +3839,6 @@ proof -
   qed
 qed
 
-
-(* ========================================================================== *)
-(* Allocated *)
-(* ========================================================================== *)
-
-(* any_allocated succeeds whenever every component check succeeded. *)
-lemma any_allocated_Inr:
-  assumes "\<forall>r \<in> set rs. \<exists>b. r = Inr b"
-  shows "\<exists>b. any_allocated rs = Inr b"
-using assms proof (induction rs)
-  case Nil show ?case by (rule exI[of _ False]) simp
-next
-  case (Cons r rs)
-  from Cons.prems obtain b where r_eq: "r = Inr b" by auto
-  from Cons obtain b' where rest_eq: "any_allocated rs = Inr b'" by auto
-  show ?case using r_eq rest_eq by simp
-qed
-
-(* is_allocated never fails on a well-typed value, provided the constructor
-   table is the one the value was typed against. Groundness is not needed:
-   is_allocated only fails on a type variable or an unknown constructor, and
-   value_has_type already rules out both. The allocation oracle is total, so
-   an extern value never fails either. *)
-lemma is_allocated_sound:
-  assumes "value_has_type env val ty"
-      and "ctors = TE_DataCtors env"
-  shows "\<exists>b. is_allocated ctors extAlloc val ty = Inr b"
-using assms proof (induction val arbitrary: ty)
-  case (CV_Bool b) show ?case by (rule exI[of _ False]) simp
-next
-  case (CV_FiniteInt sign bits i) show ?case by (rule exI[of _ False]) simp
-next
-  case (CV_Int i) show ?case by (rule exI[of _ False]) simp
-next
-  case (CV_Real r) show ?case by (rule exI[of _ False]) simp
-next
-  case (CV_Extern n l k) show ?case by simp
-next
-  case (CV_Record fieldValues)
-  from CV_Record.prems(1) obtain fieldTypes where
-    ty_eq: "ty = CoreTy_Record fieldTypes" and
-    all2: "list_all2 (\<lambda>(name1, fldVal) (name2, fldTy). name1 = name2 \<and> value_has_type env fldVal fldTy)
-             fieldValues fieldTypes"
-    by (cases ty) auto
-  have IH: "\<And>v t. v \<in> snd ` set fieldValues \<Longrightarrow> value_has_type env v t \<Longrightarrow>
-              \<exists>b. is_allocated ctors extAlloc v t = Inr b"
-    using CV_Record.IH CV_Record.prems(2) by auto
-  have each: "\<forall>r \<in> set (map (\<lambda>p. is_allocated ctors extAlloc (snd (fst p)) (snd (snd p)))
-                              (zip fieldValues fieldTypes)). \<exists>b. r = Inr b"
-  proof
-    fix r assume "r \<in> set (map (\<lambda>p. is_allocated ctors extAlloc (snd (fst p)) (snd (snd p)))
-                              (zip fieldValues fieldTypes))"
-    then obtain p where p_in: "p \<in> set (zip fieldValues fieldTypes)" and
-      r_eq: "r = is_allocated ctors extAlloc (snd (fst p)) (snd (snd p))" by auto
-    from p_in obtain i where
-      fv_i: "fieldValues ! i = fst p" and ft_i: "fieldTypes ! i = snd p" and
-      i_lt: "i < length fieldValues"
-      by (auto simp: in_set_zip)
-    from list_all2_nthD[OF all2 i_lt] fv_i ft_i
-    have typed: "value_has_type env (snd (fst p)) (snd (snd p))"
-      by (auto simp: case_prod_beta)
-    from p_in have "fst p \<in> set fieldValues" by (metis set_zip_leftD prod.collapse)
-    hence "snd (fst p) \<in> snd ` set fieldValues" by simp
-    from IH[OF this typed] r_eq show "\<exists>b. r = Inr b" by simp
-  qed
-  show ?case using ty_eq any_allocated_Inr[OF each] by simp
-next
-  case (CV_Variant ctor payload)
-  from CV_Variant.prems(1) obtain dtName argTypes tyvars payloadTy where
-    ty_eq: "ty = CoreTy_Datatype dtName argTypes" and
-    lookup: "fmlookup (TE_DataCtors env) ctor = Some (dtName, tyvars, payloadTy)" and
-    len_eq: "length tyvars = length argTypes" and
-    payload_typed: "value_has_type env payload
-                      (apply_subst (fmap_of_list (zip tyvars argTypes)) payloadTy)"
-    by (cases ty) (auto split: option.splits prod.splits)
-  from CV_Variant.IH[OF payload_typed CV_Variant.prems(2)]
-  show ?case using ty_eq lookup CV_Variant.prems(2) len_eq by simp
-next
-  case (CV_Array sizes valuesMap)
-  from CV_Array.prems(1) obtain elemTy dims where
-    ty_eq: "ty = CoreTy_Array elemTy dims" and
-    elems_typed: "\<forall>idx v. fmlookup valuesMap idx = Some v \<longrightarrow> value_has_type env v elemTy" and
-    fms: "fmap_matches_sizes sizes valuesMap"
-    by (cases ty) auto
-  have IH: "\<And>v t. v \<in> fmran' valuesMap \<Longrightarrow> value_has_type env v t \<Longrightarrow>
-              \<exists>b. is_allocated ctors extAlloc v t = Inr b"
-    using CV_Array.IH CV_Array.prems(2) by auto
-  show ?case
-  proof (cases "list_ex (\<lambda>d. d = CoreDim_Allocatable) dims")
-    case True
-    with ty_eq show ?thesis by simp
-  next
-    case False
-    let ?check = "\<lambda>idx. case fmlookup valuesMap idx of
-                          Some v \<Rightarrow> is_allocated ctors extAlloc v elemTy
-                        | None \<Rightarrow> Inl TypeError"
-    have each: "\<forall>r \<in> set (map ?check (all_indices sizes)). \<exists>b. r = Inr b"
-    proof
-      fix r assume "r \<in> set (map ?check (all_indices sizes))"
-      then obtain idx where idx_in: "idx \<in> set (all_indices sizes)" and
-        r_eq: "r = ?check idx" by auto
-      from idx_in fms have "idx |\<in>| fmdom valuesMap"
-        by (simp add: fmap_matches_sizes_def fset_of_list_elem)
-      then obtain v where lk: "fmlookup valuesMap idx = Some v"
-        by (cases "fmlookup valuesMap idx") (auto dest: fmdom_notI)
-      from elems_typed lk have typed: "value_has_type env v elemTy" by blast
-      from lk have "v \<in> fmran' valuesMap" by (rule fmran'I)
-      from IH[OF this typed] r_eq lk show "\<exists>b. r = Inr b" by simp
-    qed
-    show ?thesis using ty_eq False any_allocated_Inr[OF each] by simp
-  qed
-qed
 
 (* Wrapper used at the top-level cases tm branch of type_soundness. The
    annotation is the operand's type in env, so the operand's value has the

@@ -20,6 +20,7 @@ lemma alloc_store_preserves_globals_funs:
   "IS_TyArgs (fst (alloc_store state v)) = IS_TyArgs state"
   "IS_DataCtorsByType (fst (alloc_store state v)) = IS_DataCtorsByType state"
   "IS_DataCtors (fst (alloc_store state v)) = IS_DataCtors state"
+  "IS_ExternAlloc (fst (alloc_store state v)) = IS_ExternAlloc state"
   by (simp_all add: Let_def)
 
 lemma process_one_arg_preserves_globals_funs:
@@ -28,7 +29,8 @@ lemma process_one_arg_preserves_globals_funs:
          IS_Functions state' = IS_Functions state \<and>
          IS_TyArgs state' = IS_TyArgs state \<and>
          IS_DataCtorsByType state' = IS_DataCtorsByType state \<and>
-         IS_DataCtors state' = IS_DataCtors state"
+         IS_DataCtors state' = IS_DataCtors state \<and>
+         IS_ExternAlloc state' = IS_ExternAlloc state"
 proof -
   obtain name vr refRes valRes where arg_eq: "arg = ((name, vr), refRes, valRes)"
     by (cases arg) auto
@@ -52,6 +54,7 @@ proof -
            "IS_Functions (fst ?alloc) = IS_Functions state"
            "IS_DataCtorsByType (fst ?alloc) = IS_DataCtorsByType state"
            "IS_DataCtors (fst ?alloc) = IS_DataCtors state"
+           "IS_ExternAlloc (fst ?alloc) = IS_ExternAlloc state"
         by (simp_all add: alloc_store_preserves_globals_funs)
       with state'_eq show ?thesis by simp
     qed
@@ -87,7 +90,8 @@ lemma fold_process_one_arg_preserves_globals_funs:
          IS_Functions state' = IS_Functions state \<and>
          IS_TyArgs state' = IS_TyArgs state \<and>
          IS_DataCtorsByType state' = IS_DataCtorsByType state \<and>
-         IS_DataCtors state' = IS_DataCtors state"
+         IS_DataCtors state' = IS_DataCtors state \<and>
+         IS_ExternAlloc state' = IS_ExternAlloc state"
   using assms
 proof (induction args arbitrary: state)
   case Nil
@@ -107,7 +111,8 @@ next
                 IS_Functions state1 = IS_Functions state \<and>
                 IS_TyArgs state1 = IS_TyArgs state \<and>
                 IS_DataCtorsByType state1 = IS_DataCtorsByType state \<and>
-                IS_DataCtors state1 = IS_DataCtors state" by simp
+                IS_DataCtors state1 = IS_DataCtors state \<and>
+                IS_ExternAlloc state1 = IS_ExternAlloc state" by simp
     from Inr Cons.prems have "fold process_one_arg args (Inr state1) = Inr state'"
       by simp
     from Cons.IH[OF this] step show ?thesis by simp
@@ -120,7 +125,8 @@ lemma apply_ref_updates_preserves_globals_funs:
          IS_Functions state' = IS_Functions state \<and>
          IS_TyArgs state' = IS_TyArgs state \<and>
          IS_DataCtorsByType state' = IS_DataCtorsByType state \<and>
-         IS_DataCtors state' = IS_DataCtors state"
+         IS_DataCtors state' = IS_DataCtors state \<and>
+         IS_ExternAlloc state' = IS_ExternAlloc state"
   using assms
 proof (induction state lvs vs arbitrary: state' rule: apply_ref_updates.induct)
   case (1 state)
@@ -146,7 +152,8 @@ lemma perform_swap_preserves_globals_funs:
          IS_Functions state' = IS_Functions state \<and>
          IS_TyArgs state' = IS_TyArgs state \<and>
          IS_DataCtorsByType state' = IS_DataCtorsByType state \<and>
-         IS_DataCtors state' = IS_DataCtors state"
+         IS_DataCtors state' = IS_DataCtors state \<and>
+         IS_ExternAlloc state' = IS_ExternAlloc state"
 proof -
   obtain addr1 path1 where lv1_eq: "lv1 = (addr1, path1)" by (cases lv1)
   obtain addr2 path2 where lv2_eq: "lv2 = (addr2, path2)" by (cases lv2)
@@ -174,7 +181,8 @@ definition static_parts_eq :: "'w InterpState \<Rightarrow> 'w InterpState \<Rig
     IS_Functions state' = IS_Functions state \<and>
     IS_TyArgs state' = IS_TyArgs state \<and>
     IS_DataCtorsByType state' = IS_DataCtorsByType state \<and>
-    IS_DataCtors state' = IS_DataCtors state"
+    IS_DataCtors state' = IS_DataCtors state \<and>
+    IS_ExternAlloc state' = IS_ExternAlloc state"
 
 lemma static_parts_eqD:
   assumes "static_parts_eq state state'"
@@ -183,6 +191,7 @@ lemma static_parts_eqD:
     and "IS_TyArgs state' = IS_TyArgs state"
     and "IS_DataCtorsByType state' = IS_DataCtorsByType state"
     and "IS_DataCtors state' = IS_DataCtors state"
+    and "IS_ExternAlloc state' = IS_ExternAlloc state"
   using assms by (simp_all add: static_parts_eq_def)
 
 lemma static_parts_eq_refl:
@@ -257,7 +266,10 @@ next
           from Var H CoreStmt_VarDecl obtain initVal where
             iv: "interp_term d fuel state initTm = Inr initVal"
             by (auto split: sum.splits)
-          from Var H[symmetric] CoreStmt_VarDecl iv show ?thesis
+          from Var H CoreStmt_VarDecl iv have
+            cc: "copy_check g state ty initVal = None"
+            by (auto split: option.splits)
+          from Var H[symmetric] CoreStmt_VarDecl iv cc show ?thesis
             by (simp add: static_parts_eq_def Let_def)
         next
           case Ref
@@ -317,17 +329,20 @@ next
       next
         case (CoreStmt_Use _) with H show ?thesis by simp
       next
-        case (CoreStmt_Assign g lhsLv rhsTm)
+        case (CoreStmt_Assign g ty lhsLv rhsTm)
         from H CoreStmt_Assign obtain addr path where
           lv: "interp_writable_lvalue d fuel state lhsLv = Inr (addr, path)"
           by (auto split: sum.splits)
         from H CoreStmt_Assign lv obtain rhsVal where
           rv: "interp_term d fuel state rhsTm = Inr rhsVal"
           by (auto split: sum.splits)
-        from H CoreStmt_Assign lv rv obtain newVal where
+        from H CoreStmt_Assign lv rv have
+          cc: "copy_check g state ty rhsVal = None"
+          by (auto split: option.splits)
+        from H CoreStmt_Assign lv rv cc obtain newVal where
           upd: "update_value_at_path (IS_Store state ! addr) path rhsVal = Inr newVal"
           by (auto simp: Let_def split: sum.splits)
-        from H[symmetric] CoreStmt_Assign lv rv upd show ?thesis
+        from H[symmetric] CoreStmt_Assign lv rv cc upd show ?thesis
           by (simp add: static_parts_eq_def Let_def)
       next
         case (CoreStmt_AssignCall g lhsLv castOpt fnName argTys argTms)
@@ -576,7 +591,8 @@ next
       have pre_gf: "IS_Globals preCallState = IS_Globals state \<and>
                     IS_Functions preCallState = IS_Functions state \<and>
                     IS_DataCtorsByType preCallState = IS_DataCtorsByType state \<and>
-                    IS_DataCtors preCallState = IS_DataCtors state"
+                    IS_DataCtors preCallState = IS_DataCtors state \<and>
+                    IS_ExternAlloc preCallState = IS_ExternAlloc state"
         by simp
 
       show "static_parts_eq state state'"
@@ -600,7 +616,7 @@ next
           with Return have body_eq: "static_parts_eq preCallState postCallState" by simp
           from body Inl bodyEval Return
           have state'_eq: "state' = restore_scope state postCallState"
-            by (simp add: call_body_def)
+            by (simp add: call_body_def split: option.splits)
           from state'_eq static_parts_eqD[OF body_eq] pre_gf show ?thesis
             by (simp add: static_parts_eq_def)
         qed

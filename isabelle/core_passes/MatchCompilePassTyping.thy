@@ -759,12 +759,12 @@ next
   have t': "core_term_type env ghost (match_compile_term witnessTm) = Some qVarTy" by simp
   from goal t' g top env'_eq show ?case by simp
 next
-  case (CoreStmt_Assign assignGhost lhsTm rhsTm)
-  from CoreStmt_Assign.prems(1) obtain lhsTy where
+  case (CoreStmt_Assign assignGhost lhsTy lhsTm rhsTm)
+  from CoreStmt_Assign.prems(1) have
     w: "is_writable_lvalue env lhsTm" and
     l: "core_term_type env assignGhost lhsTm = Some lhsTy" and
     r: "core_term_type env assignGhost rhsTm = Some lhsTy"
-    by (auto split: if_splits option.splits)
+    by (auto split: if_splits)
   have lv: "is_lvalue lhsTm" by (rule is_writable_lvalue_is_lvalue[OF w])
   from match_compile_term_type[OF l CoreStmt_Assign.prems(2)] CoreStmt_Assign.prems(3)
   have l': "core_term_type env assignGhost (match_compile_term lhsTm) = Some lhsTy" by simp

@@ -1655,7 +1655,7 @@ proof -
                 | Inr rhsTm' \<Rightarrow>
                     if \<not> (term_inferred env lhsTm \<and> term_inferred env rhsTm')
                     then Inl [TyErr_CannotInferType loc]
-                    else Inr (CoreStmt_Assign ghost lhsTm rhsTm', env, next_mv2))
+                    else Inr (CoreStmt_Assign ghost lhsTy lhsTm rhsTm', env, next_mv2))
                = Inr (coreStmt, env', next_mv')"
     using elab not_cp unfolding elab_assign_pure_def by (simp add: erhs)
   from elab2 obtain rhsTm' where
@@ -1664,7 +1664,7 @@ proof -
   from elab2 have
     lhs_inf: "term_inferred env lhsTm" and
     rhs_inf: "term_inferred env rhsTm'" and
-    cs_eq: "coreStmt = CoreStmt_Assign ghost lhsTm rhsTm'" and
+    cs_eq: "coreStmt = CoreStmt_Assign ghost lhsTy lhsTm rhsTm'" and
     env'_eq: "env' = env"
     unfolding coerce by (auto split: if_splits)
   \<comment> \<open>lhs: passes the inferred check, so it types to lhsTy in env.\<close>
