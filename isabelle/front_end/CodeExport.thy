@@ -1,6 +1,8 @@
 theory CodeExport
   imports
     ShowError
+    "../ghost_erasure/EraseGhost"
+    "../core_passes/MatchCompilePass"
     "HOL-Library.Code_Binary_Nat"
 
     (* TODO: maybe explore other performance options, e.g. Code_Target_Numeral, or
@@ -33,7 +35,12 @@ datatype CompileResult =
 
    This runs the front end (lexer, parser, loader, renamer), and then, if that
    succeeds, elaborates all the modules to Core (which includes typechecking
-   them) and runs the whole-program link. *)
+   them), runs the whole-program link, erases ghost code and compiles the
+   pattern matches to flat ones (match_compile_module). The hypothesis of the
+   match compilation pass (every non-flat match has a variable scrutinee,
+   which the elaborator guarantees) and the flatness of its result (which
+   the theorems guarantee) are also checked at runtime, and an internal
+   error is reported if a check fails. *)
 fun run_compiler :: "(string \<times> string) list \<Rightarrow> CompileResult"
   where
 "run_compiler [] = CR_Errors [''no input modules'']"
@@ -50,7 +57,13 @@ fun run_compiler :: "(string \<times> string) list \<Rightarrow> CompileResult"
            | Inr ps \<Rightarrow> 
               (case whole_program_link ps of
                 Inl err \<Rightarrow> CR_Errors (whole_program_link_error_to_strings err)
-              | Inr _ \<Rightarrow> CR_Success)))"
+              | Inr linked \<Rightarrow>
+                  (let erased = erase_ghost_module linked
+                   in if \<not> core_module_match_scrutinees_ok erased
+                      then CR_Errors [''internal error: match scrutinee is not a variable'']
+                      else if \<not> core_module_flat (match_compile_module erased)
+                      then CR_Errors [''internal error: match compilation left a non-flat pattern'']
+                      else CR_Success))))"
 
 export_code run_compiler CR_Success CR_Errors
   in Haskell
