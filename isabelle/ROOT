@@ -165,3 +165,14 @@ session Babylon = "HOL-Library" +
     "front_end/FrontEnd"
     "front_end/ShowError"
     "front_end/CodeExport"
+
+(* MiniC: the target language of the (future) verified code generator.
+   Kept in its own session during stage 3a so that iteration is fast; it moves
+   into the main session when the printer needs exporting (stage 3b). *)
+session Babylon_MiniC in "minic" = Babylon +
+  theories
+    "MiniCSyntax"
+    "MiniCMemory"
+    "MiniCSemantics"
+    "MiniCFuelMono"
+    "MiniCExample"
