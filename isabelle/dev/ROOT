@@ -5,3 +5,8 @@ session BabylonDev1 in "d1" = Babylon +
 session BabylonDev2 in "d2" = BabylonDev1 +
   theories
     "MatchCompilePassFlat"
+
+session BabylonDev3 in "d3" = BabylonDev2 +
+  options [timeout = 900]
+  theories
+    "MatchCompilePassTyping"
