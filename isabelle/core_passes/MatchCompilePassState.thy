@@ -15,11 +15,11 @@ begin
    operation of the interpreter other than a function call commutes with
    mc_state.
 
-   The compiled program nests one CoreTm_Match / CoreStmt_Match per test of
-   the tree where the original had a single match, so it needs more fuel;
-   the simulation theorem (MatchCompilePassSimulation.thy) therefore
-   quantifies the fuel of the compiled run existentially. This file provides
-   the lemmas about fuel that the simulation needs: monotonicity (from
+   The compiled program needs more fuel than the original (because it nests
+   one CoreTm_Match / CoreStmt_Match per test of the tree, where the original
+   had a single match); the simulation theorem (MatchCompilePassSimulation.thy)
+   therefore quantifies the fuel of the compiled run existentially. This file
+   provides the lemmas about fuel that the simulation needs: monotonicity (from
    CoreInterpFuelMono.thy) gives one fuel that works for a finite number of
    sub-evaluations. *)
 

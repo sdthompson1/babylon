@@ -4,7 +4,7 @@ begin
 
 (* Flat-pattern guarantee for the match-compilation pass.
 
-   The pass eliminates nested patterns: in its output, every pattern
+   This file proves that in the output of match_compile, every pattern
    inside an MT_Test arm satisfies `flat_pattern` (see CoreSyntax).
    Downstream consumers (code generation, the type-preservation proof
    in MatchCompileTyping) may rely on this property. *)

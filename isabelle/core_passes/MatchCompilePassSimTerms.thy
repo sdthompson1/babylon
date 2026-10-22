@@ -704,7 +704,7 @@ proof (rule term_simI)
     fix i assume i_lt: "i < length args"
     hence i_lt_f: "i < length (FI_TmArgs funInfo)" using len_args by simp
     have "zip ?expected ?modes ! i = (?expected ! i, NotGhost)"
-      using i_lt_f by (simp add: modes nth_zip)
+      using i_lt_f by (simp add: modes)
     with list_all2_nthD[OF args_typed i_lt]
     show "core_term_type env NotGhost (args ! i) = Some (?expected ! i)" by simp
   qed

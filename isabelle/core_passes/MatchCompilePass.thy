@@ -10,7 +10,7 @@ begin
     - translates a MatchTree back into a CoreTerm (match_tree_to_term) or a
       CoreStatement list (match_tree_to_statements);
     - traverses terms, statements and statement lists, compiling every match
-      whose patterns are not all flat (match_compile_term,
+      whose patterns are not already all flat (match_compile_term,
       match_compile_statement, match_compile_statement_list);
     - applies this to every function body of a module (match_compile_module);
     - defines the predicate that the pass guarantees of its output
@@ -21,6 +21,9 @@ begin
    The theorems about the pass are in MatchCompilePassFlat.thy (flatness),
    MatchCompilePassTyping.thy (typing) and MatchCompilePassSimulation.thy
    (semantics).
+*)
+
+(* Further information:
 
    Why the scrutinee of a non-flat match must be a variable: compile_matrix
    builds its test scrutinees from the original scrutinee by projection
@@ -49,9 +52,9 @@ begin
 
    Assert statements are left untouched: their proof bodies are typed against
    a proof goal that is taken from the assert's condition, and compiling the
-   condition would change the goal. The pass is meant to run after ghost
-   erasure, which removes every Assert, so nothing is lost. (The flatness
-   theorem is therefore stated for ghost-free modules.) *)
+   condition would change the goal. The match-compile pass is meant to run
+   after ghost erasure, which removes every Assert, so nothing is lost. (The
+   flatness theorem is therefore stated for ghost-free modules.) *)
 
 
 section \<open>From MatchTree back to Core\<close>

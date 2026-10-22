@@ -295,7 +295,7 @@ proof -
     hence i_lt_f: "i < length (FI_TmArgs funInfo)" using len_args by simp
     have "zip ?expected (map (\<lambda>(_, _, gh). param_mode NotGhost gh) (FI_TmArgs funInfo)) ! i
             = (?expected ! i, NotGhost)"
-      using i_lt_f by (simp add: modes nth_zip)
+      using i_lt_f by (simp add: modes)
     with list_all2_nthD[OF args i_lt]
     show "core_term_type env NotGhost (argTms ! i) = Some (?expected ! i)" by simp
   qed

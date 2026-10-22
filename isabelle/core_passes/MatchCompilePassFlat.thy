@@ -6,10 +6,11 @@ begin
    predicates that the next stage (the code generator) needs:
 
     - core_module_flat (every pattern of every match is flat), for a
-      ghost-free input module (an Assert, which the pass leaves alone, is the
-      only statement that could keep a non-flat match);
+      ghost-free input module;
     - core_module_ghost_free and core_module_closed, if the input satisfies
       them.
+
+   Proof notes:
 
    Besides flatness of the patterns (compile_matrix_flat, MatchCompileFlat.thy),
    flatness of the output needs two more facts about the trees that
