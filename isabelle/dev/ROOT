@@ -10,3 +10,8 @@ session BabylonDev3 in "d3" = BabylonDev2 +
   options [timeout = 900]
   theories
     "MatchCompilePassTyping"
+
+session BabylonDev4 in "d4" = BabylonDev3 +
+  options [timeout = 900]
+  theories
+    "MatchCompilePassState"
