@@ -6,17 +6,7 @@ begin
 (* Types used by the interpreter *)
 (* ========================================================================== *)
 
-(* Interpreter errors.
-
-   RuntimeError covers: division by zero; integer overflow; an invalid shift;
-   an array index out of bounds; a cast whose value does not fit (or whose
-   array sizes do not match); a variant projection or a match with no matching
-   constructor; a failed assertion, precondition, postcondition, loop invariant
-   or decreases check; an Obtain with no witness; reaching the end of a
-   function without a Return; and, in non-ghost code only, an improper copy of
-   an allocated value: declaring a (Var) variable with an allocated initial
-   value, assigning an allocated value, or returning an allocated value from a
-   non-ghost function (see copy_check below). *)
+(* Interpreter errors *)
 datatype InterpError = 
   TypeError           (* Type mismatch, e.g. 1 + true, or other compile-time error *)
   | RuntimeError      (* Runtime failure, e.g division by zero, array index out of bounds *)
@@ -685,32 +675,37 @@ qed
 (* Improper copies of allocated values *)
 (* ========================================================================== *)
 
-(* In Core, values are trees and are copied freely; in the generated C, an
-   allocated value (an allocatable array, or an extern value the allocation
-   oracle says is allocated) is a descriptor holding a pointer to a heap block,
-   so copying it would alias the block and the two semantics would diverge on
-   the next write. The Babylon verifier forbids such copies; Core makes them a
-   RuntimeError, so that a run that makes one is outside the scope of the code
-   generator's correctness theorem. The three places where a value is copied
-   into a variable in non-ghost code, and which are therefore checked, are
-   (as in the C verifier, verifier_statements.c):
-     1. the initial value of a (Var) variable declaration (CoreStmt_VarDecl),
-     2. the value assigned by an assignment (CoreStmt_Assign), and
-     3. the value returned from a non-ghost function (see call_body).
-   Nothing else is checked: Ref declarations, swaps and ref arguments copy no
-   value; term evaluation is pure, so an alias inside a term (a let, a record
-   or array literal, a by-value call argument) cannot cause divergence; the
-   result of an impure call is covered by rule 3 (or, for an extern function,
-   by the extern-function contract); and dropping an allocated value only
-   leaks memory in C. Ghost code is not checked (it is erased before code
-   generation).
+(* The Core language imposes some rules on copying of allocated values:
+    1. The initializer in a Var variable declaration (CoreStmt_VarDecl) must not
+       be allocated.
+    2. The rhs value in an assigment (CoreStmt_Assign) must not be allocated.
+    3. Returned values (CoreStmt_Assign) must not be allocated.
 
-   copy_check ghost state ty val: None if val may be copied, Some RuntimeError
-   if it is an allocated value in non-ghost code. ty is the static type of val
-   as annotated in the syntax, possibly mentioning the current function's type
-   variables, which are resolved via IS_TyArgs state. (is_allocated fails only
-   on a type variable or an unknown constructor, which cannot happen for a
-   well-typed value at a ground type; the TypeError is passed on.) *)
+   These rules only apply to NotGhost code; Ghost code may copy allocated values freely.
+
+   The rationale for the rules is that in the generated C code, an allocated value
+   is a descriptor holding a pointer to a heap block; copying such values would result
+   in two descriptors "owning" the same piece of heap memory, which would lead to
+   trouble later on.
+
+   Violation of the rules results in a RuntimeError, signalling undefined behaviour.
+   A (future) Core verifier will ensure that RuntimeErrors do not occur, provided that
+   all verification conditions are discharged.
+
+   There are not (yet) any rules to prevent memory leaks; for example, an assignment
+   is currently allowed to "clobber" an allocated lhs, thus losing the pointer to it.
+   This will be addressed as future work.
+*)
+
+(* copy_check returns None if the given value (of the given type) may be copied, or
+   Some RuntimeError if it is an allocated value (and we are in NotGhost mode).
+
+   `ty` is the static type of the given value, possibly mentioning the current
+   function's type variables (which are resolved using IS_TyArgs state).
+
+   In non-well-typed programs, is_allocated might fail with a TypeError - if so,
+   the error is passed back to the caller.
+*)
 fun copy_check :: "GhostOrNot \<Rightarrow> 'w InterpState \<Rightarrow> CoreType \<Rightarrow> CoreValue
                    \<Rightarrow> InterpError option" where
   "copy_check Ghost state ty val = None"
@@ -732,7 +727,6 @@ lemma copy_check_cong_state:
 
 lemma copy_check_Ghost [simp]: "copy_check Ghost state ty val = None"
   by simp
-
 
 
 (* ========================================================================== *)

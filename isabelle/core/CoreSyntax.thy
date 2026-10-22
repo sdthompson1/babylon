@@ -162,8 +162,7 @@ datatype CoreStatement =
   | CoreStmt_Use CoreTerm
   
   (* Assignment. Rhs must be a pure term; lhs must be an lvalue. The type is
-     the (common) type of the lhs and rhs; the interpreter needs it to decide
-     whether the assigned value is allocated (see copy_check in CoreInterp.thy). *)
+     the (common) type of the lhs and rhs. *)
   | CoreStmt_Assign GhostOrNot CoreType CoreTerm CoreTerm
   
   (* Assignment whose rhs is an impure function call.
