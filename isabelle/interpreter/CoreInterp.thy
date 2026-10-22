@@ -733,12 +733,6 @@ lemma copy_check_cong_state:
 lemma copy_check_Ghost [simp]: "copy_check Ghost state ty val = None"
   by simp
 
-lemma copy_check_Some_RuntimeError:
-  assumes "copy_check ghost state ty val = Some err"
-      and "\<exists>b. is_allocated (IS_DataCtors state) (IS_ExternAlloc state) val
-                               (apply_subst (IS_TyArgs state) ty) = Inr b"
-  shows "err = RuntimeError"
-  using assms by (cases ghost) (auto split: sum.splits bool.splits)
 
 
 (* ========================================================================== *)
