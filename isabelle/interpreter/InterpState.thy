@@ -32,6 +32,13 @@ record 'w InterpFun =
      write to the external world). *)
   IF_Impure :: bool
 
+  (* Whether the function is ghost, and its (declared, possibly generic)
+     return type. The interpreter uses these to check that a non-ghost
+     function does not return an allocated value (see call_body in
+     CoreInterp.thy). *)
+  IF_Ghost :: GhostOrNot
+  IF_ReturnType :: CoreType
+
   (* The function's contract, as in FI_Requires / FI_Ensures. These refer to the
      parameters by the positional names of ContractNames.thy. *)
   IF_Requires :: "CoreTerm list"
@@ -74,7 +81,7 @@ record 'world InterpState =
   IS_DataCtors :: "(string, string \<times> string list \<times> CoreType) fmap"
   IS_DataCtorsByType :: "(string, string list) fmap"
 
-  (* Available functions (only includes non-ghost functions) *)
+  (* Available functions (ghost functions included; see MakeInterpState.thy) *)
   IS_Functions :: "(string, 'world InterpFun) fmap"
 
   (* Current "world state" for extern functions *)

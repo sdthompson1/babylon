@@ -344,6 +344,8 @@ proof -
          = zip (CF_Args f) (map (fst \<circ> snd) (FI_TmArgs info))"
       "IF_Body (make_interp_fun info f body) = body"
       "IF_Impure (make_interp_fun info f body) = FI_Impure info"
+      "IF_Ghost (make_interp_fun info f body) = FI_Ghost info"
+      "IF_ReturnType (make_interp_fun info f body) = FI_ReturnType info"
       "IF_Requires (make_interp_fun info f body) = FI_Requires info"
       "IF_Ensures (make_interp_fun info f body) = FI_Ensures info"
       by (simp_all add: make_interp_fun_def)

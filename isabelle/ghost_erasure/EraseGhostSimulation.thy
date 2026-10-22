@@ -659,17 +659,25 @@ next
               iv: "interp_term d fuel full initTm = Inr initVal"
               by (auto split: sum.splits)
             note ivE = sub[OF iW iv]
-            from Var H[symmetric] CoreStmt_VarDecl iv
+            \<comment> \<open>The copy check passed in the full run; it passes in the erased
+                run too, which has the same datatype table, allocation oracle
+                and type arguments. \<close>
+            from Var H CoreStmt_VarDecl NotGhost iv
+            have cc: "copy_check NotGhost full ty initVal = None"
+              by (auto split: option.splits)
+            have ccE: "copy_check NotGhost erased ty initVal = None"
+              using cc copy_check_cong_state[OF D(9) D(10) D(6)] by simp
+            from Var H[symmetric] CoreStmt_VarDecl NotGhost iv cc
             have cF: "is_continue res"
               and stepF: "fresh_binding_step varName initVal full (result_state res)"
               and ncF: "varName |\<notin>| IS_ConstLocals (result_state res)"
               by (simp_all add: fresh_binding_step_def static_parts_eq_def Let_def)
             have "\<exists>resE. interp_statement d (Suc fuel) erased stmt' = Inr resE"
-              using ivE by (simp add: stmt'_eq Var Let_def)
+              using ivE ccE by (simp add: stmt'_eq Var Let_def)
             then obtain resE where
               HE: "interp_statement d (Suc fuel) erased stmt' = Inr resE"
               by blast
-            from Var HE[symmetric] stmt'_eq ivE
+            from Var HE[symmetric] stmt'_eq ivE ccE
             have cE: "is_continue resE"
               and stepE: "fresh_binding_step varName initVal erased (result_state resE)"
               and ncE: "varName |\<notin>| IS_ConstLocals (result_state resE)"
@@ -851,7 +859,7 @@ next
         case (CoreStmt_Use witnessTm)
         with E show ?thesis by simp
       next
-        case (CoreStmt_Assign g lhsLv rhsTm)
+        case (CoreStmt_Assign g ty lhsLv rhsTm)
         show ?thesis
         proof (cases g)
           case Ghost
@@ -859,20 +867,27 @@ next
         next
           case NotGhost
           from E CoreStmt_Assign NotGhost
-          have stmt'_eq: "stmt' = CoreStmt_Assign NotGhost (?er lhsLv) (?er rhsTm)" by auto
+          have stmt'_eq: "stmt' = CoreStmt_Assign NotGhost ty (?er lhsLv) (?er rhsTm)" by auto
           from T CoreStmt_Assign NotGhost
           have lW: "notghost_typed env lhsLv"
             and rW: "notghost_typed env rhsTm"
-            by (auto simp: notghost_typed_def split: if_splits option.splits)
+            by (auto simp: notghost_typed_def split: if_splits)
           from T CoreStmt_Assign have env'_eq: "env' = env"
-            by (auto split: if_splits option.splits)
+            by (auto split: if_splits)
           from H CoreStmt_Assign obtain addr path where
             wl: "interp_writable_lvalue d fuel full lhsLv = Inr (addr, path)"
             by (auto split: sum.splits)
           from H CoreStmt_Assign wl obtain rhsVal where
             rv: "interp_term d fuel full rhsTm = Inr rhsVal"
             by (auto split: sum.splits)
-          from H CoreStmt_Assign wl rv obtain newVal where
+          \<comment> \<open>The copy check passed in the full run; it passes in the erased
+              run too (same datatype table, allocation oracle and type arguments). \<close>
+          from H CoreStmt_Assign NotGhost wl rv
+          have cc: "copy_check NotGhost full ty rhsVal = None"
+            by (auto split: option.splits)
+          have ccE: "copy_check NotGhost erased ty rhsVal = None"
+            using cc copy_check_cong_state[OF D(9) D(10) D(6)] by simp
+          from H CoreStmt_Assign NotGhost wl rv cc obtain newVal where
             upd: "update_value_at_path (IS_Store full ! addr) path rhsVal = Inr newVal"
             by (auto simp: Let_def split: sum.splits)
           from lvs[OF lW wl] obtain i where
@@ -882,16 +897,16 @@ next
           note rvE = sub[OF rW rv]
           have cell: "IS_Store erased ! i = IS_Store full ! addr"
             by (rule erased_cell[OF rel i_lt ei])
-          from H[symmetric] CoreStmt_Assign wl rv upd
+          from H[symmetric] CoreStmt_Assign NotGhost wl rv cc upd
           have cF: "is_continue res"
             and stepF: "store_write_step addr newVal full (result_state res)"
             by (simp_all add: store_write_step_def static_parts_eq_def Let_def)
           have "\<exists>resE. interp_statement d (Suc fuel) erased stmt' = Inr resE"
-            using wlE rvE upd by (simp add: stmt'_eq cell Let_def)
+            using wlE rvE ccE upd by (simp add: stmt'_eq cell Let_def)
           then obtain resE where
             HE: "interp_statement d (Suc fuel) erased stmt' = Inr resE"
             by blast
-          from HE[symmetric] wlE rvE upd
+          from HE[symmetric] wlE rvE ccE upd
           have cE: "is_continue resE"
             and stepE: "store_write_step i newVal erased (result_state resE)"
             by (simp_all add: stmt'_eq cell store_write_step_def static_parts_eq_def Let_def)
@@ -1583,7 +1598,18 @@ next
             by (simp add: call_body_def)
         next
           case (Return postF bodyRetVal)
+          \<comment> \<open>The copy check on the returned value passed in the full run; it
+              passes in the erased run too, since the erased function has the
+              same ghost flag and return type and the related pre-call states
+              have the same datatype table, allocation oracle and type
+              arguments. \<close>
           from bodyF Inl bodyEval Return
+          have cc: "copy_check (IF_Ghost f) preF (IF_ReturnType f) bodyRetVal = None"
+            by (auto simp: call_body_def split: option.splits)
+          note DP = state_erasedD[OF relP]
+          have ccE: "copy_check (IF_Ghost f) preE (IF_ReturnType f) bodyRetVal = None"
+            using cc copy_check_cong_state[OF DP(9) DP(10) DP(6)] by simp
+          from bodyF Inl bodyEval Return cc
           have newFull_eq: "newFull = restore_scope full postF"
             and ret_eq: "retVal = bodyRetVal"
             by (simp_all add: call_body_def)
@@ -1632,7 +1658,7 @@ next
             unfolding newFull_eq by (rule relN)
           have callE: "interp_function_call d (Suc fuel) erased fnName argTys ?argsE
                          = Inr (restore_scope erased postE, retVal)"
-            using lookE lenE tyLen_eq foldE Inl bodyE bE_eq ret_eq
+            using lookE lenE tyLen_eq foldE Inl bodyE bE_eq ret_eq ccE
             by (simp add: checked_call_no_contract call_body_def Let_def paramsE_eq' D(6))
           from callE relN' show ?thesis by blast
         qed

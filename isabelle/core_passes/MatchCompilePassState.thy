@@ -35,6 +35,8 @@ lemma mc_interp_fun_simps [simp]:
   "IF_Args (mc_interp_fun f) = IF_Args f"
   "IF_Body (mc_interp_fun f) = map_sum match_compile_statement_list id (IF_Body f)"
   "IF_Impure (mc_interp_fun f) = IF_Impure f"
+  "IF_Ghost (mc_interp_fun f) = IF_Ghost f"
+  "IF_ReturnType (mc_interp_fun f) = IF_ReturnType f"
   "IF_Requires (mc_interp_fun f) = IF_Requires f"
   "IF_Ensures (mc_interp_fun f) = IF_Ensures f"
   by (simp_all add: mc_interp_fun_def)
@@ -113,6 +115,10 @@ qed simp_all
 lemma is_pure_fun_mc [simp]:
   "is_pure_fun (mc_state s) fnName = is_pure_fun s fnName"
   by (simp split: option.splits)
+
+lemma copy_check_mc [simp]:
+  "copy_check g (mc_state s) ty v = copy_check g s ty v"
+  by (rule copy_check_cong_state) simp_all
 
 lemma default_value_mc [simp]:
   "default_value n (mc_state s) ty = default_value n s ty"

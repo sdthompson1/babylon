@@ -1525,21 +1525,21 @@ next
 next
   (* Assign.
      The rhs is an ordinary (pure) term: resolve the lhs, then interp_term. *)
-  case (31 d fuel state assignGhost lhsLvalue rhsTm)
+  case (31 d fuel state assignGhost ty lhsLvalue rhsTm)
   then show ?case
   proof (intro allI impI)
     fix f' assume "f' \<ge> Suc fuel"
     then obtain f'' where f'_eq: "f' = Suc f''" and f''_ge: "f'' \<ge> fuel"
       using Suc_le_D by auto
-    assume noFuel: "interp_statement d (Suc fuel) state (CoreStmt_Assign assignGhost lhsLvalue rhsTm)
+    assume noFuel: "interp_statement d (Suc fuel) state (CoreStmt_Assign assignGhost ty lhsLvalue rhsTm)
                       \<noteq> Inl InsufficientFuel"
     hence lhs_noFuel: "interp_writable_lvalue d fuel state lhsLvalue \<noteq> Inl InsufficientFuel"
       by (auto split: sum.splits)
     hence IH_lhs: "\<forall>f'\<ge>fuel. interp_writable_lvalue d f' state lhsLvalue
                                = interp_writable_lvalue d fuel state lhsLvalue"
       using "31.IH"(1) by blast
-    show "interp_statement d f' state (CoreStmt_Assign assignGhost lhsLvalue rhsTm) =
-          interp_statement d (Suc fuel) state (CoreStmt_Assign assignGhost lhsLvalue rhsTm)"
+    show "interp_statement d f' state (CoreStmt_Assign assignGhost ty lhsLvalue rhsTm) =
+          interp_statement d (Suc fuel) state (CoreStmt_Assign assignGhost ty lhsLvalue rhsTm)"
     proof (cases "interp_writable_lvalue d fuel state lhsLvalue")
       case (Inl err)
       hence "interp_writable_lvalue d f'' state lhsLvalue = Inl err" using IH_lhs f''_ge by metis
@@ -2231,7 +2231,7 @@ next
                 case (Inl bodyStmts)
                 (* Internal function: execute body statements *)
                 have body_noFuel: "interp_statement_list d fuel preCallState bodyStmts \<noteq> Inl InsufficientFuel"
-                  using body_ne Inl by (auto split: sum.splits ExecResult.splits simp: call_body_def)
+                  using body_ne Inl by (auto split: sum.splits ExecResult.splits option.splits simp: call_body_def)
                 hence IH_body: "\<forall>f'\<ge>fuel. interp_statement_list d f' preCallState bodyStmts =
                                           interp_statement_list d fuel preCallState bodyStmts"
                   using "50.IH"(3) Some False tyLen PreCall Inl by blast
@@ -2864,7 +2864,7 @@ next
   qed
 next
   (* Assign *)
-  case (31 d fuel state assignGhost lhsLvalue rhsTm)
+  case (31 d fuel state assignGhost ty lhsLvalue rhsTm)
   show ?case
   proof (intro allI impI)
     fix d' assume d'_ge: "d' \<ge> d"
@@ -2873,8 +2873,8 @@ next
     hence lhs_eq: "interp_writable_lvalue d' fuel state lhsLvalue
                      = interp_writable_lvalue d fuel state lhsLvalue"
       using "31.IH"(1) d'_ge by blast
-    show "interp_statement d' (Suc fuel) state (CoreStmt_Assign assignGhost lhsLvalue rhsTm) =
-          interp_statement d (Suc fuel) state (CoreStmt_Assign assignGhost lhsLvalue rhsTm)"
+    show "interp_statement d' (Suc fuel) state (CoreStmt_Assign assignGhost ty lhsLvalue rhsTm) =
+          interp_statement d (Suc fuel) state (CoreStmt_Assign assignGhost ty lhsLvalue rhsTm)"
     proof (cases "interp_writable_lvalue d fuel state lhsLvalue")
       case (Inl err)
       thus ?thesis using lhs_eq by simp
@@ -3434,7 +3434,7 @@ next
                 case (Inl bodyStmts)
                 (* Internal function: execute body statements *)
                 have body_noFuel: "interp_statement_list d fuel preCallState bodyStmts \<noteq> Inl InsufficientFuel"
-                  using body_ne Inl by (auto split: sum.splits ExecResult.splits simp: call_body_def)
+                  using body_ne Inl by (auto split: sum.splits ExecResult.splits option.splits simp: call_body_def)
                 hence IH_body: "\<forall>d'\<ge>d. interp_statement_list d' fuel preCallState bodyStmts =
                                         interp_statement_list d fuel preCallState bodyStmts"
                   using "50.IH"(3) Some False tyLen PreCall Inl by blast

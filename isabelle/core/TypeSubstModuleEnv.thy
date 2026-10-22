@@ -2251,9 +2251,9 @@ next
     using gh wk_subst rt_subst lv glv init_subst out_subst_eq wl_eq by simp
 next
   \<comment> \<open>Assign: env unchanged.\<close>
-  case (4 env ghost assignGhost lhsTm rhsTm)
+  case (4 env ghost assignGhost lhsTy lhsTm rhsTm)
   note wf = "4.prems"(2) and ok = "4.prems"(3)
-  from "4.prems"(1) obtain lhsTy where
+  from "4.prems"(1) have
     gh: "ghost = Ghost \<longrightarrow> assignGhost = Ghost" and
     wl: "is_writable_lvalue env lhsTm" and
     glv: "ghost_lvalue_ok env assignGhost lhsTm" and
@@ -2261,7 +2261,7 @@ next
     cpl: "assignGhost = NotGhost \<longrightarrow> is_complete_type lhsTy" and
     rhs: "core_term_type env assignGhost rhsTm = Some lhsTy" and
     out_eq: "envOut = env"
-    by (auto split: if_splits option.splits)
+    by (auto split: if_splits)
   let ?me = "apply_subst_to_module_env subst targetEnv env"
   have ok_rt_a: "assignGhost = NotGhost \<longrightarrow> module_env_subst_runtime_ok subst targetEnv env"
     using ghost_cond_weaken[OF gh "4.prems"(4)] .

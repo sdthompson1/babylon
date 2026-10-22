@@ -29,7 +29,7 @@ and core_statement_list_ghost_free :: "CoreStatement list \<Rightarrow> bool" wh
   "core_statement_ghost_free (CoreStmt_VarDecl declGhost _ _ _ _) = (declGhost = NotGhost)"
 | "core_statement_ghost_free (CoreStmt_VarDeclCall declGhost _ _ _ _ _ _) =
     (declGhost = NotGhost)"
-| "core_statement_ghost_free (CoreStmt_Assign assignGhost _ _) = (assignGhost = NotGhost)"
+| "core_statement_ghost_free (CoreStmt_Assign assignGhost _ _ _) = (assignGhost = NotGhost)"
 | "core_statement_ghost_free (CoreStmt_AssignCall assignGhost _ _ _ _ _) =
     (assignGhost = NotGhost)"
 | "core_statement_ghost_free (CoreStmt_Swap swapGhost _ _) = (swapGhost = NotGhost)"

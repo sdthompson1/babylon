@@ -30,6 +30,7 @@ lemma state_erasedI:
     and "locals_erased env emb full erased"
     and "ghost_locals_separate env emb full"
     and "IS_DataCtors erased = IS_DataCtors full"
+    and "IS_ExternAlloc erased = IS_ExternAlloc full"
   shows "state_erased env emb full erased"
   unfolding state_erased_def heap_erased_def by (intro conjI assms)
 
@@ -44,6 +45,7 @@ lemma state_erasedD:
     and "locals_erased env emb full erased"
     and "ghost_locals_separate env emb full"
     and "IS_DataCtors erased = IS_DataCtors full"
+    and "IS_ExternAlloc erased = IS_ExternAlloc full"
   using assms unfolding state_erased_def heap_erased_def by blast+
 
 lemma state_erased_heap:
@@ -402,6 +404,7 @@ proof -
   have c': "IS_DataCtorsByType erased' = IS_DataCtorsByType full'" using D(2) stF(4) stE(4) by simp
   have dc': "IS_DataCtors erased' = IS_DataCtors full'" using D(9) stF(5) stE(5) by simp
   have w': "IS_World erased' = IS_World full'" using D(3) F(2) E(2) by simp
+  have ea': "IS_ExternAlloc erased' = IS_ExternAlloc full'" using D(10) stF(6) stE(6) by simp
   have f': "funs_erased env' full' erased'"
   proof -
     have "funs_erased env' full' erased' = funs_erased env full erased"
@@ -474,7 +477,7 @@ proof -
     show "a < length (IS_Store full') \<and> a \<notin> set ?emb'" by (auto simp: F(3))
   qed
 
-  show ?thesis by (rule state_erasedI[OF g' c' w' f' se' t' l' s' dc'])
+  show ?thesis by (rule state_erasedI[OF g' c' w' f' se' t' l' s' dc' ea'])
 qed
 
 (* Both states bind varName as a ref, to corresponding addresses with the same
@@ -509,6 +512,7 @@ proof -
   have c': "IS_DataCtorsByType erased' = IS_DataCtorsByType full'" using D(2) stF(4) stE(4) by simp
   have dc': "IS_DataCtors erased' = IS_DataCtors full'" using D(9) stF(5) stE(5) by simp
   have w': "IS_World erased' = IS_World full'" using D(3) F(2) E(2) by simp
+  have ea': "IS_ExternAlloc erased' = IS_ExternAlloc full'" using D(10) stF(6) stE(6) by simp
   have f': "funs_erased env' full' erased'"
   proof -
     have "funs_erased env' full' erased' = funs_erased env full erased"
@@ -578,7 +582,7 @@ proof -
     show "a < length (IS_Store full') \<and> a \<notin> set emb" by (simp add: F(3))
   qed
 
-  show ?thesis by (rule state_erasedI[OF g' c' w' f' se' t' l' s' dc'])
+  show ?thesis by (rule state_erasedI[OF g' c' w' f' se' t' l' s' dc' ea'])
 qed
 
 (* Both states write the same value to corresponding cells. *)
@@ -632,6 +636,7 @@ proof -
   have c': "IS_DataCtorsByType erased' = IS_DataCtorsByType full'" using D(2) stF(4) stE(4) by simp
   have dc': "IS_DataCtors erased' = IS_DataCtors full'" using D(9) stF(5) stE(5) by simp
   have w': "IS_World erased' = IS_World full'" using D(3) F(2) E(2) by simp
+  have ea': "IS_ExternAlloc erased' = IS_ExternAlloc full'" using D(10) stF(6) stE(6) by simp
   have f': "funs_erased env full' erased'"
   proof -
     have "funs_erased env full' erased' = funs_erased env full erased"
@@ -653,7 +658,7 @@ proof -
     then show ?thesis using D(8) by (rule iffD2)
   qed
 
-  show ?thesis by (rule state_erasedI[OF g' c' w' f' se' t' l' s' dc'])
+  show ?thesis by (rule state_erasedI[OF g' c' w' f' se' t' l' s' dc' ea'])
 qed
 
 (* The full state writes to a ghost cell: a cell of its store that no erased
@@ -690,6 +695,7 @@ proof -
   have c': "IS_DataCtorsByType erased = IS_DataCtorsByType full'" using D(2) stF(4) by simp
   have dc': "IS_DataCtors erased = IS_DataCtors full'" using D(9) stF(5) by simp
   have w': "IS_World erased = IS_World full'" using D(3) F(2) by simp
+  have ea': "IS_ExternAlloc erased = IS_ExternAlloc full'" using D(10) stF(6) by simp
   have f': "funs_erased env full' erased"
   proof -
     have "funs_erased env full' erased = funs_erased env full erased"
@@ -711,7 +717,7 @@ proof -
     then show ?thesis using D(8) by (rule iffD2)
   qed
 
-  show ?thesis by (rule state_erasedI[OF g' c' w' f' se' t' l' s' dc'])
+  show ?thesis by (rule state_erasedI[OF g' c' w' f' se' t' l' s' dc' ea'])
 qed
 
 (* Both states get the same new world. *)
@@ -728,6 +734,7 @@ proof -
     show "IS_Globals ?e = IS_Globals ?f" using D(1) by simp
     show "IS_DataCtorsByType ?e = IS_DataCtorsByType ?f" using D(2) by simp
     show "IS_DataCtors ?e = IS_DataCtors ?f" using D(9) by simp
+    show "IS_ExternAlloc ?e = IS_ExternAlloc ?f" using D(10) by simp
     show "IS_World ?e = IS_World ?f" by simp
     show "funs_erased env ?f ?e"
     proof -
@@ -781,6 +788,7 @@ proof -
     and c1: "IS_DataCtorsByType erased1 = IS_DataCtorsByType full1"
     and dc1: "IS_DataCtors erased1 = IS_DataCtors full1"
     and w1: "IS_World erased1 = IS_World full1"
+    and ea1: "IS_ExternAlloc erased1 = IS_ExternAlloc full1"
     and f1: "funs_erased env1 full1 erased1"
     and se1: "store_erased (emb @ extra) full1 erased1"
     unfolding heap_erased_def by blast+
@@ -818,6 +826,7 @@ proof -
     show "IS_Globals ?rsE = IS_Globals ?rsF" using g1 by simp
     show "IS_DataCtorsByType ?rsE = IS_DataCtorsByType ?rsF" using c1 by simp
     show "IS_DataCtors ?rsE = IS_DataCtors ?rsF" using dc1 by simp
+    show "IS_ExternAlloc ?rsE = IS_ExternAlloc ?rsF" using ea1 by simp
     show "IS_World ?rsE = IS_World ?rsF" using w1 by simp
     show "funs_erased env ?rsF ?rsE"
     proof -
@@ -1056,6 +1065,8 @@ lemma erase_ghost_interp_fun_simps [simp]:
   "IF_Args (erase_ghost_interp_fun funInfos name f)
      = erase_ghost_args funInfos name (IF_Args f)"
   "IF_Impure (erase_ghost_interp_fun funInfos name f) = IF_Impure f"
+  "IF_Ghost (erase_ghost_interp_fun funInfos name f) = IF_Ghost f"
+  "IF_ReturnType (erase_ghost_interp_fun funInfos name f) = IF_ReturnType f"
   "IF_Body (erase_ghost_interp_fun funInfos name f)
      = map_sum (erase_ghost_statement_list funInfos) id (IF_Body f)"
   "IF_Requires (erase_ghost_interp_fun funInfos name f) = []"
@@ -1138,7 +1149,7 @@ proof (intro allI impI)
   with f have "fun_info_matches_interp_fun env info f" by simp
   with b show "core_statement_list_type (body_env_for env (map fst (IF_Args f)) info)
                  (FI_Ghost info) body \<noteq> None"
-    by (simp add: fun_info_matches_interp_fun_def)
+    by (auto simp: fun_info_matches_interp_fun_def)
 qed
 
 (* The environment of a function body has the same function signatures. *)
@@ -1246,6 +1257,7 @@ proof -
     show "IS_Globals ?e = IS_Globals ?f" using D(1) by simp
     show "IS_DataCtorsByType ?e = IS_DataCtorsByType ?f" using D(2) by simp
     show "IS_DataCtors ?e = IS_DataCtors ?f" using D(9) by simp
+    show "IS_ExternAlloc ?e = IS_ExternAlloc ?f" using D(10) by simp
     show "IS_World ?e = IS_World ?f" using D(3) by simp
     show "funs_erased envB ?f ?e"
     proof -

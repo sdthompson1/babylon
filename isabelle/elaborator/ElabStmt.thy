@@ -401,7 +401,7 @@ definition elab_assign_pure ::
           | Inr rhsTm' \<Rightarrow>
               if \<not> (term_inferred env lhsTm \<and> term_inferred env rhsTm')
               then Inl [TyErr_CannotInferType loc]
-              else Inr (CoreStmt_Assign ghost lhsTm rhsTm', env, next_mv2)))"
+              else Inr (CoreStmt_Assign ghost lhsTy lhsTm rhsTm', env, next_mv2)))"
 
 (* Assignment with an impure-call rhs. Takes the whole rhs term and pattern-matches
    BabTm_Call internally (undefined otherwise; callers guard on is_impure_call).

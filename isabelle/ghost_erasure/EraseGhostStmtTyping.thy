@@ -567,23 +567,23 @@ next
     by (auto split: option.splits CoreTerm.splits Quantifier.splits if_splits)
   thus ?case by blast
 next
-  case (CoreStmt_Assign assignGhost lhsTm rhsTm)
+  case (CoreStmt_Assign assignGhost lhsTy lhsTm rhsTm)
   note T = CoreStmt_Assign.prems(1) and wf = CoreStmt_Assign.prems(2)
     and rel = CoreStmt_Assign.prems(3)
   show ?case
   proof (cases assignGhost)
     case Ghost
-    from T Ghost have "env' = env" by (auto split: if_splits option.splits)
+    from T Ghost have "env' = env" by (auto split: if_splits)
     thus ?thesis using Ghost rel by simp
   next
     case NotGhost
-    from T NotGhost obtain lhsTy where
+    from T NotGhost have
         w: "is_writable_lvalue env lhsTm" and
         lt: "core_term_type env NotGhost lhsTm = Some lhsTy" and
         cp: "is_complete_type lhsTy" and
         rt: "core_term_type env NotGhost rhsTm = Some lhsTy" and
         e: "env' = env"
-      by (auto split: if_splits option.splits)
+      by (auto split: if_splits)
     let ?E = "erase_ghost_term (TE_Functions env)"
     have wE: "is_writable_lvalue envE (?E lhsTm)"
       using is_writable_lvalue_erased[OF rel lt] w by simp
@@ -592,7 +592,7 @@ next
     have rtE: "core_term_type envE NotGhost (?E rhsTm) = Some lhsTy"
       by (rule core_term_type_erased[OF rt wf rel])
     have sE: "core_statement_type envE NotGhost
-                (CoreStmt_Assign NotGhost (?E lhsTm) (?E rhsTm))
+                (CoreStmt_Assign NotGhost lhsTy (?E lhsTm) (?E rhsTm))
                 = Some envE"
       using wE ltE cp rtE by simp
     have relE: "tyenv_erased env' envE" using rel e by simp

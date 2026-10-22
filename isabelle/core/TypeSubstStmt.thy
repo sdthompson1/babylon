@@ -25,8 +25,9 @@ and apply_subst_to_statement_list :: "TypeSubst \<Rightarrow> CoreStatement list
     CoreStmt_Obtain varName (apply_subst subst ty) (apply_subst_to_term subst condTm)"
 | "apply_subst_to_statement subst (CoreStmt_Use witnessTm) =
     CoreStmt_Use (apply_subst_to_term subst witnessTm)"
-| "apply_subst_to_statement subst (CoreStmt_Assign ghost lhsTm rhsTm) =
-    CoreStmt_Assign ghost (apply_subst_to_term subst lhsTm) (apply_subst_to_term subst rhsTm)"
+| "apply_subst_to_statement subst (CoreStmt_Assign ghost ty lhsTm rhsTm) =
+    CoreStmt_Assign ghost (apply_subst subst ty)
+                    (apply_subst_to_term subst lhsTm) (apply_subst_to_term subst rhsTm)"
 | "apply_subst_to_statement subst (CoreStmt_AssignCall ghost lhsTm castOpt fnName tyArgs argTms) =
     CoreStmt_AssignCall ghost (apply_subst_to_term subst lhsTm) (map_option (apply_subst subst) castOpt)
                         fnName (map (apply_subst subst) tyArgs) (map (apply_subst_to_term subst) argTms)"

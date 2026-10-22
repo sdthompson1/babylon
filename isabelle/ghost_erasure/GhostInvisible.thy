@@ -294,6 +294,8 @@ proof -
       using heap stD(5) by (simp add: heap_erased_def)
     show "IS_World erased = IS_World full'"
       using heap world by (simp add: heap_erased_def)
+    show "IS_ExternAlloc erased = IS_ExternAlloc full'"
+      using heap stD(6) by (simp add: heap_erased_def)
     show "funs_erased env' full' erased"
     proof -
       have "funs_erased env' full' erased = funs_erased env full erased"
@@ -597,6 +599,7 @@ proof -
     show "IS_DataCtors erased = IS_DataCtors ?rs"
       using heap1 by (simp add: heap_erased_def)
     show "IS_World erased = IS_World ?rs" using heap1 by (simp add: heap_erased_def)
+    show "IS_ExternAlloc erased = IS_ExternAlloc ?rs" using heap1 by (simp add: heap_erased_def)
     show "funs_erased env ?rs erased"
     proof -
       have "funs_erased env ?rs erased = funs_erased env1 full1 erased"
@@ -846,7 +849,7 @@ next
           from Var H CoreStmt_VarDecl obtain initVal where
             iv: "interp_term d fuel full initTm = Inr initVal"
             by (auto split: sum.splits)
-          from Var H[symmetric] CoreStmt_VarDecl iv have
+          from Var H[symmetric] CoreStmt_VarDecl g_eq iv have
             c: "is_continue res" and
             world: "IS_World (result_state res) = IS_World full" and
             store': "IS_Store (result_state res) = IS_Store full @ [initVal]" and
@@ -996,22 +999,22 @@ next
       next
         case (CoreStmt_Use _) with H show ?thesis by simp
       next
-        case (CoreStmt_Assign g lhsLv rhsTm)
+        case (CoreStmt_Assign g ty lhsLv rhsTm)
         from T CoreStmt_Assign have g_eq: "g = Ghost" by (auto split: if_splits)
         from T CoreStmt_Assign g_eq
         have glv: "ghost_lvalue_ok env Ghost lhsLv" by (auto split: if_splits)
         from T CoreStmt_Assign have env'_eq: "env' = env"
-          by (auto split: if_splits option.splits)
+          by (auto split: if_splits)
         from H CoreStmt_Assign obtain addr path where
           wl: "interp_writable_lvalue d fuel full lhsLv = Inr (addr, path)"
           by (auto split: sum.splits)
         from H CoreStmt_Assign wl obtain rhsVal where
           rv: "interp_term d fuel full rhsTm = Inr rhsVal"
           by (auto split: sum.splits)
-        from H CoreStmt_Assign wl rv obtain newVal where
+        from H CoreStmt_Assign g_eq wl rv obtain newVal where
           upd: "update_value_at_path (IS_Store full ! addr) path rhsVal = Inr newVal"
           by (auto simp: Let_def split: sum.splits)
-        from H[symmetric] CoreStmt_Assign wl rv upd have
+        from H[symmetric] CoreStmt_Assign g_eq wl rv upd have
           c: "is_continue res" and
           world: "IS_World (result_state res) = IS_World full" and
           store': "IS_Store (result_state res) = (IS_Store full)[addr := newVal]" and
@@ -1397,7 +1400,7 @@ next
   with T show ?thesis
     by (auto split: option.splits CoreTerm.splits Quantifier.splits if_splits)
 next
-  case (CoreStmt_Assign g lhsTm rhsTm)
+  case (CoreStmt_Assign g ty lhsTm rhsTm)
   with er have g_eq: "g = Ghost" by (cases g) simp_all
   from T show ?thesis unfolding CoreStmt_Assign g_eq by simp
 next

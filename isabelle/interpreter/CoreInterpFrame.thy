@@ -729,7 +729,10 @@ next
           from Var H CoreStmt_VarDecl obtain initVal where
             iv: "interp_term d fuel state initTm = Inr initVal"
             by (auto split: sum.splits)
-          from Var H[symmetric] CoreStmt_VarDecl iv have
+          from Var H CoreStmt_VarDecl iv have
+            cc: "copy_check g state ty initVal = None"
+            by (auto split: option.splits)
+          from Var H[symmetric] CoreStmt_VarDecl iv cc have
             store': "IS_Store (result_state res) = IS_Store state @ [initVal]" and
             locals': "IS_Locals (result_state res)
                         = fmupd varName (length (IS_Store state)) (IS_Locals state)" and
@@ -813,17 +816,20 @@ next
       next
         case (CoreStmt_Use _) with H show ?thesis by simp
       next
-        case (CoreStmt_Assign g lhsLv rhsTm)
+        case (CoreStmt_Assign g ty lhsLv rhsTm)
         from H CoreStmt_Assign obtain addr path where
           lv: "interp_writable_lvalue d fuel state lhsLv = Inr (addr, path)"
           by (auto split: sum.splits)
         from H CoreStmt_Assign lv obtain rhsVal where
           rv: "interp_term d fuel state rhsTm = Inr rhsVal"
           by (auto split: sum.splits)
-        from H CoreStmt_Assign lv rv obtain newVal where
+        from H CoreStmt_Assign lv rv have
+          cc: "copy_check g state ty rhsVal = None"
+          by (auto split: option.splits)
+        from H CoreStmt_Assign lv rv cc obtain newVal where
           upd: "update_value_at_path (IS_Store state ! addr) path rhsVal = Inr newVal"
           by (auto simp: Let_def split: sum.splits)
-        from H[symmetric] CoreStmt_Assign lv rv upd have
+        from H[symmetric] CoreStmt_Assign lv rv cc upd have
           store': "IS_Store (result_state res) = (IS_Store state)[addr := newVal]" and
           locals': "IS_Locals (result_state res) = IS_Locals state" and
           refs': "IS_Refs (result_state res) = IS_Refs state"
@@ -1140,7 +1146,7 @@ next
           with Return have body_fs: "frame_step preCallState postCallState" by simp
           from body Inl bodyEval Return
           have state'_eq: "state' = restore_scope state postCallState"
-            by (simp add: call_body_def)
+            by (simp add: call_body_def split: option.splits)
           have len2: "length (IS_Store preCallState) \<le> length (IS_Store postCallState)"
             by (rule frame_stepD(1)[OF body_fs])
           have len: "length (IS_Store state) \<le> length (IS_Store postCallState)"

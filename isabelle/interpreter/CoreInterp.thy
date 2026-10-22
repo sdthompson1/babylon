@@ -6,7 +6,17 @@ begin
 (* Types used by the interpreter *)
 (* ========================================================================== *)
 
-(* Interpreter errors *)
+(* Interpreter errors.
+
+   RuntimeError covers: division by zero; integer overflow; an invalid shift;
+   an array index out of bounds; a cast whose value does not fit (or whose
+   array sizes do not match); a variant projection or a match with no matching
+   constructor; a failed assertion, precondition, postcondition, loop invariant
+   or decreases check; an Obtain with no witness; reaching the end of a
+   function without a Return; and, in non-ghost code only, an improper copy of
+   an allocated value: declaring a (Var) variable with an allocated initial
+   value, assigning an allocated value, or returning an allocated value from a
+   non-ghost function (see copy_check below). *)
 datatype InterpError = 
   TypeError           (* Type mismatch, e.g. 1 + true, or other compile-time error *)
   | RuntimeError      (* Runtime failure, e.g division by zero, array index out of bounds *)
@@ -671,6 +681,65 @@ next
     by simp
 qed
 
+(* ========================================================================== *)
+(* Improper copies of allocated values *)
+(* ========================================================================== *)
+
+(* In Core, values are trees and are copied freely; in the generated C, an
+   allocated value (an allocatable array, or an extern value the allocation
+   oracle says is allocated) is a descriptor holding a pointer to a heap block,
+   so copying it would alias the block and the two semantics would diverge on
+   the next write. The Babylon verifier forbids such copies; Core makes them a
+   RuntimeError, so that a run that makes one is outside the scope of the code
+   generator's correctness theorem. The three places where a value is copied
+   into a variable in non-ghost code, and which are therefore checked, are
+   (as in the C verifier, verifier_statements.c):
+     1. the initial value of a (Var) variable declaration (CoreStmt_VarDecl),
+     2. the value assigned by an assignment (CoreStmt_Assign), and
+     3. the value returned from a non-ghost function (see call_body).
+   Nothing else is checked: Ref declarations, swaps and ref arguments copy no
+   value; term evaluation is pure, so an alias inside a term (a let, a record
+   or array literal, a by-value call argument) cannot cause divergence; the
+   result of an impure call is covered by rule 3 (or, for an extern function,
+   by the extern-function contract); and dropping an allocated value only
+   leaks memory in C. Ghost code is not checked (it is erased before code
+   generation).
+
+   copy_check ghost state ty val: None if val may be copied, Some RuntimeError
+   if it is an allocated value in non-ghost code. ty is the static type of val
+   as annotated in the syntax, possibly mentioning the current function's type
+   variables, which are resolved via IS_TyArgs state. (is_allocated fails only
+   on a type variable or an unknown constructor, which cannot happen for a
+   well-typed value at a ground type; the TypeError is passed on.) *)
+fun copy_check :: "GhostOrNot \<Rightarrow> 'w InterpState \<Rightarrow> CoreType \<Rightarrow> CoreValue
+                   \<Rightarrow> InterpError option" where
+  "copy_check Ghost state ty val = None"
+| "copy_check NotGhost state ty val =
+    (case is_allocated (IS_DataCtors state) (IS_ExternAlloc state) val
+                       (apply_subst (IS_TyArgs state) ty) of
+       Inr True \<Rightarrow> Some RuntimeError
+     | Inr False \<Rightarrow> None
+     | Inl err \<Rightarrow> Some err)"
+
+(* copy_check only looks at the datatype table, the allocation oracle and the
+   type arguments of the state. *)
+lemma copy_check_cong_state:
+  assumes "IS_DataCtors state' = IS_DataCtors state"
+      and "IS_ExternAlloc state' = IS_ExternAlloc state"
+      and "IS_TyArgs state' = IS_TyArgs state"
+  shows "copy_check ghost state' ty val = copy_check ghost state ty val"
+  using assms by (cases ghost) simp_all
+
+lemma copy_check_Ghost [simp]: "copy_check Ghost state ty val = None"
+  by simp
+
+lemma copy_check_Some_RuntimeError:
+  assumes "copy_check ghost state ty val = Some err"
+      and "\<exists>b. is_allocated (IS_DataCtors state) (IS_ExternAlloc state) val
+                               (apply_subst (IS_TyArgs state) ty) = Inr b"
+  shows "err = RuntimeError"
+  using assms by (cases ghost) (auto split: sum.splits bool.splits)
+
 
 (* ========================================================================== *)
 (* Casting *)
@@ -1091,6 +1160,9 @@ lemma checked_call_no_contract:
 (* This is the last step of a function call. It runs the body statement list, or calls the
    external function, and returns the resulting post-call interpreter state, and the return value.
 
+   For a Core body, when the function is not ghost, the returned value must not be
+   allocated (copy_check): see the comment on copy_check.
+
    Inputs:
     - run: statement-list evaluator (interp_statement_list, partially applied to depth and fuel)
     - state: the caller's state (just before the call)
@@ -1114,9 +1186,16 @@ definition call_body ::
            producing postCallState and a return value.\<close>
         (case run preCallState bodyStmts of
           Inr (Return postCallState retVal) \<Rightarrow>
-            \<comment> \<open>Restore the state how it was before the call (keeping ref updates)
-               and pass the return value back to the caller.\<close>
-            Inr (restore_scope state postCallState, retVal)
+            \<comment> \<open>A non-ghost function must not return an allocated value (rule 3 of
+               copy_check). The return type is instantiated at the callee's type
+               arguments, which are IS_TyArgs preCallState (and also of
+               postCallState: the body cannot change them).\<close>
+            (case copy_check (IF_Ghost f) preCallState (IF_ReturnType f) retVal of
+               Some err \<Rightarrow> Inl err
+             | None \<Rightarrow>
+                 \<comment> \<open>Restore the state how it was before the call (keeping ref updates)
+                    and pass the return value back to the caller.\<close>
+                 Inr (restore_scope state postCallState, retVal))
         | Inr (Continue _) \<Rightarrow>
             Inl RuntimeError  \<comment> \<open>Reached end of function without return statement\<close>
         | Inl err \<Rightarrow>
@@ -1394,11 +1473,16 @@ where
 | "interp_statement _ 0 _ _ = Inl InsufficientFuel"
 
   (* Variable declaration *)
-| "interp_statement d (Suc fuel) state (CoreStmt_VarDecl _ varName Var _ initialTm) =
+| "interp_statement d (Suc fuel) state (CoreStmt_VarDecl declGhost varName Var varTy initialTm) =
     \<comment> \<open>The initializer is an ordinary (pure) term; impure-call initializers use
-        CoreStmt_VarDeclCall. The state is unchanged by evaluating it. \<close>
+        CoreStmt_VarDeclCall. The state is unchanged by evaluating it.
+        A non-ghost declaration must not copy an allocated value (rule 1 of
+        copy_check).\<close>
     (case interp_term d fuel state initialTm of
-       Inr initialVal \<Rightarrow> Inr (Continue (bind_mutable_local varName initialVal state))
+       Inr initialVal \<Rightarrow>
+         (case copy_check declGhost state varTy initialVal of
+            Some err \<Rightarrow> Inl err
+          | None \<Rightarrow> Inr (Continue (bind_mutable_local varName initialVal state)))
      | Inl err \<Rightarrow> Inl err)"
 
 | "interp_statement d (Suc fuel) state (CoreStmt_VarDeclCall _ varName _ castOpt fnName argTys argTms) =
@@ -1435,19 +1519,23 @@ where
     | None \<Rightarrow> Inl TypeError)"
 
   (* Assignment *)
-| "interp_statement d (Suc fuel) state (CoreStmt_Assign _ lhsLvalue rhsTm) =
+| "interp_statement d (Suc fuel) state (CoreStmt_Assign assignGhost ty lhsLvalue rhsTm) =
     \<comment> \<open>Resolve the lhs to an address and path; the rhs is an ordinary (pure)
         term (impure-call rhs's use CoreStmt_AssignCall). State is unchanged by
-        evaluating it.\<close>
+        evaluating it. A non-ghost assignment must not copy an allocated value
+        (rule 2 of copy_check).\<close>
     (case interp_writable_lvalue d fuel state lhsLvalue of
       Inr (addr, path) \<Rightarrow>
         (case interp_term d fuel state rhsTm of
           Inr rhsVal \<Rightarrow>
-            (let oldVal = IS_Store state ! addr in
-            case update_value_at_path oldVal path rhsVal of
-              Inr newVal \<Rightarrow>
-                Inr (Continue (state \<lparr> IS_Store := (IS_Store state)[addr := newVal] \<rparr>))
-            | Inl err \<Rightarrow> Inl err)
+            (case copy_check assignGhost state ty rhsVal of
+               Some err \<Rightarrow> Inl err
+             | None \<Rightarrow>
+                 (let oldVal = IS_Store state ! addr in
+                 case update_value_at_path oldVal path rhsVal of
+                   Inr newVal \<Rightarrow>
+                     Inr (Continue (state \<lparr> IS_Store := (IS_Store state)[addr := newVal] \<rparr>))
+                 | Inl err \<Rightarrow> Inl err))
         | Inl err \<Rightarrow> Inl err)
     | Inl err \<Rightarrow> Inl err)"
 

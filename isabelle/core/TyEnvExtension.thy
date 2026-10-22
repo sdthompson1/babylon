@@ -955,9 +955,9 @@ next
   from res ext_out show ?case by blast
 next
   \<comment> \<open>Assign: env unchanged.\<close>
-  case (4 env ghost assignGhost lhsTm rhsTm)
+  case (4 env ghost assignGhost lhsTy lhsTm rhsTm)
   note ext = "4.prems"(2) and cons = "4.prems"(3)
-  from "4.prems"(1) obtain lhsTy where
+  from "4.prems"(1) have
     gh: "ghost = Ghost \<longrightarrow> assignGhost = Ghost" and
     wl: "is_writable_lvalue env lhsTm" and
     glv: "ghost_lvalue_ok env assignGhost lhsTm" and
@@ -965,7 +965,7 @@ next
     cp: "assignGhost = NotGhost \<longrightarrow> is_complete_type lhsTy" and
     rhs: "core_term_type env assignGhost rhsTm = Some lhsTy" and
     out_eq: "envOut = env"
-    by (auto split: if_splits option.splits)
+    by (auto split: if_splits)
   have wl2: "is_writable_lvalue env2 lhsTm"
     using wl is_writable_lvalue_tyenv_extends[OF ext] by simp
   have glv2: "ghost_lvalue_ok env2 assignGhost lhsTm"
@@ -974,7 +974,7 @@ next
     using core_term_type_tyenv_extends[OF ext cons lhs] .
   have rhs2: "core_term_type env2 assignGhost rhsTm = Some lhsTy"
     using core_term_type_tyenv_extends[OF ext cons rhs] .
-  have res: "core_statement_type env2 ghost (CoreStmt_Assign assignGhost lhsTm rhsTm) = Some env2"
+  have res: "core_statement_type env2 ghost (CoreStmt_Assign assignGhost lhsTy lhsTm rhsTm) = Some env2"
     using gh wl2 glv2 lhs2 cp rhs2 by simp
   from res ext show ?case using out_eq by blast
 next

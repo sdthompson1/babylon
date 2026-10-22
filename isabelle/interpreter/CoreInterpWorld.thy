@@ -213,7 +213,7 @@ proof (intro allI impI)
     case (Inl body)
     let ?benv = "body_env_for env (map fst (IF_Args f)) info"
     from m Inl have t: "core_statement_list_type ?benv (FI_Ghost info) body \<noteq> None"
-      by (simp add: fun_info_matches_interp_fun_def)
+      by (auto simp: fun_info_matches_interp_fun_def)
     have fns: "TE_Functions ?benv = TE_Functions env"
       and imp: "TE_FunctionImpure ?benv = FI_Impure info"
       by (simp_all add: body_env_for_def)
@@ -308,7 +308,10 @@ next
           from Var H CoreStmt_VarDecl obtain initVal where
             iv: "interp_term d fuel state initTm = Inr initVal"
             by (auto split: sum.splits)
-          from Var H[symmetric] CoreStmt_VarDecl iv show ?thesis
+          from Var H CoreStmt_VarDecl iv have
+            cc: "copy_check gd state ty initVal = None"
+            by (auto split: option.splits)
+          from Var H[symmetric] CoreStmt_VarDecl iv cc show ?thesis
             by (simp add: Let_def)
         next
           case Ref
@@ -377,17 +380,20 @@ next
       next
         case (CoreStmt_Use _) with H show ?thesis by simp
       next
-        case (CoreStmt_Assign ga lhsLv rhsTm)
+        case (CoreStmt_Assign ga ty lhsLv rhsTm)
         from H CoreStmt_Assign obtain addr path where
           wl: "interp_writable_lvalue d fuel state lhsLv = Inr (addr, path)"
           by (auto split: sum.splits)
         from H CoreStmt_Assign wl obtain rhsVal where
           rv: "interp_term d fuel state rhsTm = Inr rhsVal"
           by (auto split: sum.splits)
-        from H CoreStmt_Assign wl rv obtain newVal where
+        from H CoreStmt_Assign wl rv have
+          cc: "copy_check ga state ty rhsVal = None"
+          by (auto split: option.splits)
+        from H CoreStmt_Assign wl rv cc obtain newVal where
           upd: "update_value_at_path (IS_Store state ! addr) path rhsVal = Inr newVal"
           by (auto simp: Let_def split: sum.splits)
-        from H[symmetric] CoreStmt_Assign wl rv upd show ?thesis
+        from H[symmetric] CoreStmt_Assign wl rv cc upd show ?thesis
           by (simp add: Let_def)
       next
         case (CoreStmt_AssignCall ga lhsLv castOpt fnName argTys argTms)
@@ -714,7 +720,7 @@ next
           case (Return postCallState bodyRetVal)
           from body Inl bodyEval Return
           have state'_eq: "state' = restore_scope state postCallState"
-            by (simp add: call_body_def)
+            by (simp add: call_body_def split: option.splits)
           from w Return pre_w show ?thesis by (simp add: state'_eq)
         qed
       next

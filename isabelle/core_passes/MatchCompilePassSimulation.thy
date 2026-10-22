@@ -139,7 +139,7 @@ next
     case (CoreStmt_Use tm')
     show ?thesis unfolding CoreStmt_Use by (rule sim_not_ghost_free) simp
   next
-    case (CoreStmt_Assign g lhs rhs)
+    case (CoreStmt_Assign g ty lhs rhs)
     show ?thesis unfolding CoreStmt_Assign by (rule sim_Assign[OF IH_lv IH_tm])
   next
     case (CoreStmt_AssignCall g lhs castOpt fnName tyArgs argTms)

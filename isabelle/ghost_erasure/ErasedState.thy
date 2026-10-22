@@ -109,6 +109,7 @@ definition heap_erased ::
     IS_DataCtorsByType erased = IS_DataCtorsByType full \<and>
     IS_DataCtors erased = IS_DataCtors full \<and>
     IS_World erased = IS_World full \<and>
+    IS_ExternAlloc erased = IS_ExternAlloc full \<and>
     funs_erased env full erased \<and>
     store_erased emb full erased"
 
