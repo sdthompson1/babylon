@@ -4,8 +4,10 @@ This document is the design for the verified code generator that will
 translate a linked, ghost-erased, match-compiled, normalized `CoreModule`
 into "MiniC", a small fragment of C, and for the MiniC semantics defined in
 this directory. It is the handover for the review that happens before stage
-3b. Decisions the author is unsure of are marked **[decision]** so that the
-reviewer can find them.
+3b. The design decisions it records (the static size bound of section 3.2,
+the encoding as a record in section 2.2, the global initialisation in
+section 3.7 and the extern name map in section 3.9) were reviewed and
+accepted on 2026-10-23.
 
 The theories in this directory:
 
@@ -39,7 +41,9 @@ actually emits, cleaned up so that it has a simple semantics:
 - Everything with an effect is a statement: declarations, assignment to a
   scalar variable, store through a pointer, `memmove`, `memset`, `if`,
   `while (1)`/`break`, blocks, calls (whose scalar result may be assigned to
-  a scalar variable), `return`, and `abort()` (`MS_Trap`).
+  a scalar variable) and `return`. There is no `abort()`: MiniC has no
+  defined abnormal termination, because the generated code never needs one
+  (sections 3.2 and 3.3).
 - Names are plain strings. The unverified printer (stage 3b) mangles them.
   An extern function carries its C name (`MF_Extern = Some cname`) and is
   printed under that name, unmangled.
@@ -65,7 +69,6 @@ each construct is there (section 3 gives the lowering that uses it).
 | `MS_Block` | Core blocks and match arms (fresh scope) |
 | `MS_Call` | calls; the scalar result goes to a scalar variable, an aggregate result goes through a return-buffer pointer argument |
 | `MS_Return` | return |
-| `MS_Trap` | `abort()`: the guards of section 3.2 and the fall-through of a match |
 
 Deliberately omitted: `switch` (matches become `if` chains, which are easier
 to print and to reason about), `for`/`while (c)` (one loop form), pointer
@@ -136,11 +139,11 @@ complement instance, proved valid (`valid_le_encoding`), and is what makes
 the interpreter runnable (`MiniCExample.thy`). The theorems of stages 4 to 6
 will quantify over every valid encoding.
 
-**[decision]** A record with a validity predicate rather than a locale: the
-semantics functions take `enc` as an explicit argument, so `value`/`eval`
-work without locale interpretation and the code export in stage 3b stays
-simple. The price is an explicit `valid_encoding enc` hypothesis on every
-lemma that needs the laws.
+The encoding is a record with a validity predicate rather than a locale:
+the semantics functions take `enc` as an explicit argument, so
+`value`/`eval` work without locale interpretation and the code export in
+stage 3b stays simple. The price is an explicit `valid_encoding enc`
+hypothesis on every lemma that needs the laws.
 
 ### 2.3 How each Core type is laid out
 
@@ -204,6 +207,24 @@ everything MiniC defines, every conforming C implementation (under the
 assumptions of section 5) defines in the same way, which is the direction
 the unverified printer needs.
 
+The one place where the model is *more permissive* than C is aliasing.
+Memory is untyped bytes: a block has no declared type and no effective type
+(C99 6.5p6), and `mem_load`/`mem_store` accept any scalar type at any
+in-range offset of any live block. So MiniC defines, for example, storing an
+`int32_t` into a `char[8]` buffer and loading it back, or storing an
+`int32_t` into the first four bytes of a `uint64_t` scalar variable and then
+reading the variable, both of which C99 6.5p7 (the "strict aliasing" rule)
+forbids when done through a typed lvalue such as `*(int32_t *)p`. This is
+sound only because of the printer obligation P1 of section 5.2: every access
+through a pointer is printed as `memcpy`/`memmove`/`memset`, which are
+character-type accesses and are permitted by 6.5p7 whatever the effective
+type of the object; and the only typed accesses the printer emits are to
+named scalar variables at their declared type (`ME_Var`, `MS_Assign`), which
+the semantics also performs at the declared type (`MVar_Scalar ty`). The
+generated code of section 3 never reads a location at a type other than the
+one it was written at, but nothing in the semantics requires that, and the
+justification is the printing convention, not the memory model.
+
 
 ## 3. The compilation scheme
 
@@ -244,7 +265,7 @@ every form. The decision is reversible: if stage 6 finds the term cases too
 large, the lowering of terms to statements can be split off later without
 changing MiniC.
 
-### 3.2 Sizes, offsets and the overflow guards
+### 3.2 Sizes, offsets and the static size bound
 
 The size of a (ground or generic) Core type is a `uint64_t` MiniC
 expression built as in `get_size_of_type` of `codegen.c`:
@@ -263,30 +284,64 @@ When the type is ground the generator folds the expression to a literal,
 except for `ME_PtrSize`, which stays symbolic (the printer prints
 `sizeof(void*)`).
 
-Sizes in a generic function are computed in `uint64_t` and can overflow.
-A Core run does not care (a Core value has no size), so a program such as
-`f<T>(n) { if n > 0 { f<{T, T}>(n - 1) } }` runs normally in Core for any
-`n` but computes `2^n` as a size in C. The generator therefore guards every
-size computation that involves a type parameter: at function entry it
-computes every distinct size and offset the body needs into local
-`uint64_t` variables `sz$k`, checking each addition and multiplication
-(`if (b > U64_MAX - a) trap;`, `if (a != 0 && b > U64_MAX / a) trap;`) and
-executing `MS_Trap` (`abort()`) on overflow. The body then only refers to
-the `sz$k` variables. The theorem of section 8 consequently concludes
-"corresponds or traps"; a trap is reachable only through these guards (and
-the unreachable-arm trap of section 3.3), and only for programs whose
-run-time type sizes exceed `2^64 - 1` bytes.
+Sizes in a generic function are computed in `uint64_t` at run time from
+the size parameters, and the generator emits the size expressions above
+directly, with no run-time checks, exactly as `codegen.c` does. A Core run
+does not care about sizes (a Core value has no size), so in principle a
+Core program could instantiate a generic function at a type whose size
+exceeds `2^64 - 1` bytes and run normally in Core while the `uint64_t`
+arithmetic in C wraps. Such a program could not run on any real machine
+(it would exhaust memory long before), so the theorems simply exclude it,
+by a static hypothesis `core_module_sizeable` that an executable checker
+establishes over the Core module:
 
-**[decision]** The alternative is a static hypothesis that bounds every
-run-time type instantiation (for example: every type argument inside a
-generic function body is a bare type parameter or a closed type, which
-makes the set of instantiations finite and all sizes computable at compile
-time). That rules out polymorphic recursion, needs a new static analysis
-with its own soundness proof about Core runs, and still needs run-time
-sizes for the generic code. The guards are local, cheap (once per function
-entry), and make the failure visible instead of silent, so they are
-preferred. If a static bound is later wanted, the guards can be proved
-unreachable and the "or traps" disjunct dropped.
+1. **The call graph is acyclic.** Babylon has no recursion (the elaborator
+   rejects self-recursive and mutually recursive declarations: `check_sccs`
+   in `ElabModule.thy`), so every elaborated module satisfies this. The
+   checker computes a topological order of the functions, callers before
+   callees, and fails if there is none. No separate "no recursion"
+   hypothesis is needed: it is part of this one.
+2. **A bound per size parameter, computed top-down.** In that order, each
+   function `f` gets an upper bound `B_f(T)` for every type parameter `T`:
+   `main` has none; for every call site `f<ty1, ..., tym>` inside a function
+   `g`, the bound `B_f(Ti)` is the maximum, over all call sites of `f` in
+   the program, of `|tyi|` evaluated with `g`'s size parameters set to
+   `g`'s bounds. Every size expression is built from sums, maxima and
+   products by literal array dimensions of the size parameters, so it is
+   monotone in them, and evaluating it at the bounds gives an upper bound
+   on its value at every actual instantiation.
+3. **Every size fits.** Every size and offset expression that the
+   generator emits in the body of `f` (sections 3.3 to 3.6), evaluated at
+   `B_f`, is below `2^64`; and every closed type of the program has a size
+   below `2^64` (typedefs are expanded by the elaborator, so a tower of
+   record typedefs is a closed type and is covered here).
+
+This is an over-approximation (a function called as `f<big, small>` and
+`f<small, big>` is bounded by `(big, big)` and could be rejected although
+every actual instantiation fits), which only rejects contrived programs,
+and it is linear in the size of the program; the exact alternative,
+enumerating every instantiation reachable from `main`, can be exponential
+in the call depth, like monomorphisation.
+
+The soundness lemma, to be proved in stage 4 on the Core side: in every
+state of a Core run from `main`, the current instantiation (`IS_TyArgs` in
+`CoreInterp`) maps each type parameter of the current function `f` to a
+closed type of size at most `B_f(T)`. It is an induction over the
+interpreter whose only interesting case is the call: the callee's
+instantiation is the call site's syntactic type arguments under the
+caller's instantiation (`calleeTyArgs`), so monotonicity of `size` gives
+the bound. Consequently every size expression the generated code evaluates
+has a mathematical value below `2^64`, and since every intermediate value
+of a monotone non-negative expression is at most its final value, the
+`uint64_t` arithmetic computes it exactly. The theorem of section 8 thus
+has a single conclusion, "corresponds", with no trap or abort anywhere.
+
+*Rejected alternative:* run-time overflow guards on every size
+computation, with `abort()` on overflow and a theorem concluding
+"corresponds or aborts". They are local and cheap but add a statement form
+and an error outcome to MiniC that nothing else needs, weaken the theorem,
+and make the generated code differ from `codegen.c`. The only argument for
+them was polymorphic recursion, which Babylon does not have.
 
 ### 3.3 Terms
 
@@ -318,7 +373,7 @@ its value; for an aggregate-typed term the result is a place.
 | `VariantProj t C` | place `⟦t⟧ + tagsize`; load if scalar. Core raises `RuntimeError` if the constructor differs, so no check |
 | `ArrayProj t [i1 .. id]`, fixed dims | place `⟦t⟧ + |T| · (i1 + n1·(i2 + ...))` in `uint64_t`; load if scalar. Core raises `RuntimeError` for an out-of-bounds index, so no bounds check; and in-bounds index arithmetic cannot overflow when the array fits in memory (section 4) |
 | `ArrayProj t [..]`, descriptor | `data = ME_Load CharPtr ⟦t⟧`, dims `nk = ME_Load u64 (⟦t⟧ + ptrsize + 8k)`, then as above |
-| `Match s arms` (flat patterns) | `⟦s⟧`; for a variant scrutinee `tag = ME_Load tagty ⟦s⟧`, for a bool/int scrutinee `tag = ⟦s⟧`; declare the result `tmp` (scalar or buffer of the arm type); an `MS_If` chain comparing `tag` with each arm's literal (constructor index, `0/1`, or integer; a wildcard arm is the final `else`), each arm `⟦body⟧` copied/stored into `tmp`; a trailing `MS_Trap` if there is no wildcard (unreachable: Core raises `RuntimeError` when no arm matches); result `tmp` |
+| `Match s arms` (flat patterns) | `⟦s⟧`; for a variant scrutinee `tag = ME_Load tagty ⟦s⟧`, for a bool/int scrutinee `tag = ⟦s⟧`; declare the result `tmp` (scalar or buffer of the arm type); an `MS_If` chain comparing `tag` with each arm's literal (constructor index, `0/1`, or integer), each arm `⟦body⟧` copied/stored into `tmp`; the *last* arm is the final `else`, unconditionally, whether it is a wildcard or not. Core picks the first arm whose literal matches and raises `RuntimeError` when none does, so when the last arm is reached in a normal Core run its literal is the one that matches, and the no-match case needs no code at all (`codegen.c`'s `switch` without `default` falls through in the same way). A match with no arms always raises in Core; it lowers to the declaration of `tmp` alone. Result `tmp` |
 | `Sizeof t`, descriptor | 1-d: `ME_Load u64 (⟦t⟧ + ptrsize)`; d-d: a record temp filled with the d loads |
 | `Sizeof t`, fixed | literals (a `uint64_t` literal, or a record temp of them) |
 | `Default ty` | scalar: `ME_Int s b 0` or null; aggregate: `MS_DeclBuf tmp (max 1 |ty|); MS_Zero tmp |ty|`. Correct because the default value of every type is all-zero bytes: false, 0, null, records of defaults, the first constructor (tag 0) with the default payload, fixed arrays of defaults, empty allocatable arrays (null pointer, zero sizes). Stage 4 proves this (`default_value_rep_zero`) |
@@ -471,9 +526,10 @@ Statements that a ghost-free module cannot contain (`Fix`, `Obtain`, `Use`,
 `Assert`, `Assume`, `ShowHide`, ghost-flagged statements, invariants,
 decreases terms) are not handled.
 
-Function bodies: the statements of the body, preceded by the size prologue
-of section 3.2. Core's `call_body` raises `RuntimeError` if the body falls
-off the end without `return`, so the generated body need not end with one.
+Function bodies: the statements of the body, with sizes and offsets as
+inline expressions over the size parameters (section 3.2). Core's
+`call_body` raises `RuntimeError` if the body falls off the end without
+`return`, so the generated body need not end with one.
 
 ### 3.7 Global constants
 
@@ -503,7 +559,7 @@ question arises; the data buffers are static and never freed (a constant of
 allocatable type with a non-empty value would be an "allocated" constant,
 which Babylon's verifier rejects; the design handles it anyway).
 
-**[decision]** Initialisation at program start rather than the lazily
+Constants are initialised at program start rather than by the lazily
 initialised accessor functions of `docs/c-interface.md` ("Accessing Babylon
 Constants from C"). Reasons: the output is one `.c` file and no external C
 code reads Babylon constants, so the accessor convention buys nothing; a
@@ -538,8 +594,8 @@ are ordinary `MS_Call`s; the interpreter dispatches on `MF_Extern` to the
 model (section 6).
 
 How `cname` reaches the generator: the elaborator sees `DF_ExternName` but
-drops it, and nothing in Core records it. **[decision]** The proposal is a
-*side map*, not a Core change: `elab_program` additionally returns a map
+drops it, and nothing in Core records it. The chosen route is a *side
+map*, not a Core change: `elab_program` additionally returns a map
 from the qualified Core name of each extern function to its C name
 (`DF_ExternName` if given, otherwise the unqualified Babylon name, as
 `get_extern_name` in `codegen.c`); `whole_program_link` is not involved
@@ -548,11 +604,11 @@ driver passes the map to the generator, which uses the entry for each
 `CF_Body = None` function (and falls back to the unqualified name if there is
 none). This keeps `CoreModule`, `InterpFun`, the linker and all their proofs
 untouched, which is right because the C name is irrelevant to every theorem
-(only the unverified printer consumes it). The alternative, a field
-`CF_ExternName :: string option` on `CoreFunction`, is more robust against
-the map and the module going out of sync but touches every construction
-site of `CoreFunction` in the elaborator and linker. Implementation is stage
-5 work.
+(only the unverified printer consumes it). The rejected alternative, a
+field `CF_ExternName :: string option` on `CoreFunction`, is more robust
+against the map and the module going out of sync but touches every
+construction site of `CoreFunction` in the elaborator and linker.
+Implementation is stage 5 work.
 
 
 ## 4. The representation relation (stage 4 preview)
@@ -579,9 +635,9 @@ giving the MiniC pointer value of each Core extern handle (section 6).
   of exactly `count · |elem|` bytes whose contents represent the elements;
 - `CV_Extern n l h` at `CoreTy_Extern n l`: `bs = encode_ptr (hmap h)`;
 - in all cases `|ty| < 2^64` (so that every size, offset and index
-  computation of section 3 fits `uint64_t`; this is the "sizeable type"
-  side condition, and it is what the extern hypothesis delivers for arrays
-  an extern allocates).
+  computation of section 3 fits `uint64_t`; `core_module_sizeable` of
+  section 3.2 guarantees this for every type a Core run instantiates, and
+  the extern hypothesis delivers it for arrays an extern allocates).
 
 `state_rep` relates a Core `InterpState` to a MiniC state (memory, globals,
 locals, world): the worlds are equal; every global is represented in its
@@ -674,17 +730,42 @@ and A5 at the top of the generated file.
   does not fit `size_t` could not be allocated on that target anyway).
 - **A7. The exact-width types `int8_t` ... `uint64_t` exist** (C99 makes
   them optional; `docs/c-interface.md` requires them).
-- **A8. `memmove`, `memset`, `abort` and the pointer arithmetic the printer
-  emits behave as the standard says** (no assumption beyond C99, listed so
-  that the list is complete: the generated code uses no other library
+- **A8. `memmove`, `memset` and the pointer arithmetic the printer emits
+  behave as the standard says** (no assumption beyond C99, listed so that
+  the list is complete: the generated code uses no other library
   functions, and all pointer arithmetic stays inside one object).
 
 Not assumed: anything about `sizeof(int)`, `sizeof(void*)` (a parameter),
 endianness (abstract encoding), alignment (every multi-byte access to a
-buffer goes through `memmove`/`memcpy`), the result of out-of-range
-conversion to a signed type (UB in MiniC; never performed by a Core run
-that reaches a normal result), unsigned wrap-around (UB in MiniC; never
-relied on), the value of an uninitialised object (UB to decode).
+buffer goes through `memmove`/`memcpy`), anything about strict aliasing or
+effective types (C99 6.5p6-7: every access through a pointer is a
+character-type access, which is always permitted, and the only typed
+accesses are to scalar variables at their declared type; see P1 below and
+section 2.5), the result of out-of-range conversion to a signed type (UB in
+MiniC; never performed by a Core run that reaches a normal result), unsigned
+wrap-around (UB in MiniC; never relied on), the value of an uninitialised
+object (UB to decode).
+
+**Obligation on the printer (stage 3b).** The assumptions above are about
+the C implementation; the following is a constraint on how MiniC is printed,
+without which the untyped memory model of section 2 would not be sound
+against C.
+
+- **P1. No typed access through a pointer.** `ME_Load ty p` is printed as a
+  `memcpy` of `sizeof(T)` bytes from `p` into a temporary of type `T`, and
+  `MS_Store ty p e` as a `memcpy` from a temporary into `p` (or as helper
+  functions that do exactly that); `MS_Copy` and `MS_Zero` are `memmove` and
+  `memset`. The printer never emits `*(T *)p` for any `T` other than `char`,
+  and never folds `ME_Load ty (ME_AddrOf x)` or `MS_Store ty (ME_AddrOf x) e`
+  into a direct read or write of `x`, since that is only correct when `ty` is
+  the declared type of `x`, which the printer cannot see. The only accesses
+  printed through a typed lvalue are `ME_Var x` and `MS_Assign x e`, which
+  are reads and writes of the scalar variable `x` at its own declared type,
+  and `ME_AddrOf x` is `(char *)&x` for a scalar and `x` for a buffer.
+  `codegen.c` already follows this convention everywhere (`memmove` for
+  reads through `ref` parameters and lazy references, `memcpy` for field
+  and element reads, the shift helpers of section 5.3), and so does
+  `Array.c` for descriptors.
 
 ### 5.3 Shifts
 
@@ -826,12 +907,13 @@ number per line, `true` for the boolean, `hi` for the string).
 Written out as they are expected to be stated in stage 5 (typing) and stage
 6 (simulation). Names of not-yet-existing definitions: `codegen_module`
 (stage 5), `minic_program_well_typed` (stage 3b), `state_rep`, `rep_val`,
-`extern_rep`, `hmap` (stage 4), `datatypes_acyclic` and
-`core_module_sizeable` (stage 4: every datatype is non-recursive; every
-closed type of the program has a byte size below `2^64`, and the variant tag
-sizes are as in section 2.3). The aliasing condition is written as a
-`RuntimeError` of the proposed Core check (section 3.4), so it is covered by
-"normal result".
+`extern_rep`, `hmap` (stage 4), `datatypes_acyclic` (stage 4: every
+datatype is non-recursive) and `core_module_sizeable` (stage 4: the static
+size bound of section 3.2, which includes acyclicity of the call graph,
+together with the facts that every closed type of the program has a byte
+size below `2^64` and that the variant tag sizes are as in section 2.3).
+The aliasing condition is written as a `RuntimeError` of the proposed Core
+check (section 3.4), so it is covered by "normal result".
 
     theorem codegen_well_typed:
       assumes "core_module_well_typed m"
@@ -864,18 +946,16 @@ sizes are as in section 2.3). The aliasing condition is written as a
           and "interp_function_call d fuel st mainName [] [] = Inr (st', v)"
       shows "∃fuel' mem'.
                run_program fuel' enc minicExterns prog w
-                 = Inr (IS_World st', mem', MV_Int Signed IntBits_32 0)
-             ∨ run_program fuel' enc minicExterns prog w = Inl MErr_Trap"
+                 = Inr (IS_World st', mem', MV_Int Signed IntBits_32 0)"
 
-The first disjunct says: the MiniC program terminates (some fuel suffices),
-never reaches `MErr_UB` (the result is `Inr`), ends in the same world as the
-Core run (hence with the same sequence of extern calls: the world type is
-universally quantified, so instantiating `'w` with a trace of calls makes
-the worlds the traces), and returns 0. The second disjunct is the
-size-overflow trap of section 3.2 (and the unreachable-arm trap, which the
-proof shows is not taken). `externAlloc` is arbitrary: Core's allocation
-oracle only influences which copies are `RuntimeError`s, and the hypothesis
-is a normal result. Non-termination, `TypeError`, `RuntimeError` and
+The conclusion says: the MiniC program terminates (some fuel suffices),
+never reaches `MErr_UB` (the result is `Inr`; MiniC has no other failure
+besides fuel), ends in the same world as the Core run (hence with the same
+sequence of extern calls: the world type is universally quantified, so
+instantiating `'w` with a trace of calls makes the worlds the traces), and
+returns 0. `externAlloc` is arbitrary: Core's allocation oracle only
+influences which copies are `RuntimeError`s, and the hypothesis is a normal
+result. Non-termination, `TypeError`, `RuntimeError` and
 `InsufficientFuel` of the Core run are out of scope, as the task says.
 
 
@@ -886,8 +966,13 @@ is a normal result. Non-termination, `TypeError`, `RuntimeError` and
    check, so the condition becomes part of "normal result". Without it the
    theorem needs a hypothesis over the run, which cannot be stated with the
    existing interpreter.
-2. **Size overflow in generic code** (section 3.2). Mitigation: guards and
-   `MS_Trap`, with the "or traps" disjunct; alternatively a static bound.
+2. **Size overflow in generic code** (section 3.2). The `uint64_t` size
+   arithmetic of a generic function could wrap for an instantiation at a
+   huge type. Mitigation: the static bound `core_module_sizeable`, checked
+   by an executable function over the module and made sound by the stage 4
+   lemma that every instantiation a Core run performs respects the bounds.
+   That lemma is new Core-side work, but it has one interesting case (the
+   call) and needs no instrumentation of the interpreter.
 3. **Sharing between const cells and their origins** (sections 3.5, 4). The
    representation relation cannot be a plain injection from cells to
    regions. Mitigation: the "writable locations are unshared" invariant,
@@ -920,16 +1005,26 @@ is a normal result. Non-termination, `TypeError`, `RuntimeError` and
    it. Mitigation: `valid_encoding` has the zero law, `encode_ptr` null is
    zero bytes, and stage 4 proves `default_value_rep_zero` by induction over
    the type (fuelled as `default_value` is).
-10. **Datatype acyclicity / sizes.** `size` of a recursive datatype would
-    not terminate. Mitigation: `datatypes_acyclic` hypothesis; the
-    elaborator should already reject recursive datatypes (to be confirmed
-    in stage 4, otherwise the pipeline checks it).
+10. **Datatype and call-graph acyclicity / sizes.** `size` of a recursive
+    datatype would not terminate, and the size bound of section 3.2 needs
+    a topological order of the functions. Mitigation: `datatypes_acyclic`
+    hypothesis, and the `core_module_sizeable` checker computes the
+    function order itself and fails on a cycle. The elaborator already
+    rejects recursive functions (`check_sccs`) and should reject recursive
+    datatypes too (to be confirmed in stage 4); either way the pipeline
+    runs the checks, so no elaborator proof is needed.
 11. **The printer** is unverified; precedence, integer literal syntax
-    (`INT64_MIN`), the shift helpers and the mangling are all places for
-    silent errors. Mitigation: the MiniC AST is small and fully
-    parenthesisable, every literal carries its type, and stage 3b compares
-    gcc's output with the interpreter's on the example; from stage 5 on the
-    57 codegen tests are an independent oracle.
+    (`INT64_MIN`), the shift helpers, the mangling and the aliasing
+    obligation P1 of section 5.2 are all places for silent errors. Printing
+    `ME_Load`/`MS_Store` as typed dereferences instead of `memcpy` would
+    make nearly every generated function violate C99 6.5p7 (every field
+    read comes out of a `char` buffer), which gcc at `-O2` does exploit,
+    while leaving the Isabelle side unchanged. Mitigation: the MiniC AST is
+    small and fully parenthesisable, every literal carries its type, P1 is
+    a stated rule rather than a convention, and stage 3b compares gcc's
+    output (with `-O2` as well as `-O0`) with the interpreter's on the
+    example; from stage 5 on the 57 codegen tests are an independent
+    oracle.
 12. **Zero-sized aggregates** (`{}`, `T[0]`). C forbids zero-length arrays.
     Mitigation: every buffer declaration uses `max 1 |ty|`; copies of 0
     bytes are fine; the unit type is `void` in signatures.
@@ -948,5 +1043,8 @@ is a normal result. Non-termination, `TypeError`, `RuntimeError` and
 
 - `CoreInterp`: the argument aliasing check (section 3.4).
 - `elab_program`/driver: return the extern C-name map (section 3.9).
-- Possibly `CodeExport`: check `datatypes_acyclic` and `core_module_sizeable`
-  at run time if they are not already consequences of elaboration.
+- `CodeExport`/the driver: run the `core_module_sizeable` checker of
+  section 3.2 (and `datatypes_acyclic`, if it is not a consequence of
+  elaboration) on the module before code generation. The size bound is a
+  property of the program's instantiations, not of elaboration, so it has
+  to be checked; it cannot fail on realistic programs.

@@ -10,8 +10,9 @@ begin
    pure and need no fuel (eval_expr returns None for undefined behaviour).
    Statements are executed by a mutually recursive, fuelled family of functions
    whose result distinguishes a normal result (Inr), insufficient fuel
-   (Inl MErr_Fuel), undefined behaviour (Inl MErr_UB) and a trap, i.e. a
-   deliberate abort() by the program (Inl MErr_Trap; see MS_Trap).
+   (Inl MErr_Fuel) and undefined behaviour (Inl MErr_UB). MiniC has no
+   defined abnormal termination (no abort()): the generated code never needs
+   one (see DESIGN.md, sections 3.2 and 3.3).
 
    "Undefined behaviour" means anything that a C compiler would be allowed to
    miscompile, plus anything the C standard leaves implementation-defined that
@@ -242,9 +243,7 @@ definition eval_ptr :: "MEncoding \<Rightarrow> 'w MState \<Rightarrow> MExpr \<
 
 section \<open>Statements\<close>
 
-(* MErr_Trap is the result of MS_Trap (abort()): a defined abnormal
-   termination, distinct from undefined behaviour. *)
-datatype MErr = MErr_UB | MErr_Fuel | MErr_Trap
+datatype MErr = MErr_UB | MErr_Fuel
 
 (* How a statement (list) finished: normally, by `break`, or by `return`
    (with the returned value, if any). *)
@@ -425,8 +424,6 @@ where
     (case eval_expr (MC_Enc ctx) st e of
        Some v \<Rightarrow> Inr (st, MO_Return (Some v))
      | None \<Rightarrow> Inl MErr_UB)"
-
-| "exec_stmt (Suc fuel) ctx st MS_Trap = Inl MErr_Trap"
 
 | "exec_stmts 0 _ _ _ = Inl MErr_Fuel"
 | "exec_stmts (Suc fuel) ctx st [] = Inr (st, MO_Normal)"
