@@ -66,7 +66,8 @@ abbreviation desc1_size :: MExpr where
 section \<open>The functions\<close>
 
 (* area(s: char pointer): int32_t   -- s points to a Shape (9 bytes: u8 tag, then
-   the payload: an i32 for Circle, or {x: i32, y: i32} for Rect). *)
+   the payload: an i32 for Circle, or {x: i32, y: i32} for Rect). The last arm
+   of the match is the unconditional `else` of the if chain (DESIGN.md 3.3). *)
 definition area_fun :: MFun where
   "area_fun = \<lparr>
      MF_Name = ''area'',
@@ -80,10 +81,8 @@ definition area_fun :: MFun where
          [ MS_DeclScalar ''r'' CTy_I32,
            MS_Assign ''r'' (ld CTy_I32 (offp (var ''s'') 1)),
            MS_Assign ''res'' (ME_Binop CB_Mul (ME_Binop CB_Mul (i32 3) (var ''r'')) (var ''r'')) ]
-         [ MS_If (ME_Binop CB_Eq (var ''tag'') (u8 1))
-             [ MS_Assign ''res'' (ME_Binop CB_Mul (ld CTy_I32 (offp (var ''s'') 1))
-                                                  (ld CTy_I32 (offp (var ''s'') 5))) ]
-             [ MS_Trap ] ],
+         [ MS_Assign ''res'' (ME_Binop CB_Mul (ld CTy_I32 (offp (var ''s'') 1))
+                                              (ld CTy_I32 (offp (var ''s'') 5))) ],
        MS_Return (Some (var ''res'')) ],
      MF_Extern = None \<rparr>"
 

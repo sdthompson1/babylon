@@ -93,7 +93,6 @@ datatype MStmt =
   | MS_Call "string option" string "MExpr list"
                                         (* [x =] f(args);  x receives a scalar result *)
   | MS_Return "MExpr option"
-  | MS_Trap                             (* abort(): defined abnormal termination (see DESIGN.md 3.2) *)
 
 
 section \<open>Functions and programs\<close>
@@ -164,7 +163,6 @@ and stmts_wf :: "MProgram \<Rightarrow> bool \<Rightarrow> MStmt list \<Rightarr
         | Some fn \<Rightarrow> length args = length (MF_Params fn)))"
 | "stmt_wf prog inLoop (MS_Return None) = True"
 | "stmt_wf prog inLoop (MS_Return (Some e)) = expr_wf e"
-| "stmt_wf prog inLoop MS_Trap = True"
 
 | "stmts_wf prog inLoop [] = True"
 | "stmts_wf prog inLoop (s # ss) = (stmt_wf prog inLoop s \<and> stmts_wf prog inLoop ss)"
