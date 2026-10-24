@@ -368,6 +368,7 @@ enum Priority {
 // Code generation for types
 //
 
+// True if a (non-NULL) type is considered a scalar type.
 static bool is_scalar_type(struct CGContext *cxt, const struct Type *type)
 {
     if (type->tag == TY_BOOL || type->tag == TY_FINITE_INT) {
@@ -380,6 +381,27 @@ static bool is_scalar_type(struct CGContext *cxt, const struct Type *type)
     } else {
         return false;
     }
+}
+
+// True if a (non-NULL) type is the unit type (an empty record).
+// Note: typedefs have been expanded by the typechecker, so a simple
+// structural check suffices.
+static bool is_unit_type(const struct Type *type)
+{
+    return type->tag == TY_RECORD && type->record_data.fields == NULL;
+}
+
+// True if a function with this (possibly NULL) return type
+// takes an implicit "ret" parameter.
+static bool returns_via_ret_param(struct CGContext *cxt, const struct Type *ret_ty)
+{
+    // Functions without a return type compile to C "void"; functions
+    // with a scalar return type compile to a normal C return type
+    // (e.g. int32_t); and functions with the unit return type ({})
+    // compile to C "void" as a special case. Anything else passes
+    // an extra "ret" param which is a pointer to the area where
+    // the (aggregate) return value should be written.
+    return ret_ty && !is_scalar_type(cxt, ret_ty) && !is_unit_type(ret_ty);
 }
 
 static const char * scalar_type_to_name(struct Type *type)
@@ -1729,16 +1751,29 @@ static void codegen_call(struct CGContext *cxt,
     struct Type * fun_ty = get_function_type(term);
     struct Type * ret_ty = fun_ty->function_data.return_type;
 
+    // Note: the typechecker ensures that a call statement (ST_CALL) only
+    // calls a function with no return type, and a call used as an
+    // expression only calls a function that does return a value. So
+    // normally, as_statement is true iff ret_ty is NULL. The one
+    // exception is codegen_return_stmt, which passes as_statement=true
+    // for a unit-returning call (see there).
+
     // Make a temporary buffer to hold the return value, if required.
     char ret_name[TEMP_NAME_LEN];
     bool using_ret_buffer = false;
-    if (ret_ty && !is_scalar_type(cxt, ret_ty)) {
+    bool unit_result = ret_ty && is_unit_type(ret_ty);
+    if (returns_via_ret_param(cxt, ret_ty)) {
         make_temporary(cxt, ret_name, term->type);
         using_ret_buffer = true;
+    } else if (unit_result && !as_statement) {
+        // The C function is void (no "ret" parameter), but the call is
+        // being used as an expression, so we need a dummy buffer to
+        // stand for the zero-sized result.
+        make_temporary(cxt, ret_name, term->type);
     }
 
     // Is this call going to be directly used in an expression?
-    bool call_expr = !using_ret_buffer && !as_statement;
+    bool call_expr = !using_ret_buffer && !unit_result && !as_statement;
 
     // Parenthesise the expression if necessary
     if (call_expr && pri > POSTFIX_EXPR) print_token(cxt->pr, "(");
@@ -2647,6 +2682,26 @@ static void codegen_return_stmt(struct CGContext *cxt,
             codegen_term(cxt, EXPR, MODE_VALUE, stmt->ret.value);
             print_token(cxt->pr, ";");
             new_line(cxt->pr);
+        } else if (is_unit_type(stmt->ret.value->type)) {
+            // The enclosing function is void in C (there is no "ret"
+            // parameter), so just evaluate the term for its side effects
+            // and then return.
+            if (stmt->ret.value->tag == TM_CALL) {
+                // Emit a unit-returning call directly as a statement
+                // (rather than as an expression, which would create a
+                // pointless dummy result buffer).
+                codegen_call(cxt, EXPR, stmt->ret.value, true);
+            } else {
+                print_token(cxt->pr, "(");
+                print_token(cxt->pr, "void");
+                print_token(cxt->pr, ")");
+                codegen_term(cxt, CAST_EXPR, MODE_ADDR, stmt->ret.value);
+                print_token(cxt->pr, ";");
+                new_line(cxt->pr);
+            }
+            print_token(cxt->pr, "return");
+            print_token(cxt->pr, ";");
+            new_line(cxt->pr);
         } else {
             copy_term_to_variable(cxt, "ret", false, stmt->ret.value);
             print_token(cxt->pr, "return");
@@ -2930,8 +2985,8 @@ static void print_function_header(struct CGContext *cxt,
     // Track whether we've printed the first parameter yet
     bool first_param = true;
 
-    // Add implicit "ret" argument if return type is aggregate
-    if (ret_ty && !is_scalar_type(cxt, ret_ty)) {
+    // Add implicit "ret" argument if required
+    if (returns_via_ret_param(cxt, ret_ty)) {
         first_param = false;
         print_token(cxt->pr, "char");
         print_token(cxt->pr, "*");

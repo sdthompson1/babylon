@@ -320,13 +320,14 @@ parameter is a `char *` pointing to the in-memory representation of
 the aggregate (as described above).
 
 For the return value: If the Babylon function doesn't declare a return
-value then the C function returns `void`. If the Babylon function
-returns a scalar type, then the return type of the C function is the
-corresponding C type. Finally, if the Babylon function returns an
-aggregate, then the C function returns `void` but there is an extra
-parameter (coming first in the list) of type `char *`. The C function
-is expected to write its return value into the address pointed to by
-this extra parameter.
+type, or if it returns the unit type `{}` (the empty record), then the
+C function returns `void`. If the Babylon function returns a scalar
+type, then the return type of the C function is the corresponding C
+type. Finally, if the Babylon function returns an aggregate type
+(other than `{}`), then the C function returns `void` but there is an
+extra parameter (coming first in the list) of type `char *`. The C
+function is expected to write its return value into the address
+pointed to by this extra parameter.
 
 Any pre or post conditions of the `extern` declaration are simply
 ignored when determining the form of the C prototype.
