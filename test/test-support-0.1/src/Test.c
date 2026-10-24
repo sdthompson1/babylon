@@ -197,3 +197,11 @@ void c_function_with_custom_name()
 {
     printf("Hello from c_function_with_custom_name!\n");
 }
+
+// On the Babylon side, this function is declared to return unit ({}),
+// but unit return values are elided by the code generator, so here
+// it appears as a void function, just like print_string itself.
+void print_string_unit(void *str)
+{
+    print_string(str);
+}

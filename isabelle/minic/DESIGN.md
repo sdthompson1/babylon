@@ -406,7 +406,12 @@ the MiniC function
 which matches "Calling C Functions from Babylon" in `docs/c-interface.md`
 (ghost arguments no longer exist). The unit type `{}` (the return type the
 elaborator gives a procedure, with an implicit `return {}` at the end of the
-body) is treated as `void`: no return buffer and `return;`.
+body) is treated as `void`: no return buffer and `return;`. Core cannot
+distinguish a procedure from a function declared `: {}`, so both must get
+the same prototype; `codegen.c` was changed (October 2026) to agree, as
+before then it gave an explicitly `{}`-returning function a `ret`
+parameter like any other aggregate. (`test/cases/codegen/UnitReturn.b`
+exercises this, including an extern.)
 
 A call `f<ty1..tym>(e1..en)` lowers to:
 
@@ -1023,7 +1028,7 @@ result. Non-termination, `TypeError`, `RuntimeError` and
     small and fully parenthesisable, every literal carries its type, P1 is
     a stated rule rather than a convention, and stage 3b compares gcc's
     output (with `-O2` as well as `-O0`) with the interpreter's on the
-    example; from stage 5 on the 57 codegen tests are an independent
+    example; from stage 5 on the 58 codegen tests are an independent
     oracle.
 12. **Zero-sized aggregates** (`{}`, `T[0]`). C forbids zero-length arrays.
     Mitigation: every buffer declaration uses `max 1 |ty|`; copies of 0
