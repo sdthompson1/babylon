@@ -72,7 +72,9 @@ record MEncoding =
   enc_decode   :: "Signedness \<Rightarrow> IntBits \<Rightarrow> nat list \<Rightarrow> int"
 
 (* The laws the proofs rely on:
-    - the pointer size is positive;
+    - the pointer size is positive and fits a uint64_t (it is the size of a void pointer,
+      and every size the generated code computes is a uint64_t: DESIGN.md
+      section 3.2 and assumption A6);
     - an in-range integer encodes to exactly byte_width bytes, each < 256,
       and decodes back to itself (round trip; injectivity follows);
     - decoding any byte_width bytes gives an in-range integer (no trap
@@ -82,6 +84,7 @@ record MEncoding =
 definition valid_encoding :: "MEncoding \<Rightarrow> bool" where
   "valid_encoding enc =
     (enc_ptr_size enc > 0
+     \<and> enc_ptr_size enc < 2 ^ 64
      \<and> (\<forall>s b i. int_fits s b i \<longrightarrow>
           length (enc_encode enc s b i) = byte_width b
           \<and> (\<forall>x \<in> set (enc_encode enc s b i). x < 256)
@@ -144,6 +147,11 @@ lemma int_fits_unsigned:
 lemma int_fits_signed:
   "int_fits Signed b i \<longleftrightarrow> - (2 ^ (bit_size b - 1)) \<le> i \<and> i < 2 ^ (bit_size b - 1)"
   using int_fits_pow2[of Signed b i] by simp
+
+(* The pointer size fits a uint64_t (so that ME_PtrSize evaluates to a well-formed value). *)
+lemma valid_encoding_ptr_size_fits:
+  "valid_encoding enc \<Longrightarrow> int_fits Unsigned IntBits_64 (int (enc_ptr_size enc))"
+  unfolding int_fits_unsigned by (simp add: valid_encoding_def)
 
 
 subsection \<open>Little-endian instance\<close>

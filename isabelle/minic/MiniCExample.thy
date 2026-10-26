@@ -1,5 +1,5 @@
 theory MiniCExample
-  imports MiniCSemantics
+  imports MiniCTyping
 begin
 
 (* ========================================================================== *)
@@ -252,6 +252,9 @@ definition example_prog :: MProgram where
                   alloc_array_fun, free_array_fun, main_fun ] \<rparr>"
 
 lemma example_prog_wf: "program_wf example_prog"
+  by eval
+
+lemma example_prog_well_typed: "program_well_typed example_prog"
   by eval
 
 
