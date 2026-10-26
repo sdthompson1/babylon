@@ -925,7 +925,6 @@ check (section 3.4), so it is covered by "normal result".
           and "core_module_closed m"
           and "core_module_ghost_free m"
           and "core_module_flat m"
-          and "core_module_invariant m"
           and "CM_TypeSubst m = fmempty"            (* normalized *)
           and "datatypes_acyclic (CM_TyEnv m)"
           and "core_module_sizeable m"
