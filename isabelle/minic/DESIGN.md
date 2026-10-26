@@ -52,7 +52,7 @@ actually emits, cleaned up so that it has a simple semantics:
   a scalar variable) and `return`. There is no `abort()`: MiniC has no
   defined abnormal termination, because the generated code never needs one
   (sections 3.2 and 3.3).
-- Names are plain strings. The unverified printer (stage 3b) mangles them.
+- Names are plain strings. The unverified printer (section 11) mangles them.
   An extern function carries its C name (`MF_Extern = Some cname`) and is
   printed under that name, unmangled.
 
@@ -632,7 +632,7 @@ the globals zero-filled, call `main`, return its `int`.
 
 An extern Core function (`CF_Body = None`) becomes an `MFun` with
 `MF_Extern = Some cname` and no body; its parameter list is computed as in
-section 3.4, so its prototype (printed by stage 3b) is the one
+section 3.4, so its prototype (section 11.2) is the one
 `docs/c-interface.md` prescribes, and the existing implementations
 (`packages/coretypes/src/Array.c`, `Test.c`) work unchanged. Calls to it
 are ordinary `MS_Call`s; the interpreter dispatches on `MF_Extern` to the
@@ -792,7 +792,7 @@ MiniC; never performed by a Core run that reaches a normal result), unsigned
 wrap-around (UB in MiniC; never relied on), the value of an uninitialised
 object (UB to decode).
 
-**Obligation on the printer (stage 3b).** The assumptions above are about
+**Obligation on the printer.** The assumptions above are about
 the C implementation; the following is a constraint on how MiniC is printed,
 without which the untyped memory model of section 2 would not be sound
 against C.
@@ -957,7 +957,7 @@ printed, compiled and run.
 
 Written out as they are expected to be stated in stage 5 (typing) and stage
 6 (simulation). Names of not-yet-existing definitions: `codegen_module`
-(stage 5), `minic_program_well_typed` (stage 3b), `state_rep`, `rep_val`,
+(stage 5), `state_rep`, `rep_val`,
 `extern_rep`, `hmap` (stage 4), `datatypes_acyclic` (stage 4: every
 datatype is non-recursive) and `core_module_sizeable` (stage 4: the static
 size bound of section 3.2, which includes acyclicity of the call graph,
@@ -979,7 +979,7 @@ check (section 3.4), so it is covered by "normal result".
           and "FI_TyArgs mainInfo = []" and "FI_TmArgs mainInfo = []"
           and "FI_ReturnType mainInfo = CoreTy_Record []"
           and "codegen_module cnames mainName m = Some prog"
-      shows "program_wf prog" and "minic_program_well_typed prog"
+      shows "program_wf prog" and "program_well_typed prog"
 
     theorem codegen_correct:
       fixes w :: 'w and coreExterns :: "(string, 'w ExternFunc) fmap"
@@ -1050,8 +1050,10 @@ result. Non-termination, `TypeError`, `RuntimeError` and
    local); too strong and `Array.c` does not satisfy it (e.g. requiring
    `calloc(0, n)` to return null). Mitigation: the sketch keeps the
    zero-element case unconstrained and demands only a frame condition and
-   representation of the results; stage 3b's comparison against the real
-   `Array.c`/`Test.c` is the sanity check.
+   representation of the results; the comparison of section 11.4 against
+   the real `Array.c`/`Test.c` is the sanity check (both allocation
+   conventions, `Test.c`'s `void` one and `Array.c`'s `bool` one, run
+   correctly against the models of `MiniCExample.thy`).
 8. **Integer promotion and `int` width.** Mitigation: MiniC arithmetic is
    mathematical with a fits check, Core guarantees the fit, and the only
    promotion-sensitive operations (shifts) go through the helpers of
@@ -1153,10 +1155,11 @@ Linking: `example` is linked against `test/test-support-0.1/src/Test.c`
 `void free_array` that `test/test-support-0.1/src/Test.b` declares);
 `example_array` is the same program calling `packages/coretypes/src/Array.c`'s
 `bool alloc_array` instead, linked against `Array.c` plus `Test.c` compiled
-with `-Dalloc_array=test_alloc_array -Dfree_array=test_free_array`, because
-the two files define the same two symbols with different prototypes and
-cannot be linked together as they are. (A real program imports either
-`Test` or `Array`, never both.)
+with its `alloc_*_array` and `free_*_array` functions renamed by `-D`
+macros (`-Dalloc_array=test_alloc_array` and so on), because the two files
+define the same symbols with different prototypes and cannot be linked
+together as they are. (A real program imports either `Test` or `Array`,
+never both.)
 
 ### 11.2 What the printer emits
 
@@ -1273,4 +1276,33 @@ the driver writes it to `NAME.expected` for a byte-for-byte comparison.
 The `eval` lemma `example_run` checks the interpreter against it, and
 `example_prog_well_typed` checks the typing judgement, both by `eval`.
 
-Outcome: VALIDATION-RESULT-PLACEHOLDER
+Outcome (gcc 13.3, x86-64 Linux, glibc with `_FORTIFY_SOURCE` on by
+default at `-O2`): both examples compile without a warning under
+`-std=c99`, `-std=c11` and `-std=c17`, at `-O0` and `-O2`, with
+`-Wall -Wextra -pedantic -Werror`, link against `Test.c` (and `Array.c`),
+return 0 and print exactly `example_expected` and `example_array_expected`.
+Two things were found and fixed on the way:
+
+1. **The driver cannot run the interpreter.** `CodeExport.thy` uses
+   `Code_Binary_Nat`, and the interpreter's equations match on `Suc fuel`
+   together with the statement, which its `Suc`-elimination preprocessor
+   does not handle (section 10). The driver therefore writes the documented
+   expected text, and the `eval` lemmas are what tie it to the interpreter.
+   No change to the semantics.
+2. **`memmove` of a partially initialised buffer.** The stage 3a example
+   built `Circle(3)` leaving the four bytes after the payload undefined (as
+   `codegen_variant` does) and then copied the variant. That is valid C
+   (the object's address is taken and `char` has no trap representation),
+   and the semantics defines it (section 2.1), but gcc 13's
+   `-Wuninitialized` reports `'sh2' is used uninitialized` at `-O2` when
+   `memmove` is glibc's fortified inline wrapper (the warning disappears
+   with `-D_FORTIFY_SOURCE=0`). Rather than have every generated variant
+   construction warn on a default Ubuntu toolchain, the lowering of
+   `VariantCtor` now zeroes the buffer first (section 3.3) and the example
+   does the same; `undef_copy_prog` keeps the semantics' handling of
+   undefined bytes checked in the interpreter. No change to the semantics
+   or the memory model.
+
+Not a finding, but confirmed: the `print_bool`/`print_string` prototype
+mismatches of `Test.c` (section 11.3) are harmless on this ABI, as they
+have always been for `codegen.c`'s output.
