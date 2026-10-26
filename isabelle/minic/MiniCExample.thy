@@ -1,5 +1,5 @@
 theory MiniCExample
-  imports MiniCTyping
+  imports MiniCPrint
 begin
 
 (* ========================================================================== *)
@@ -10,9 +10,11 @@ begin
    in exactly the form the code generator of DESIGN.md (section 3) would
    produce from a Babylon program, together with MiniC-side models of the
    extern functions it calls, evaluated by `value` in the interpreter with the
-   little-endian encoding. Stage 3b prints this program to C, compiles it with
-   gcc, links it against Test.c, and compares the output with the list
-   checked at the end of this theory.
+   little-endian encoding. The world of the models is the text the program
+   writes to stdout, so that the C program obtained by printing this program
+   (MiniCPrint.thy), compiling it with gcc and linking it against Test.c can be
+   compared with the interpreter byte for byte: see DESIGN.md, section 11, and
+   minic/check_example.sh.
 
    The Babylon program it corresponds to is roughly:
 
@@ -38,7 +40,7 @@ begin
        print_i32(arr[0]); print_u64(sizeof(arr)); // 30, 3
        free_array(arr); print_u64(sizeof(arr));   // 0
        print_bool(v > 30 && v == 42);             // true (1)
-       print_string(greeting);                    // bytes 104, 105
+       print_string(greeting);                    // hi (no newline)
        print_i32(K + v);                          // 142
      }
 
@@ -186,12 +188,15 @@ definition main_fun :: MFun where
        MS_Call (Some ''a'') ''area'' [addr ''sh''],
        MS_Call None ''print_i32'' [var ''a''],
 
-       \<comment> \<open>the variant Circle(3): tag 0, payload 3, remaining 4 bytes undefined\<close>
+       \<comment> \<open>the variant Circle(3): the buffer is zeroed, then tag 0 and payload 3 are
+           stored (the 4 bytes after the payload stay zero: DESIGN.md 3.3), and the
+           variant is copied\<close>
        MS_DeclBuf ''sh2'' (u64 9),
+       MS_Zero (addr ''sh2'') (u64 9),
        MS_Store CTy_U8 (addr ''sh2'') (u8 0),
        MS_Store CTy_I32 (offp (addr ''sh2'') 1) (i32 3),
        MS_DeclBuf ''sh3'' (u64 9),
-       MS_Copy (addr ''sh3'') (addr ''sh2'') (u64 9),   \<comment> \<open>copies undefined bytes: allowed\<close>
+       MS_Copy (addr ''sh3'') (addr ''sh2'') (u64 9),
        MS_DeclScalar ''a2'' CTy_I32,
        MS_Call (Some ''a2'') ''area'' [addr ''sh3''],
        MS_Call None ''print_i32'' [var ''a2''],
@@ -260,27 +265,36 @@ lemma example_prog_well_typed: "program_well_typed example_prog"
 
 section \<open>Models of the extern functions\<close>
 
-(* The world is the list of integers printed so far (print_bool prints 0/1,
-   print_string prints the byte values of the string). *)
-type_synonym World = "int list"
+(* The world is the text printed so far: exactly what the C implementations
+   in Test.c write to stdout (print_i32 and print_u64 print the number and a
+   newline; print_bool prints `true` or `false` and a newline; print_string
+   prints the bytes of the string, without a newline). *)
+type_synonym World = string
 
-(* print_i32 / print_u64 / print_bool: append the argument. *)
+(* print_i32 / print_u64: the decimal number, then a newline. *)
 definition print_int_model :: "World MExtern" where
   "print_int_model w m args =
     (case args of
-       [MV_Int _ _ i] \<Rightarrow> Some (w @ [i], m, None)
+       [MV_Int _ _ i] \<Rightarrow> Some (w @ int_to_string i @ newline, m, None)
+     | _ \<Rightarrow> None)"
+
+(* print_bool: `true` for a non-zero argument, else `false`, then a newline. *)
+definition print_bool_model :: "World MExtern" where
+  "print_bool_model w m args =
+    (case args of
+       [MV_Int _ _ i] \<Rightarrow> Some (w @ (if i \<noteq> 0 then ''true'' else ''false'') @ newline, m, None)
      | _ \<Rightarrow> None)"
 
 (* Read the bytes of a null-terminated string from memory (at most `fuel`
-   bytes), as integers. *)
-fun read_cstring :: "nat \<Rightarrow> MEncoding \<Rightarrow> MMem \<Rightarrow> MPtr \<Rightarrow> int list option" where
+   bytes), as characters. *)
+fun read_cstring :: "nat \<Rightarrow> MEncoding \<Rightarrow> MMem \<Rightarrow> MPtr \<Rightarrow> string option" where
   "read_cstring 0 enc m p = None"
 | "read_cstring (Suc n) enc m p =
     (case mem_load enc m CTy_U8 p of
        Some (MV_Int _ _ c) \<Rightarrow>
          if c = 0 then Some []
          else (case ptr_add m p 1 of
-                 Some p' \<Rightarrow> map_option ((#) c) (read_cstring n enc m p')
+                 Some p' \<Rightarrow> map_option ((#) (char_of (nat c))) (read_cstring n enc m p')
                | None \<Rightarrow> None)
      | _ \<Rightarrow> None)"
 
@@ -341,7 +355,7 @@ definition example_externs :: "MEncoding \<Rightarrow> (string, World MExtern) f
   "example_externs enc = fmap_of_list
      [ (''print_i32'', print_int_model),
        (''print_u64'', print_int_model),
-       (''print_bool'', print_int_model),
+       (''print_bool'', print_bool_model),
        (''print_string'', print_string_model enc),
        (''alloc_array'', alloc_array_model enc),
        (''free_array'', free_array_model enc) ]"
@@ -350,19 +364,20 @@ definition example_externs :: "MEncoding \<Rightarrow> (string, World MExtern) f
 section \<open>Running it\<close>
 
 (* The documented result: the program prints
-     35   area(Rect{5, 7})
-     27   area(Circle(3))
-     6    sum3([1, 2, 3])
-     42   v after incr
-     30   arr[0] after the swap
-     3    sizeof(arr)
-     0    sizeof(arr) after free
-     1    true
-     104 105   the bytes of "hi"
-     142  K + v
-   and returns 0. *)
+     35     area(Rect{5, 7})
+     27     area(Circle(3))
+     6      sum3([1, 2, 3])
+     42     v after incr
+     30     arr[0] after the swap
+     3      sizeof(arr)
+     0      sizeof(arr) after free
+     true   v > 30 && v == 42
+     hi     the string "hi" (no newline)
+     142    K + v
+   each number and boolean on its own line, and returns 0. *)
 definition example_expected :: World where
-  "example_expected = [35, 27, 6, 42, 30, 3, 0, 1, 104, 105, 142]"
+  "example_expected =
+    unlines [''35'', ''27'', ''6'', ''42'', ''30'', ''3'', ''0'', ''true''] @ ''hi'' @ unlines [''142'']"
 
 definition example_result :: "MErr + (World \<times> MMem \<times> MVal)" where
   "example_result = run_program 100000 le_encoding (example_externs le_encoding) example_prog []"
@@ -375,5 +390,113 @@ lemma example_run:
 
 (* The same, by value, for inspection: *)
 value "case example_result of Inr (w, m, v) \<Rightarrow> Some (w, v) | Inl _ \<Rightarrow> None"
+
+
+section \<open>Copying undefined bytes\<close>
+
+(* The example no longer copies a buffer with undefined bytes (gcc warns about
+   that under -O2 with glibc's fortified memmove, so the generator zeroes
+   variant buffers: DESIGN.md 3.3 and 11.4), but the semantics still allows
+   it: memmove reads undefined bytes as such, and only decoding them is UB
+   (DESIGN.md 2.1, risk 4). This program copies a 4-byte buffer of which only
+   the first byte was written, and reads that byte back from the copy. *)
+definition undef_copy_prog :: MProgram where
+  "undef_copy_prog = \<lparr>
+     MP_Globals = [],
+     MP_Funcs = [ \<lparr> MF_Name = ''main'', MF_Params = [], MF_Ret = Some CTy_I32,
+                   MF_Body = [
+                     MS_DeclBuf ''a'' (u64 4),
+                     MS_Store CTy_U8 (addr ''a'') (u8 7),
+                     MS_DeclBuf ''b'' (u64 4),
+                     MS_Copy (addr ''b'') (addr ''a'') (u64 4),
+                     MS_Return (Some (ME_Cast CTy_I32 (ld CTy_U8 (addr ''b'')))) ],
+                   MF_Extern = None \<rparr> ] \<rparr>"
+
+lemma undef_copy_run:
+  "case run_program 100 le_encoding fmempty undef_copy_prog ([] :: World) of
+     Inr (w, m, v) \<Rightarrow> v = MV_Int Signed IntBits_32 7
+   | Inl _ \<Rightarrow> False"
+  by eval
+
+
+section \<open>The same program against Array.c\<close>
+
+(* packages/coretypes/src/Array.c implements alloc_array with a bool result
+   (true if the allocation succeeded) and a precondition that the new size is
+   not zero, where Test.c's version returns nothing and always succeeds. The
+   example_array program is the example with that prototype: the result of
+   alloc_array goes to a fresh uint8_t `ok`, which is then printed (`true`).
+   check_example.sh links it against Array.c. *)
+definition alloc_array_bool_fun :: MFun where
+  "alloc_array_bool_fun = alloc_array_fun \<lparr> MF_Ret := Some CTy_U8 \<rparr>"
+
+definition main_fun_array :: MFun where
+  "main_fun_array = main_fun \<lparr> MF_Body :=
+     MS_DeclScalar ''ok'' CTy_U8
+     # concat (map (\<lambda>s. case s of
+                       MS_Call None f args \<Rightarrow>
+                         if f = ''alloc_array''
+                         then [MS_Call (Some ''ok'') f args, MS_Call None ''print_bool'' [var ''ok'']]
+                         else [s]
+                     | _ \<Rightarrow> [s])
+                  (MF_Body main_fun)) \<rparr>"
+
+definition example_prog_array :: MProgram where
+  "example_prog_array = \<lparr>
+     MP_Globals = MP_Globals example_prog,
+     MP_Funcs = map (\<lambda>f. if MF_Name f = ''alloc_array'' then alloc_array_bool_fun
+                        else if MF_Name f = ''main'' then main_fun_array
+                        else f)
+                    (MP_Funcs example_prog) \<rparr>"
+
+lemma example_prog_array_wf: "program_wf example_prog_array"
+  by eval
+
+lemma example_prog_array_well_typed: "program_well_typed example_prog_array"
+  by eval
+
+(* Array.c's alloc_array: as Test.c's, but n = 0 is outside the precondition
+   and the result is true (1). *)
+definition alloc_array_bool_model :: "MEncoding \<Rightarrow> World MExtern" where
+  "alloc_array_bool_model enc w m args =
+    (case args of
+       [_, _, MV_Int Unsigned IntBits_64 n] \<Rightarrow>
+         if n = 0 then None
+         else (case alloc_array_model enc w m args of
+                 Some (w', m', _) \<Rightarrow> Some (w', m', Some (MV_U8 1))
+               | None \<Rightarrow> None)
+     | _ \<Rightarrow> None)"
+
+definition example_array_externs :: "MEncoding \<Rightarrow> (string, World MExtern) fmap" where
+  "example_array_externs enc = fmupd ''alloc_array'' (alloc_array_bool_model enc) (example_externs enc)"
+
+definition example_array_expected :: World where
+  "example_array_expected =
+    unlines [''35'', ''27'', ''6'', ''42'', ''true'', ''30'', ''3'', ''0'', ''true''] @ ''hi'' @ unlines [''142'']"
+
+definition example_array_result :: "MErr + (World \<times> MMem \<times> MVal)" where
+  "example_array_result =
+     run_program 100000 le_encoding (example_array_externs le_encoding) example_prog_array []"
+
+lemma example_array_run:
+  "case example_array_result of
+     Inr (w, m, v) \<Rightarrow> w = example_array_expected \<and> v = MV_Int Signed IntBits_32 0
+   | Inl _ \<Rightarrow> False"
+  by eval
+
+
+section \<open>What the driver exports\<close>
+
+(* The example programs with their expected stdout, by name, for the driver
+   (Main.hs, option --minic) and the C-level check of DESIGN.md section 11.
+   The expected text is the documented one, which the lemmas example_run and
+   example_array_run above check against the interpreter. (The interpreter
+   itself is not exported: its equations match on Suc, which the binary
+   representation of nat used by the export does not support without extra
+   code equations.) *)
+definition minic_examples :: "(string \<times> MProgram \<times> string) list" where
+  "minic_examples =
+    [ (''example'', example_prog, example_expected),
+      (''example_array'', example_prog_array, example_array_expected) ]"
 
 end

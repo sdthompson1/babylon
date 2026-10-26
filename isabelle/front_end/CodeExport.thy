@@ -3,6 +3,8 @@ theory CodeExport
     ShowError
     "../ghost_erasure/EraseGhost"
     "../core_passes/MatchCompilePass"
+    "../minic/MiniCPrint"
+    "../minic/MiniCExample"
     "HOL-Library.Code_Binary_Nat"
 
     (* TODO: maybe explore other performance options, e.g. Code_Target_Numeral, or
@@ -65,7 +67,12 @@ fun run_compiler :: "(string \<times> string) list \<Rightarrow> CompileResult"
                       then CR_Errors [''internal error: match scrutinee is not a variable'']
                       else CR_Success))))"
 
-export_code run_compiler CR_Success CR_Errors
+(* Also exported: the MiniC-to-C printer (print_program) and the hand-written
+   MiniC example programs with the stdout the MiniC interpreter computes for
+   them (minic_examples), which the driver (Main.hs, option --minic) prints to
+   a .c file for the C-level check described in minic/DESIGN.md. There is no
+   code generator yet (stage 5), so these are the only MiniC programs. *)
+export_code run_compiler CR_Success CR_Errors print_program minic_examples
   in Haskell
 
 end

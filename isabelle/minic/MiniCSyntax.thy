@@ -1,5 +1,5 @@
 theory MiniCSyntax
-  imports "Babylon.IntRange"
+  imports "../util/IntRange"
 begin
 
 (* ========================================================================== *)

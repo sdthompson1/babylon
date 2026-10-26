@@ -9,6 +9,7 @@ session Babylon = "HOL-Library" +
     "graph"
     "interpreter"
     "util"
+    "minic"
     "front_end"
   theories
     (* Note: every theory is listed explicitly (not just the "leaves"), so that
@@ -160,19 +161,17 @@ session Babylon = "HOL-Library" +
     "util/NatToString"
     "util/Quantifier"
 
+    (* minic: the target language of the (future) verified code generator *)
+    "minic/MiniCSyntax"
+    "minic/MiniCMemory"
+    "minic/MiniCSemantics"
+    "minic/MiniCFuelMono"
+    "minic/MiniCTyping"
+    "minic/MiniCPrint"
+    "minic/MiniCExample"
+
     (* front_end *)
     "front_end/BabRenamer"
     "front_end/FrontEnd"
     "front_end/ShowError"
     "front_end/CodeExport"
-
-(* MiniC: the target language of the (future) verified code generator.
-   Kept in its own session during stage 3a so that iteration is fast; it moves
-   into the main session when the printer needs exporting (stage 3b). *)
-session Babylon_MiniC in "minic" = Babylon +
-  theories
-    "MiniCSyntax"
-    "MiniCMemory"
-    "MiniCSemantics"
-    "MiniCFuelMono"
-    "MiniCExample"

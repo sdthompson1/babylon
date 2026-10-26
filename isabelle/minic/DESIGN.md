@@ -1,13 +1,14 @@
-# MiniC: design of the verified code generator (stage 3a)
+# MiniC: design of the verified code generator (stages 3a and 3b)
 
 This document is the design for the verified code generator that will
 translate a linked, ghost-erased, match-compiled, normalized `CoreModule`
-into "MiniC", a small fragment of C, and for the MiniC semantics defined in
-this directory. It is the handover for the review that happens before stage
-3b. The design decisions it records (the static size bound of section 3.2,
-the encoding as a record in section 2.2, the global initialisation in
-section 3.7 and the extern name map in section 3.9) were reviewed and
-accepted on 2026-10-23.
+into "MiniC", a small fragment of C, and for the MiniC semantics, typing and
+printer defined in this directory. Stage 3a produced the design and the
+semantics; its decisions (the static size bound of section 3.2, the encoding
+as a record in section 2.2, the global initialisation in section 3.7 and the
+extern name map in section 3.9) were reviewed and accepted on 2026-10-23.
+Stage 3b added the typing judgement (section 1.2), the printer and the
+C-level validation of the example (section 11).
 
 The theories in this directory:
 
@@ -17,10 +18,17 @@ The theories in this directory:
 | `MiniCMemory.thy` | bytes, block/offset pointers, the abstract integer encoding and its laws, the little-endian instance, load/store/copy/alloc/free |
 | `MiniCSemantics.thy` | states, extern models, pure expression evaluation, the fuelled statement interpreter, `run_program` |
 | `MiniCFuelMono.thy` | fuel monotonicity |
-| `MiniCExample.thy` | the hand-written example program, its extern models, and its evaluation by `eval` |
+| `MiniCTyping.thy` | the typing judgement `program_well_typed`, and `expr_type_sound` |
+| `MiniCPrint.thy` | the (unverified) printer to C, `print_program` |
+| `MiniCExample.thy` | the hand-written example programs, their extern models, their evaluation and typing by `eval`, and the list `minic_examples` the driver exports |
 
-They form the session `Babylon_MiniC` (parent `Babylon`), built with
-`isabelle build -d. -v Babylon_MiniC` from `isabelle/`.
+They are part of the main `Babylon` session (`isabelle/ROOT`); the separate
+`Babylon_MiniC` session of stage 3a is gone. To iterate on one theory
+without rebuilding the session, use
+`isabelle process -d . -l Babylon -T minic/<Theory>` from `isabelle/`.
+`front_end/CodeExport.thy` exports `print_program` and `minic_examples` to
+Haskell, and the driver `isabelle/Main.hs` prints an example to a `.c` file
+(`Main --minic`, section 11).
 
 
 ## 1. The MiniC language
@@ -79,16 +87,45 @@ side effects (calls, `++`, assignment), `goto`, floating point, bit-fields,
 `static` locals, string literals (Core has none after elaboration: they are
 array literals or hoisted constants).
 
-### 1.2 Well-formedness
+### 1.2 Well-formedness and typing
 
 `program_wf` (in `MiniCSyntax.thy`) is the small amount of static
-well-formedness the interpreter and printer rely on: distinct function and
-global names, `main` exists as `int main(void)`, every call names a function
-of the program with the right number of arguments, `break` only inside a
-loop, integer literals in range. A full typing predicate is stage 3b work;
-the syntax carries the C type on every load, store, declaration, parameter,
-cast and literal, so a typing judgement over an environment of variable
-types will be a straightforward recursive function.
+well-formedness the interpreter relies on: distinct function and global
+names, `main` exists as `int main(void)`, every call names a function of the
+program with the right number of arguments, `break` only inside a loop,
+integer literals in range.
+
+`program_well_typed` (in `MiniCTyping.thy`) is the typing judgement, an
+executable function. Its purpose is theorem 1 of section 8: a well-typed
+program is one a C compiler accepts, so it checks what a C compiler checks
+and the interpreter does not:
+
+- every variable is declared before use; no name is declared twice in one
+  scope (the parameters count as declared in the outermost scope of the
+  body); no variable (global, parameter or local) has the name of a
+  function, MiniC name or extern C name alike, since C has one namespace
+  for both and the interpreter keeps them apart;
+- `expr_type env e` gives the C type of an expression or `None`: the
+  operands of a binop are integers of one type (except the count of a
+  shift, which may have any integer type), comparisons and `!` yield
+  `uint8_t`, loads and `ME_PtrAdd` need a pointer operand, casts are
+  integer-to-integer or pointer-to-pointer, literals fit their type;
+- assignments, stores, arguments, call results and returns are
+  *compatible* with the declared type: identical, or both pointer types
+  (`char *` and `void *` convert implicitly in C, and the semantics does not
+  distinguish them: `val_has_ty (MV_Ptr p) ty = is_ptr_ty ty`);
+- `return;` only in a void function, `return e;` only in a non-void one;
+  the result of a call is assigned only if the function is non-void.
+
+It does not check that a non-void body ends in a `return` (C does not
+require it; falling off the end and using the result is UB in both), nor
+`break` placement (`program_wf`). The lemma `expr_type_sound` shows that a
+well-typed expression evaluates, when it evaluates, to a value of its type
+(`val_has_ty`), given `valid_encoding` and an environment that describes the
+state (`env_matches`). Statement-level soundness is not needed yet.
+
+The printer uses `expr_type` too, to know the type of every arithmetic
+result (section 11.2).
 
 
 ## 2. The memory model
@@ -125,7 +162,10 @@ variant with uninitialised payload bytes is fine and the copy is just as
 The encoding is a record parameter `MEncoding` (pointer size, `encode`,
 `decode`) with the validity predicate `valid_encoding`:
 
-- the pointer size is positive;
+- the pointer size is positive and below `2^64` (added in stage 3b:
+  `ME_PtrSize` evaluates to a `uint64_t` value unconditionally, so this is
+  what makes that value well-formed; it is a consequence of A6, sizes fit
+  `uint64_t`);
 - an in-range integer of type `(s, b)` encodes to exactly `byte_width b`
   bytes, each < 256, and decodes back to itself (so encoding is injective,
   `valid_encoding_injective`);
@@ -367,7 +407,7 @@ its value; for an aggregate-typed term the result is a place.
 | `Binop And/Or/Implies t1 t2` | `MS_DeclScalar tmp u8; tmp = ⟦t1⟧` (for `Implies`: `!⟦t1⟧`); `MS_If tmp [⟦t2⟧; tmp = e2] []` for `And`, `MS_If tmp [] [⟦t2⟧; tmp = e2]` for `Or`/`Implies`; result `ME_Var tmp`. The right operand's statements run only when needed, which is Core's short-circuit semantics |
 | `Let x t1 t2` | `⟦t1⟧`; bind `x`: scalar: `MS_DeclScalar x ty; x = e1`; aggregate: `MS_DeclScalar x CharPtr; x = e1` (an alias of the place, no copy; see section 3.5); then `⟦t2⟧` |
 | `FunctionCall f tys args` (pure) | section 3.4 |
-| `VariantCtor C tys t` (type `D<..>`) | `MS_DeclBuf tmp |D<..>|`; `MS_Store tagty tmp (index of C)`; `⟦t⟧` copied/stored at `tmp + tagsize`; result `ME_AddrOf tmp`. The remaining bytes stay undefined, as in `codegen_variant` |
+| `VariantCtor C tys t` (type `D<..>`) | `MS_DeclBuf tmp |D<..>|`; `MS_Zero tmp |D<..>|`; `MS_Store tagty tmp (index of C)`; `⟦t⟧` copied/stored at `tmp + tagsize`; result `ME_AddrOf tmp`. `codegen_variant` leaves the bytes after the payload undefined; the `MS_Zero` is a stage 3b change (section 11.4): gcc's `-Wuninitialized` reports the later `memmove` of such a buffer under `-O2` with glibc's fortified `memmove`, so every variant value is fully defined instead, at the cost of one `memset` per construction |
 | `Record [(f1, t1) ..]` | `MS_DeclBuf tmp |rec|`; each field copied/stored at its offset |
 | `RecordProj t f` | place `⟦t⟧ + offset(f)`; if the field is scalar, `ME_Load ty` of it |
 | `VariantProj t C` | place `⟦t⟧ + tagsize`; load if scalar. Core raises `RuntimeError` if the constructor differs, so no check |
@@ -698,14 +738,15 @@ below. Reasons:
   satisfies A2 anyway. If C23 is adopted later, nothing in MiniC changes;
   only A2 is deleted from this list.
 
-Stage 3b compiles the example with `gcc -std=c99 -Wall` (and should also try
-`-std=c11`/`-std=c17`, which accept the same code when VLAs are supported).
+`check_example.sh` (section 11) compiles the examples with
+`gcc -std=c99 -Wall -Wextra -pedantic -Werror`, and with `-std=c11` and
+`-std=c17`, which accept the same code when VLAs are supported.
 
 ### 5.2 Assumptions about the C implementation
 
 All of them are checkable at compile time or are properties of every
-mainstream target; the printer should emit `#if`/`#error` guards for A1, A2
-and A5 at the top of the generated file.
+mainstream target; the printer emits `#if`/`#error` guards for A1, A2 and
+A5 at the top of the generated file (section 11.2).
 
 - **A1. `CHAR_BIT` is 8**, so `sizeof(intN_t) = N/8` and the byte counts of
   section 2.3 are exact. (Follows from the existence of `uint8_t`, which
@@ -779,14 +820,14 @@ that fits the operand type; otherwise `RuntimeError`. MiniC's `CB_Shl` and
 `CB_Shr` have exactly that semantics (the count may be an integer of any
 width; the result has the left operand's type). The printer lowers them to
 the idiom of `shift_binop` in `codegen.c`, as helper functions emitted once
-per width at the top of the file, for example
+per type at the top of the file (`print_helpers_for` in `MiniCPrint.thy`):
 
-    static int32_t bab_shl_i32(int32_t x, uint64_t n) {
-        uint32_t u = ((uint32_t) x + 0u) << n;   /* unsigned, so defined; +0u defeats promotion to int */
-        int32_t r; memcpy(&r, &u, 4); return r;  /* bytes back, no signed conversion */
+    static inline int32_t bab_shl_i32(int32_t x, uint64_t n) {
+        uint32_t u = (((uint32_t) x) + 0u) << n;        /* unsigned, so defined; +0u defeats promotion to int */
+        int32_t r; memcpy(&r, &u, sizeof r); return r;  /* bytes back, no signed conversion */
     }
-    static uint16_t bab_shl_u16(uint16_t x, uint64_t n) { return (x + 0u) << n; }
-    static int64_t  bab_shr_i64(int64_t x, uint64_t n) { return x >> n; }   /* A5 */
+    static inline uint16_t bab_shl_u16(uint16_t x, uint64_t n) { return (uint16_t) ((x + 0u) << n); }
+    static inline int64_t  bab_shr_i64(int64_t x, uint64_t n) { return (int64_t) (x >> n); }   /* A5 */
 
 Why this is right under the MiniC precondition: for a signed left shift
 whose mathematical result `r = x · 2^n` fits the type, the unsigned
@@ -880,31 +921,36 @@ write it (names unmangled, sizes as expressions):
   byte of each element (it uses only the size, as generic code must);
 - a function with a `ref` parameter, `incr(ref r: i32)`, adding 1 through
   the pointer;
-- the externs `print_i32`, `print_u64` and `print_bool` of `Test.c`, whose
-  models append to the world (a list of printed integers).
+- the externs `print_i32`, `print_u64`, `print_bool` and `print_string` of
+  `Test.c`, whose models append to the world what the C functions print
+  (section 11.4).
 
 What it computes and the documented result: `main` prints, in this order,
 
 | printed | from |
 | --- | --- |
-| 35 | `area(Rect{5, 7})` |
-| 27 | `area(Circle(3))` (3·r·r), through a copy of the variant whose unused payload bytes are undefined |
-| 6 | `sum3([1, 2, 3])` |
-| 42 | `v` after `incr(ref v)` |
-| 30 | `arr[0]` after `alloc_array(arr, 3)`, filling with 10, 20, 30 and `swap_elems<i32>(arr, 0, 2)` |
-| 3 | `sizeof(arr)` |
-| 0 | `sizeof(arr)` after `free_array(arr)` |
-| 1 | `print_bool(v > 30 && v == 42)` with short-circuit evaluation |
-| 104, 105 | `print_string(greeting)`, the bytes of the global constant `"hi"`, read through its descriptor |
-| 142 | `K + v`, with the global constant `K = 100` |
+| `35` | `area(Rect{5, 7})` |
+| `27` | `area(Circle(3))` (3·r·r), through a copy of the variant whose unused payload bytes are undefined |
+| `6` | `sum3([1, 2, 3])` |
+| `42` | `v` after `incr(ref v)` |
+| `30` | `arr[0]` after `alloc_array(arr, 3)`, filling with 10, 20, 30 and `swap_elems<i32>(arr, 0, 2)` |
+| `3` | `sizeof(arr)` |
+| `0` | `sizeof(arr)` after `free_array(arr)` |
+| `true` | `print_bool(v > 30 && v == 42)` with short-circuit evaluation |
+| `hi` | `print_string(greeting)`, the bytes of the global constant `"hi"`, read through its descriptor (no newline) |
+| `142` | `K + v`, with the global constant `K = 100` |
 
-and returns 0. In the interpreter the world is the list of printed
-integers, so the lemma `example_run` in `MiniCExample.thy` checks by `eval`
-that `run_program` with `le_encoding` returns `Inr ([35, 27, 6, 42, 30, 3, 0,
-1, 104, 105, 142], _, MV_Int Signed IntBits_32 0)`. `example_prog_wf` checks
-`program_wf` the same way. Stage 3b prints the program to C and compares the
-output of the compiled program, linked with `Test.c`, with this list (one
-number per line, `true` for the boolean, `hi` for the string).
+each on its own line except `hi`, and returns 0. The world of the extern
+models is the text printed so far, so the lemma `example_run` in
+`MiniCExample.thy` checks by `eval` that `run_program` with `le_encoding`
+returns `Inr (example_expected, _, MV_Int Signed IntBits_32 0)` where
+`example_expected` is exactly that text. `example_prog_wf` checks
+`program_wf` and `example_prog_well_typed` checks `program_well_typed` the
+same way. A second program, `example_prog_array`, is the same program with
+the `bool`-returning `alloc_array` of `packages/coretypes/src/Array.c`
+(its result is stored in a `uint8_t` and printed, adding a `true` line after
+`42`), with its own `eval` lemmas. Section 11 describes how both are
+printed, compiled and run.
 
 
 ## 8. The two target theorems
@@ -986,6 +1032,11 @@ result. Non-termination, `TypeError`, `RuntimeError` and
 4. **Undefined payload bytes of variants.** A model that made every read of
    an undefined byte UB would break at the first variant copy. Mitigation:
    `MB_Undef` is copyable; only decoding is UB; the relation's `junk`.
+   Since stage 3b the generated code zeroes variant buffers (section 3.3),
+   so generated programs never copy undefined bytes and `junk` is in fact
+   zero; the relation keeps `junk` arbitrary because that is simpler and
+   still sound, and `undef_copy_prog` in `MiniCExample.thy` keeps the
+   semantics' tolerance of undefined bytes exercised.
 5. **Lazy references** (section 3.5). The generator's environment, not
    MiniC, carries them; the proof must relate a Core `(addr, path)` to a
    recomputed address. Mitigation: freeze indices as Core does; the path
@@ -1018,17 +1069,21 @@ result. Non-termination, `TypeError`, `RuntimeError` and
     datatypes too (to be confirmed in stage 4); either way the pipeline
     runs the checks, so no elaborator proof is needed.
 11. **The printer** is unverified; precedence, integer literal syntax
-    (`INT64_MIN`), the shift helpers, the mangling and the aliasing
-    obligation P1 of section 5.2 are all places for silent errors. Printing
-    `ME_Load`/`MS_Store` as typed dereferences instead of `memcpy` would
-    make nearly every generated function violate C99 6.5p7 (every field
-    read comes out of a `char` buffer), which gcc at `-O2` does exploit,
-    while leaving the Isabelle side unchanged. Mitigation: the MiniC AST is
-    small and fully parenthesisable, every literal carries its type, P1 is
-    a stated rule rather than a convention, and stage 3b compares gcc's
-    output (with `-O2` as well as `-O0`) with the interpreter's on the
-    example; from stage 5 on the 58 codegen tests are an independent
-    oracle.
+    (`INT64_MIN`), integer promotion, the shift helpers, the mangling and
+    the aliasing obligation P1 of section 5.2 are all places for silent
+    errors. Printing `ME_Load`/`MS_Store` as typed dereferences instead of
+    `memcpy` would make nearly every generated function violate C99 6.5p7
+    (every field read comes out of a `char` buffer), which gcc at `-O2`
+    does exploit, while leaving the Isabelle side unchanged. Mitigation
+    (section 11.2): the MiniC AST is small and the printer parenthesises
+    everything, casts every arithmetic result to its MiniC type, prints
+    every literal with its type's macro, and implements P1 by helper
+    functions, so each rule is one line of `MiniCPrint.thy`; the examples
+    are compiled with `-Wall -Wextra -pedantic -Werror` at `-O0` and `-O2`
+    under three standards and compared with the interpreter byte for byte
+    (section 11.4); from stage 5 on the codegen tests in
+    `test/cases/codegen` are an independent oracle. Known gaps are listed
+    in section 11.2 (reserved identifiers) and 11.3.
 12. **Zero-sized aggregates** (`{}`, `T[0]`). C forbids zero-length arrays.
     Mitigation: every buffer declaration uses `max 1 |ty|`; copies of 0
     bytes are fine; the unit type is `void` in signatures.
@@ -1052,3 +1107,170 @@ result. Non-termination, `TypeError`, `RuntimeError` and
   elaboration) on the module before code generation. The size bound is a
   property of the program's instantiations, not of elaboration, so it has
   to be checked; it cannot fail on realistic programs.
+- If stage 5 wants to run generated MiniC programs in the Haskell driver
+  (as an oracle next to the C output), the interpreter needs code equations
+  without `Suc` on the left-hand side: `CodeExport.thy` uses
+  `Code_Binary_Nat`, whose `Suc`-elimination preprocessor handles one `Suc`
+  equation per `f 0` equation, and `exec_stmt` and friends match on the
+  fuel *and* on the statement. One `[code]` lemma per equation of the form
+  `exec_stmt fuel ctx st s = (if fuel = 0 then Inl MErr_Fuel else ...)`,
+  proved by `cases fuel`, would do it; nothing in stage 3b needs it, so the
+  driver exports the documented expected output instead (section 11.4).
+
+
+## 11. The printer and the C-level validation (stage 3b)
+
+### 11.1 Building, printing, compiling, running
+
+From `isabelle/`, the full build with export (it checks every theory,
+including the `eval` of the examples, and writes the Haskell code):
+
+    isabelle export -d. -x 'Babylon.CodeExport:code/**' Babylon
+    cd export/Babylon.CodeExport/code/export1 && cp ../../../../Main.hs . && ghc -O Main.hs
+
+Then, from the root of the repository:
+
+    ./isabelle/minic/check_example.sh            # all examples
+    ./isabelle/minic/check_example.sh example    # one of them
+
+The script runs, for each example `NAME` in `minic_examples`
+(`MiniCExample.thy`):
+
+    isabelle/export/Babylon.CodeExport/code/export1/Main --minic NAME NAME.c NAME.expected
+
+which writes the printed C to `NAME.c` and the stdout that the MiniC
+interpreter computes for the program (the world of the extern models,
+section 11.4) to `NAME.expected`; compiles `NAME.c` with
+`gcc -std=c99 -Wall -Wextra -pedantic -Werror`, and again with `-std=c11`
+and `-std=c17`, each at `-O0` and `-O2`; links it; runs it; and compares
+the output and the exit status (0) with the interpreter's. The files are
+left in `$TMPDIR/minic-check` (default `/tmp/minic-check`) for inspection.
+Nothing in `test/isabelle_test.sh` exercises MiniC; this script is the
+MiniC check.
+
+Linking: `example` is linked against `test/test-support-0.1/src/Test.c`
+(the `print_*` functions and the always-succeeding `void alloc_array`,
+`void free_array` that `test/test-support-0.1/src/Test.b` declares);
+`example_array` is the same program calling `packages/coretypes/src/Array.c`'s
+`bool alloc_array` instead, linked against `Array.c` plus `Test.c` compiled
+with `-Dalloc_array=test_alloc_array -Dfree_array=test_free_array`, because
+the two files define the same two symbols with different prototypes and
+cannot be linked together as they are. (A real program imports either
+`Test` or `Array`, never both.)
+
+### 11.2 What the printer emits
+
+`print_program` (`MiniCPrint.thy`) is a plain traversal of the syntax. The
+generated file is, in order: a comment; `#include <limits.h>`, `<stdint.h>`,
+`<string.h>`; `#error` guards for A1 (`CHAR_BIT != 8`), A2
+(`(-1 & 3) != 3`, which holds only in two's complement) and A5
+(`(-1 >> 1) != -1`); the helper functions; the globals; one prototype per
+function (so that definition order is irrelevant); the function
+definitions. Conventions:
+
+- **Types.** `CTy_Int s b` is `int8_t` ... `uint64_t`; `CTy_CharPtr` is
+  `char *`; `CTy_VoidPtr` is `void *`. A void function is `void`; `main` is
+  printed as `int main(void)` whatever its `MF_Ret` (`-Wmain` would
+  complain about `int32_t main`); a function without parameters is `f(void)`.
+- **Expressions are fully parenthesised**, so precedence never matters.
+- **Every arithmetic result is cast back to its MiniC type**:
+  `((int32_t) ((a) + (b)))`, `((uint8_t) (~(x)))`, `((uint8_t) ((a) < (b)))`,
+  `((uint8_t) (!(e)))`. The cast undoes C's integer promotions; without it
+  `~x` on a `uint8_t` is a negative `int`, and `x == 255` would then be
+  false. For a value that fits the type the cast is exact, so under the
+  MiniC precondition (the result fits) C computes the same value. The
+  printer gets the type from `expr_type`, for which it threads the typing
+  environment through the statements exactly as `stmts_ok` does; if an
+  expression is ill-typed the cast is simply omitted.
+- **P1 (no typed access through a pointer):** `ME_Load ty p` is
+  `bab_load_<ty>(p)` and `MS_Store ty p e` is `bab_store_<ty>(p, e)`, where
+  the helpers are `static inline` functions doing a `memcpy` of `sizeof v`
+  bytes into or out of a local `v` of type `ty` (`<ty>` is `i8` ... `u64`,
+  `cp` for `char *`, `vp` for `void *`). `MS_Copy` is `memmove`, `MS_Zero`
+  is `memset(p, 0, n)`. `ME_AddrOf x` is `((char *) &x)` for a scalar and
+  `x` for a buffer (which decays to `char *`); `ME_PtrAdd p i` is
+  `(((char *) (p)) + (i))`, the cast making it valid for a `void *` operand
+  too. `ME_PtrSize` is `((uint64_t) sizeof(void *))`. All helpers are
+  emitted in every file; `static inline` keeps the unused ones from
+  triggering `-Wunused-function`.
+- **Shifts** are the helpers `bab_shl_<ty>`/`bab_shr_<ty>` of section 5.3
+  (the idiom of `shift_binop` in `codegen.c`), taking the count as a
+  `uint64_t`. **`CB_Max`** is the helper `bab_max_<ty>`, except at file
+  scope, in the size of a global buffer, where no call is allowed in a
+  constant expression and it is printed as `((a) > (b) ? (a) : (b))`.
+- **Literals** use the `INTn_C`/`UINTn_C` macros of `<stdint.h>`:
+  `INT32_C(5)`, `(-INT32_C(5))`, and `((-INT64_C(9223372036854775807)) - 1)`
+  for the most negative value of a signed type, whose magnitude does not
+  fit the type (the same three cases as `codegen_int_literal` in
+  `codegen.c`).
+- **Statements.** `T x;` and `char x[n];` (a VLA when `n` is not constant)
+  for declarations; `x = e;`; `if (c) { ... } else { ... }` (no `else` when
+  the else branch is empty); `while (1) { ... }`; `break;`; `{ ... }`;
+  `f(args);` or `x = f(args);`; `return;` or `return e;`. Every `if` branch,
+  loop body and block is a compound statement, i.e. a C scope, matching
+  `exec_scope`.
+- **Globals** are file-scope variables with no initialiser (`int32_t K;`,
+  `char greeting[((uint64_t) sizeof(void *)) + 8];`), so static storage
+  zero-fills them, as `alloc_globals` does; the generated `main` stores the
+  initial values (section 3.7). Globals and functions are not `static`
+  (an unused `static` object would warn under `-Wall`).
+- **Names** are mangled as `mangle_name` in `codegen.c` and
+  `docs/c-interface.md` ("Calling Babylon Functions from C"): `.` to `z_`,
+  `/` to `zs`, `@` to `za`, `^` to `zh`, `-` to `zm`, `z` to `zz`, a leading
+  `_` to `zu`; and, beyond `codegen.c` (which rejects any other character),
+  any other character to `zx` followed by two hex digits, so that names such
+  as the generator's temporaries can contain `$`. A name that comes out equal
+  to a C keyword (C99, C11 and C23), one of `memcpy`, `memmove`, `memset`,
+  `size_t`, `NULL`, `CHAR_BIT`, the `<stdint.h>` type and `INTn_C` macro
+  names, or one of the helper names gets a `z` appended (as `codegen.c` does
+  for its own list). Extern functions are printed under their C name
+  (`MF_Extern = Some cname`), unmangled, both in the prototype and at each
+  call; the prototype has the form of `docs/c-interface.md` because the
+  parameter list of an extern `MFun` already does (section 3.9).
+- **Reserved identifiers.** Mangled names never start with `_`, so they do
+  not collide with the identifiers C reserves. Two residual risks, shared
+  with `codegen.c`: a mangled name can collide with a macro of an included
+  header (`INT32_MAX`, ...) or with a C library function (`free`, `abort`)
+  if the MiniC name is unqualified, which only the hand-written examples
+  have (generated functions and globals are qualified `Mod.name`; locals
+  are not, and a local named `abort` would shadow the library function
+  harmlessly unless the same function also calls an extern of that C
+  name); and the `z` suffix makes mangling non-injective in the one case
+  of a name that is itself a reserved name plus `z` (`intz`). The typing
+  judgement rules out MiniC-level collisions between variables and
+  functions, and the collisions above are not MiniC-level, so they are
+  outside the theorems; stage 5 should keep temporaries' names
+  unmangleable into anything reserved (a `$` in every temporary does it).
+
+### 11.3 What the printer relies on
+
+- The prototype mismatches that `Test.c` has always had with the
+  `docs/c-interface.md` prototypes and that `codegen.c`'s output relies on:
+  `print_bool` is declared `void print_bool(uint8_t)` in the generated file
+  and defined `void print_bool(bool)` in `Test.c`, and `print_string` is
+  declared with `char *` and defined with `void *`. These are compatible on
+  every mainstream ABI (both are passed the same way), which is a property
+  of `Test.c` rather than of the printer; `Array.c` uses `char *` and
+  `uint64_t` exactly as prescribed. A C name of an extern is just a string
+  and the printer has no way to check it against anything.
+- `-pedantic` is clean: the printed code uses no extension (the only
+  construct that would be one, `void *` arithmetic, is avoided by the cast
+  in `ME_PtrAdd`).
+- `-Wreturn-type` (in `-Wall`) warns about a non-void function whose body
+  can fall off the end. The generator (section 3.6) need not end every body
+  with a `return`, because Core raises `RuntimeError` there; such a program
+  would print with a warning. The example's functions all end in `return`.
+
+### 11.4 The validation and what it found
+
+The extern models of `MiniCExample.thy` have the *text printed so far* as
+their world (it was a list of integers in stage 3a): `print_i32`/`print_u64`
+append the decimal number and a newline, `print_bool` appends `true` or
+`false` and a newline, `print_string` appends the bytes of the string up to
+its null terminator (no newline), exactly as `Test.c` writes them. So the
+interpreter's final world *is* the expected stdout, `example_expected`, and
+the driver writes it to `NAME.expected` for a byte-for-byte comparison.
+The `eval` lemma `example_run` checks the interpreter against it, and
+`example_prog_well_typed` checks the typing judgement, both by `eval`.
+
+Outcome: VALIDATION-RESULT-PLACEHOLDER
