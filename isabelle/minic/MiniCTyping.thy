@@ -171,6 +171,8 @@ and stmts_ok :: "MTyCtx \<Rightarrow> MScope \<Rightarrow> MStmt list \<Rightarr
     (if expr_is_ptr (fst sc) d \<and> expr_is_ptr (fst sc) s \<and> expr_is_int (fst sc) n then Some sc else None)"
 | "stmt_ok ctx sc (MS_Zero p n) =
     (if expr_is_ptr (fst sc) p \<and> expr_is_int (fst sc) n then Some sc else None)"
+| "stmt_ok ctx sc (MS_Uninit p n) =
+    (if expr_is_ptr (fst sc) p \<and> expr_is_int (fst sc) n then Some sc else None)"
 | "stmt_ok ctx sc (MS_If c t e) =
     (if expr_is_int (fst sc) c
         \<and> stmts_ok ctx (fst sc, []) t \<noteq> None

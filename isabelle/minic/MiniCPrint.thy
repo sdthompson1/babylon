@@ -20,6 +20,10 @@ begin
     - Loads and stores through pointers are memcpy helpers (one per C type:
       bab_load_i32, bab_store_cp, ...), never typed dereferences (obligation
       P1 of DESIGN.md). Copies and zeroing are memmove and memset.
+    - MS_Uninit is printed according to the printer options (PrintOpts): as
+      memset(p, 0, n) (the default, which keeps gcc's -Wuninitialized quiet
+      when the buffer is later copied) or as nothing at all (no run-time
+      cost). Either is a sound realisation of "these bytes are undefined".
     - Shifts are helpers implementing the idiom of codegen.c's shift_binop
       (unsigned arithmetic, `+ 0u` against promotion, memcpy back for signed
       left shifts). max is a helper, except at file scope (the size of a global
@@ -221,6 +225,24 @@ fun print_expr :: "bool \<Rightarrow> MTyEnv \<Rightarrow> MExpr \<Rightarrow> s
     ''(((char *) ('' @ print_expr cexpr env e1 @ '')) + ('' @ print_expr cexpr env e2 @ ''))''"
 
 
+section \<open>Printer options\<close>
+
+(* How MS_Uninit (MiniCSyntax.thy) is printed. UP_Memset prints it as
+   memset(p, 0, n): the region becomes defined (zero is one of the values the
+   semantics allows for undefined bytes), so a later memmove of a variant
+   buffer whose bytes after the payload were never written does not trigger
+   gcc's -Wuninitialized (DESIGN.md 11.4). UP_Omit prints nothing: the bytes
+   are left as the C implementation leaves them, which is also what the
+   semantics says, and no memset is executed. *)
+datatype UninitPrint = UP_Memset | UP_Omit
+
+record PrintOpts =
+  PO_Uninit :: UninitPrint
+
+definition default_print_opts :: PrintOpts where
+  "default_print_opts = \<lparr> PO_Uninit = UP_Memset \<rparr>"
+
+
 section \<open>Statements\<close>
 
 (* The name a call to f is printed with: the C name of an extern, otherwise
@@ -233,45 +255,49 @@ definition print_fun_name :: "MProgram \<Rightarrow> string \<Rightarrow> string
 
 (* Statements are printed as indented lines; the environment is extended by
    declarations, as in stmts_ok. *)
-fun print_stmt :: "MProgram \<Rightarrow> nat \<Rightarrow> MTyEnv \<Rightarrow> MStmt \<Rightarrow> string list \<times> MTyEnv"
-and print_stmts :: "MProgram \<Rightarrow> nat \<Rightarrow> MTyEnv \<Rightarrow> MStmt list \<Rightarrow> string list" where
-  "print_stmt prog n env (MS_DeclScalar x ty) =
+fun print_stmt :: "PrintOpts \<Rightarrow> MProgram \<Rightarrow> nat \<Rightarrow> MTyEnv \<Rightarrow> MStmt \<Rightarrow> string list \<times> MTyEnv"
+and print_stmts :: "PrintOpts \<Rightarrow> MProgram \<Rightarrow> nat \<Rightarrow> MTyEnv \<Rightarrow> MStmt list \<Rightarrow> string list" where
+  "print_stmt opts prog n env (MS_DeclScalar x ty) =
     ([indent n (cty_name ty @ '' '' @ mangle x @ '';'')], fmupd x (VT_Scalar ty) env)"
-| "print_stmt prog n env (MS_DeclBuf x e) =
+| "print_stmt opts prog n env (MS_DeclBuf x e) =
     ([indent n (''char '' @ mangle x @ ''['' @ print_expr False env e @ ''];'')], fmupd x VT_Buf env)"
-| "print_stmt prog n env (MS_Assign x e) =
+| "print_stmt opts prog n env (MS_Assign x e) =
     ([indent n (mangle x @ '' = '' @ print_expr False env e @ '';'')], env)"
-| "print_stmt prog n env (MS_Store ty p e) =
+| "print_stmt opts prog n env (MS_Store ty p e) =
     ([indent n (helper_name ''store'' ty @ ''('' @ print_expr False env p @ '', ''
                 @ print_expr False env e @ '');'')], env)"
-| "print_stmt prog n env (MS_Copy d s sz) =
+| "print_stmt opts prog n env (MS_Copy d s sz) =
     ([indent n (''memmove('' @ print_expr False env d @ '', '' @ print_expr False env s @ '', ''
                 @ print_expr False env sz @ '');'')], env)"
-| "print_stmt prog n env (MS_Zero p sz) =
+| "print_stmt opts prog n env (MS_Zero p sz) =
     ([indent n (''memset('' @ print_expr False env p @ '', 0, '' @ print_expr False env sz @ '');'')], env)"
-| "print_stmt prog n env (MS_If c t e) =
+| "print_stmt opts prog n env (MS_Uninit p sz) =
+    ((case PO_Uninit opts of
+        UP_Memset \<Rightarrow> [indent n (''memset('' @ print_expr False env p @ '', 0, '' @ print_expr False env sz @ '');'')]
+      | UP_Omit \<Rightarrow> []), env)"
+| "print_stmt opts prog n env (MS_If c t e) =
     ([indent n (''if ('' @ print_expr False env c @ '') {'')]
-     @ print_stmts prog (Suc n) env t
+     @ print_stmts opts prog (Suc n) env t
      @ (if e = [] then [indent n ''}'']
-        else [indent n ''} else {''] @ print_stmts prog (Suc n) env e @ [indent n ''}'']),
+        else [indent n ''} else {''] @ print_stmts opts prog (Suc n) env e @ [indent n ''}'']),
      env)"
-| "print_stmt prog n env (MS_Loop body) =
-    ([indent n ''while (1) {''] @ print_stmts prog (Suc n) env body @ [indent n ''}''], env)"
-| "print_stmt prog n env MS_Break = ([indent n ''break;''], env)"
-| "print_stmt prog n env (MS_Block body) =
-    ([indent n ''{''] @ print_stmts prog (Suc n) env body @ [indent n ''}''], env)"
-| "print_stmt prog n env (MS_Call xopt f args) =
+| "print_stmt opts prog n env (MS_Loop body) =
+    ([indent n ''while (1) {''] @ print_stmts opts prog (Suc n) env body @ [indent n ''}''], env)"
+| "print_stmt opts prog n env MS_Break = ([indent n ''break;''], env)"
+| "print_stmt opts prog n env (MS_Block body) =
+    ([indent n ''{''] @ print_stmts opts prog (Suc n) env body @ [indent n ''}''], env)"
+| "print_stmt opts prog n env (MS_Call xopt f args) =
     ([indent n ((case xopt of None \<Rightarrow> '''' | Some x \<Rightarrow> mangle x @ '' = '')
                 @ print_fun_name prog f @ ''('' @ intercalate '', '' (map (print_expr False env) args) @ '');'')],
      env)"
-| "print_stmt prog n env (MS_Return None) = ([indent n ''return;''], env)"
-| "print_stmt prog n env (MS_Return (Some e)) =
+| "print_stmt opts prog n env (MS_Return None) = ([indent n ''return;''], env)"
+| "print_stmt opts prog n env (MS_Return (Some e)) =
     ([indent n (''return '' @ print_expr False env e @ '';'')], env)"
 
-| "print_stmts prog n env [] = []"
-| "print_stmts prog n env (s # ss) =
-    (let (ls, env') = print_stmt prog n env s
-     in ls @ print_stmts prog n env' ss)"
+| "print_stmts opts prog n env [] = []"
+| "print_stmts opts prog n env (s # ss) =
+    (let (ls, env') = print_stmt opts prog n env s
+     in ls @ print_stmts opts prog n env' ss)"
 
 
 section \<open>Functions, globals, the file\<close>
@@ -291,12 +317,12 @@ definition print_fun_proto :: "MFun \<Rightarrow> string list" where
   "print_fun_proto f = [print_fun_header f @ '';'']"
 
 (* The body of a non-extern function, with the parameters in scope. *)
-definition print_fun_def :: "MProgram \<Rightarrow> MFun \<Rightarrow> string list" where
-  "print_fun_def prog f =
+definition print_fun_def :: "PrintOpts \<Rightarrow> MProgram \<Rightarrow> MFun \<Rightarrow> string list" where
+  "print_fun_def opts prog f =
     (if MF_Extern f \<noteq> None then []
      else
        (let env = foldl (\<lambda>env (x, ty). fmupd x (VT_Scalar ty) env) (globals_env prog) (MF_Params f)
-        in [print_fun_header f @ '' {''] @ print_stmts prog 1 env (MF_Body f) @ [''}'', ''''] ))"
+        in [print_fun_header f @ '' {''] @ print_stmts opts prog 1 env (MF_Body f) @ [''}'', ''''] ))"
 
 definition print_global :: "string \<times> MGlobal \<Rightarrow> string" where
   "print_global xg =
@@ -353,14 +379,14 @@ definition print_prelude :: "string list" where
     @ concat (map print_helpers_for all_ctys)
     @ ['''']"
 
-definition print_program :: "MProgram \<Rightarrow> string" where
-  "print_program prog =
+definition print_program :: "PrintOpts \<Rightarrow> MProgram \<Rightarrow> string" where
+  "print_program opts prog =
     unlines
       (print_prelude
        @ map print_global (MP_Globals prog)
        @ ['''']
        @ concat (map print_fun_proto (MP_Funcs prog))
        @ ['''']
-       @ concat (map (print_fun_def prog) (MP_Funcs prog)))"
+       @ concat (map (print_fun_def opts prog) (MP_Funcs prog)))"
 
 end

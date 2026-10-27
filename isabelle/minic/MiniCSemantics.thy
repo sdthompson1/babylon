@@ -385,6 +385,19 @@ where
           | None \<Rightarrow> Inl MErr_UB)
      | None \<Rightarrow> Inl MErr_UB)"
 
+  (* The bytes become undefined; the region must be in a live block, as for
+     memset. *)
+| "exec_stmt (Suc fuel) ctx st (MS_Uninit pe ne) =
+    (case eval_ptr (MC_Enc ctx) st pe of
+       Some p \<Rightarrow>
+         (case eval_size (MC_Enc ctx) st ne of
+            Some n \<Rightarrow>
+              (case mem_write (MS_Mem st) p (replicate n MB_Undef) of
+                 Some m' \<Rightarrow> Inr (st \<lparr> MS_Mem := m' \<rparr>, MO_Normal)
+               | None \<Rightarrow> Inl MErr_UB)
+          | None \<Rightarrow> Inl MErr_UB)
+     | None \<Rightarrow> Inl MErr_UB)"
+
 | "exec_stmt (Suc fuel) ctx st (MS_If c t e) =
     (case eval_int (MC_Enc ctx) st c of
        Some i \<Rightarrow> if i \<noteq> 0 then exec_scope fuel ctx st t else exec_scope fuel ctx st e

@@ -188,11 +188,12 @@ definition main_fun :: MFun where
        MS_Call (Some ''a'') ''area'' [addr ''sh''],
        MS_Call None ''print_i32'' [var ''a''],
 
-       \<comment> \<open>the variant Circle(3): the buffer is zeroed, then tag 0 and payload 3 are
-           stored (the 4 bytes after the payload stay zero: DESIGN.md 3.3), and the
-           variant is copied\<close>
+       \<comment> \<open>the variant Circle(3): tag 0 and payload 3 are stored; the 4 bytes after
+           the payload are undefined (MS_Uninit, as the lowering of VariantCtor
+           emits: DESIGN.md 3.3), and the variant, undefined bytes included, is
+           copied\<close>
        MS_DeclBuf ''sh2'' (u64 9),
-       MS_Zero (addr ''sh2'') (u64 9),
+       MS_Uninit (addr ''sh2'') (u64 9),
        MS_Store CTy_U8 (addr ''sh2'') (u8 0),
        MS_Store CTy_I32 (offp (addr ''sh2'') 1) (i32 3),
        MS_DeclBuf ''sh3'' (u64 9),
@@ -394,11 +395,11 @@ value "case example_result of Inr (w, m, v) \<Rightarrow> Some (w, v) | Inl _ \<
 
 section \<open>Copying undefined bytes\<close>
 
-(* The example no longer copies a buffer with undefined bytes (gcc warns about
-   that under -O2 with glibc's fortified memmove, so the generator zeroes
-   variant buffers: DESIGN.md 3.3 and 11.4), but the semantics still allows
-   it: memmove reads undefined bytes as such, and only decoding them is UB
-   (DESIGN.md 2.1, risk 4). This program copies a 4-byte buffer of which only
+(* The example copies a variant whose bytes after the payload are undefined
+   (MS_Uninit; printed as a memset or as nothing, DESIGN.md 11.2). This
+   smaller program checks the semantics' handling of bytes that were simply
+   never written: memmove reads undefined bytes as such, and only decoding
+   them is UB (DESIGN.md 2.1, risk 4). It copies a 4-byte buffer of which only
    the first byte was written, and reads that byte back from the copy. *)
 definition undef_copy_prog :: MProgram where
   "undef_copy_prog = \<lparr>

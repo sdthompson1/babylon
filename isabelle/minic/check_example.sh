@@ -2,11 +2,17 @@
 
 # C-level validation of the hand-written MiniC examples (DESIGN.md, section 11).
 #
-# For each example program NAME (default: all of them):
-#   1. Main --minic NAME prints the program to NAME.c and writes the stdout
-#      that the MiniC interpreter computes for it to NAME.expected;
-#   2. NAME.c is compiled with gcc -std=c99 -Wall -Wextra -pedantic -Werror
-#      (and also with -std=c11 and -std=c17), at -O0 and -O2;
+# For each example program NAME (default: all of them) and each way of
+# printing MS_Uninit (memset: the default; omit: nothing is printed):
+#   1. Main --minic --uninit=MODE NAME prints the program to NAME-MODE.c and
+#      writes the stdout that the MiniC interpreter computes for it to
+#      NAME.expected;
+#   2. NAME-MODE.c is compiled with gcc -std=c99 -Wall -Wextra -pedantic
+#      -Werror (and also with -std=c11 and -std=c17), at -O0 and -O2. In the
+#      omit mode gcc's uninitialised-use warnings are disabled: the example
+#      copies a variant whose bytes after the payload were never written,
+#      which is exactly what -Wuninitialized reports and the memset mode is
+#      for (DESIGN.md 11.2 and 11.4);
 #   3. it is linked against the C support code, run, and its stdout and exit
 #      status are compared with the interpreter's.
 #
@@ -51,12 +57,17 @@ fail() {
 }
 
 for NAME in "${NAMES[@]}"; do
-    C="$WORK/$NAME.c"
+  for MODE in memset omit; do
+    C="$WORK/$NAME-$MODE.c"
     EXPECTED="$WORK/$NAME.expected"
     rm -f "$C" "$EXPECTED"
-    if ! "$MAIN" --minic "$NAME" "$C" "$EXPECTED"; then
-        fail "$NAME: Main --minic"
+    if ! "$MAIN" --minic "--uninit=$MODE" "$NAME" "$C" "$EXPECTED"; then
+        fail "$NAME ($MODE): Main --minic"
         continue
+    fi
+    WARN=(-Wall -Wextra -pedantic -Werror)
+    if [ "$MODE" = omit ]; then
+        WARN+=(-Wno-uninitialized -Wno-maybe-uninitialized)
     fi
 
     # The support objects (compiled without -Werror: they are not ours).
@@ -80,23 +91,24 @@ for NAME in "${NAMES[@]}"; do
 
     for STD in c99 c11 c17; do
         for OPT in -O0 -O2; do
-            EXE="$WORK/$NAME-$STD$OPT"
-            if ! $CC -std=$STD $OPT -Wall -Wextra -pedantic -Werror -o "$EXE" "$C" "${SUPPORT[@]}"; then
-                fail "$NAME: gcc -std=$STD $OPT"
+            EXE="$WORK/$NAME-$MODE-$STD$OPT"
+            if ! $CC -std=$STD $OPT "${WARN[@]}" -o "$EXE" "$C" "${SUPPORT[@]}"; then
+                fail "$NAME ($MODE): gcc -std=$STD $OPT"
                 continue
             fi
             "$EXE" > "$EXE.out"
             STATUS=$?
             if [ $STATUS -ne 0 ]; then
-                fail "$NAME ($STD $OPT): exit status $STATUS"
+                fail "$NAME ($MODE, $STD $OPT): exit status $STATUS"
             fi
             if ! cmp -s "$EXE.out" "$EXPECTED"; then
-                fail "$NAME ($STD $OPT): output differs from the interpreter's"
+                fail "$NAME ($MODE, $STD $OPT): output differs from the interpreter's"
                 diff "$EXPECTED" "$EXE.out"
             fi
         done
     done
-    echo "$NAME: done (see $WORK)"
+    echo "$NAME ($MODE): done (see $WORK)"
+  done
 done
 
 if [ $FAILED -eq 0 ]; then

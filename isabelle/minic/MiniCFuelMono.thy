@@ -20,7 +20,7 @@ lemma fuel_mono_Suc:
   "call_fun f ctx st fn vals \<noteq> Inl MErr_Fuel \<longrightarrow> call_fun (Suc f) ctx st fn vals = call_fun f ctx st fn vals"
 proof (induction f ctx st s and f ctx st ss and f ctx st body and f ctx st fn vals
        rule: exec_stmt_exec_stmts_exec_scope_call_fun.induct)
-  case (9 fuel ctx st body)
+  case (10 fuel ctx st body)
   \<comment> \<open>MS_Loop: the body (a scope), then the loop itself at the same reduced
       fuel. Done by hand, because the recursive call at `fuel` must not be
       unfolded by the simplifier before the induction hypothesis is applied.\<close>
@@ -31,21 +31,21 @@ proof (induction f ctx st s and f ctx st ss and f ctx st body and f ctx st fn va
     proof (cases "exec_scope fuel ctx st body")
       case (Inl err)
       with ne have "err \<noteq> MErr_Fuel" by simp
-      with Inl "9.IH"(1) have "exec_scope (Suc fuel) ctx st body = Inl err" by simp
+      with Inl "10.IH"(1) have "exec_scope (Suc fuel) ctx st body = Inl err" by simp
       with Inl show ?thesis by simp
     next
       case (Inr r)
       then obtain st' out where r: "r = (st', out)" by (cases r) auto
-      from Inr "9.IH"(1) have sc: "exec_scope (Suc fuel) ctx st body = Inr (st', out)"
+      from Inr "10.IH"(1) have sc: "exec_scope (Suc fuel) ctx st body = Inr (st', out)"
         by (simp add: r)
       show ?thesis
       proof (cases out)
         case MO_Normal
         with ne Inr r have ne': "exec_stmt fuel ctx st' (MS_Loop body) \<noteq> Inl MErr_Fuel" by simp
         have IH2: "exec_stmt (Suc fuel) ctx st' (MS_Loop body) = exec_stmt fuel ctx st' (MS_Loop body)"
-          using "9.IH"(2)[OF Inr[unfolded r] refl MO_Normal] ne' by simp
+          using "10.IH"(2)[OF Inr[unfolded r] refl MO_Normal] ne' by simp
         have L: "exec_stmt (Suc (Suc fuel)) ctx st (MS_Loop body) = exec_stmt (Suc fuel) ctx st' (MS_Loop body)"
-          using sc MO_Normal by (simp only: exec_stmt.simps(9) sum.case prod.case MOutcome.case)
+          using sc MO_Normal by (simp only: exec_stmt.simps(10) sum.case prod.case MOutcome.case)
         have R: "exec_stmt (Suc fuel) ctx st (MS_Loop body) = exec_stmt fuel ctx st' (MS_Loop body)"
           using Inr r MO_Normal by simp
         show ?thesis unfolding L R by (rule IH2)

@@ -79,6 +79,15 @@ datatype MExpr =
 
 section \<open>Statements\<close>
 
+(* MS_Uninit p n makes the n bytes at p undefined (MB_Undef), as if they had
+   never been written. It exists so that the code generator can say "this
+   region holds no value" without committing to a C realisation: the printer
+   either prints it as memset(p, 0, n), which makes the region defined (zero
+   bytes are one of its possible values) and keeps gcc's -Wuninitialized
+   quiet when such a buffer is later copied, or prints nothing, which costs
+   nothing at run time. Both are sound for anything the semantics defines,
+   because a program whose execution is defined never decodes those bytes.
+   See DESIGN.md, sections 3.3 and 11.2. *)
 datatype MStmt =
   MS_DeclScalar string CTy              (* T x;  (uninitialised) *)
   | MS_DeclBuf string MExpr             (* char x[n];  n a u64 expression; the block has max 1 n bytes *)
@@ -86,6 +95,7 @@ datatype MStmt =
   | MS_Store CTy MExpr MExpr            (* store a scalar of type T at an address: store_T(p, e) *)
   | MS_Copy MExpr MExpr MExpr           (* memmove(dst, src, n) *)
   | MS_Zero MExpr MExpr                 (* memset(p, 0, n) *)
+  | MS_Uninit MExpr MExpr               (* make n bytes at p undefined; see below *)
   | MS_If MExpr "MStmt list" "MStmt list"
   | MS_Loop "MStmt list"                (* while (1) { ... }; left by MS_Break or MS_Return *)
   | MS_Break
@@ -152,6 +162,7 @@ and stmts_wf :: "MProgram \<Rightarrow> bool \<Rightarrow> MStmt list \<Rightarr
 | "stmt_wf prog inLoop (MS_Store _ p e) = (expr_wf p \<and> expr_wf e)"
 | "stmt_wf prog inLoop (MS_Copy d s n) = (expr_wf d \<and> expr_wf s \<and> expr_wf n)"
 | "stmt_wf prog inLoop (MS_Zero p n) = (expr_wf p \<and> expr_wf n)"
+| "stmt_wf prog inLoop (MS_Uninit p n) = (expr_wf p \<and> expr_wf n)"
 | "stmt_wf prog inLoop (MS_If c t e) = (expr_wf c \<and> stmts_wf prog inLoop t \<and> stmts_wf prog inLoop e)"
 | "stmt_wf prog inLoop (MS_Loop body) = stmts_wf prog True body"
 | "stmt_wf prog inLoop MS_Break = inLoop"

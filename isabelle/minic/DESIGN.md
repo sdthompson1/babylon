@@ -47,9 +47,10 @@ actually emits, cleaned up so that it has a simple semantics:
   store or allocate. Expression evaluation can still fail (undefined
   behaviour), for example a load from a dead block.
 - Everything with an effect is a statement: declarations, assignment to a
-  scalar variable, store through a pointer, `memmove`, `memset`, `if`,
-  `while (1)`/`break`, blocks, calls (whose scalar result may be assigned to
-  a scalar variable) and `return`. There is no `abort()`: MiniC has no
+  scalar variable, store through a pointer, `memmove`, `memset`, "these
+  bytes are undefined" (`MS_Uninit`, below), `if`, `while (1)`/`break`,
+  blocks, calls (whose scalar result may be assigned to a scalar variable)
+  and `return`. There is no `abort()`: MiniC has no
   defined abnormal termination, because the generated code never needs one
   (sections 3.2 and 3.3).
 - Names are plain strings. The unverified printer (section 11) mangles them.
@@ -73,6 +74,7 @@ each construct is there (section 3 gives the lowering that uses it).
 | `ME_PtrAdd` | field offsets, element addresses, the payload of a variant |
 | `MS_DeclScalar`, `MS_DeclBuf` | locals and temporaries |
 | `MS_Assign`, `MS_Store`, `MS_Copy`, `MS_Zero` | scalar assignment; writing a scalar into a buffer; aggregate copies (`memmove`); default values (`memset 0`) |
+| `MS_Uninit p n` | makes the `n` bytes at `p` undefined (`MB_Undef`), as if never written. Emitted for the bytes after the payload of a variant (section 3.3). It has no C counterpart of its own: the printer realises it either as `memset(p, 0, n)` or as nothing (section 11.2), and the generator does not have to know which. Both are sound: a defined execution never decodes those bytes, so what the C object holds there is irrelevant |
 | `MS_If`, `MS_Loop`, `MS_Break` | Core `if`/`match`/`while` (`while` is `while (1) { if (!c) break; ... }` as in `codegen.c`) |
 | `MS_Block` | Core blocks and match arms (fresh scope) |
 | `MS_Call` | calls; the scalar result goes to a scalar variable, an aggregate result goes through a return-buffer pointer argument |
@@ -407,7 +409,7 @@ its value; for an aggregate-typed term the result is a place.
 | `Binop And/Or/Implies t1 t2` | `MS_DeclScalar tmp u8; tmp = ⟦t1⟧` (for `Implies`: `!⟦t1⟧`); `MS_If tmp [⟦t2⟧; tmp = e2] []` for `And`, `MS_If tmp [] [⟦t2⟧; tmp = e2]` for `Or`/`Implies`; result `ME_Var tmp`. The right operand's statements run only when needed, which is Core's short-circuit semantics |
 | `Let x t1 t2` | `⟦t1⟧`; bind `x`: scalar: `MS_DeclScalar x ty; x = e1`; aggregate: `MS_DeclScalar x CharPtr; x = e1` (an alias of the place, no copy; see section 3.5); then `⟦t2⟧` |
 | `FunctionCall f tys args` (pure) | section 3.4 |
-| `VariantCtor C tys t` (type `D<..>`) | `MS_DeclBuf tmp |D<..>|`; `MS_Zero tmp |D<..>|`; `MS_Store tagty tmp (index of C)`; `⟦t⟧` copied/stored at `tmp + tagsize`; result `ME_AddrOf tmp`. `codegen_variant` leaves the bytes after the payload undefined; the `MS_Zero` is a stage 3b change (section 11.4): gcc's `-Wuninitialized` reports the later `memmove` of such a buffer under `-O2` with glibc's fortified `memmove`, so every variant value is fully defined instead, at the cost of one `memset` per construction |
+| `VariantCtor C tys t` (type `D<..>`) | `MS_DeclBuf tmp |D<..>|`; `MS_Uninit tmp |D<..>|`; `MS_Store tagty tmp (index of C)`; `⟦t⟧` copied/stored at `tmp + tagsize`; result `ME_AddrOf tmp`. As in `codegen_variant`, the bytes after the payload hold no value. The `MS_Uninit` says so explicitly, and leaves it to the printer (section 11.2) whether those bytes are zeroed in C (which keeps gcc's `-Wuninitialized` quiet when the variant is later copied: section 11.4) or simply left alone (no `memset` per construction). The lowering is the same either way |
 | `Record [(f1, t1) ..]` | `MS_DeclBuf tmp |rec|`; each field copied/stored at its offset |
 | `RecordProj t f` | place `⟦t⟧ + offset(f)`; if the field is scalar, `ME_Load ty` of it |
 | `VariantProj t C` | place `⟦t⟧ + tagsize`; load if scalar. Core raises `RuntimeError` if the constructor differs, so no check |
@@ -801,7 +803,8 @@ against C.
   `memcpy` of `sizeof(T)` bytes from `p` into a temporary of type `T`, and
   `MS_Store ty p e` as a `memcpy` from a temporary into `p` (or as helper
   functions that do exactly that); `MS_Copy` and `MS_Zero` are `memmove` and
-  `memset`. The printer never emits `*(T *)p` for any `T` other than `char`,
+  `memset`, and `MS_Uninit` is `memset` or nothing (section 11.2). The
+  printer never emits `*(T *)p` for any `T` other than `char`,
   and never folds `ME_Load ty (ME_AddrOf x)` or `MS_Store ty (ME_AddrOf x) e`
   into a direct read or write of `x`, since that is only correct when `ty` is
   the declared type of `x`, which the printer cannot see. The only accesses
@@ -1032,11 +1035,11 @@ result. Non-termination, `TypeError`, `RuntimeError` and
 4. **Undefined payload bytes of variants.** A model that made every read of
    an undefined byte UB would break at the first variant copy. Mitigation:
    `MB_Undef` is copyable; only decoding is UB; the relation's `junk`.
-   Since stage 3b the generated code zeroes variant buffers (section 3.3),
-   so generated programs never copy undefined bytes and `junk` is in fact
-   zero; the relation keeps `junk` arbitrary because that is simpler and
-   still sound, and `undef_copy_prog` in `MiniCExample.thy` keeps the
-   semantics' tolerance of undefined bytes exercised.
+   The generated code marks the bytes after a variant's payload undefined
+   with `MS_Uninit` (section 3.3), so variant copies do copy undefined
+   bytes, which the semantics defines; the printer may zero them in C
+   (section 11.2), which the semantics need not know about, since zero
+   bytes are among the C states that `MB_Undef` stands for.
 5. **Lazy references** (section 3.5). The generator's environment, not
    MiniC, carries them; the proof must relate a Core `(addr, path)` to a
    recomputed address. Mitigation: freeze indices as Core does; the path
@@ -1136,17 +1139,23 @@ Then, from the root of the repository:
     ./isabelle/minic/check_example.sh example    # one of them
 
 The script runs, for each example `NAME` in `minic_examples`
-(`MiniCExample.thy`):
+(`MiniCExample.thy`) and each `MODE` in `memset`, `omit` (the two ways of
+printing `MS_Uninit`, section 11.2):
 
-    isabelle/export/Babylon.CodeExport/code/export1/Main --minic NAME NAME.c NAME.expected
+    isabelle/export/Babylon.CodeExport/code/export1/Main --minic --uninit=MODE NAME NAME-MODE.c NAME.expected
 
-which writes the printed C to `NAME.c` and the stdout that the MiniC
+which writes the printed C to `NAME-MODE.c` and the stdout that the MiniC
 interpreter computes for the program (the world of the extern models,
-section 11.4) to `NAME.expected`; compiles `NAME.c` with
+section 11.4) to `NAME.expected`; compiles `NAME-MODE.c` with
 `gcc -std=c99 -Wall -Wextra -pedantic -Werror`, and again with `-std=c11`
 and `-std=c17`, each at `-O0` and `-O2`; links it; runs it; and compares
-the output and the exit status (0) with the interpreter's. The files are
-left in `$TMPDIR/minic-check` (default `/tmp/minic-check`) for inspection.
+the output and the exit status (0) with the interpreter's. In the `omit`
+mode `-Wno-uninitialized -Wno-maybe-uninitialized` is added: that mode
+copies a variant with never-written bytes, which is the warning the
+`memset` mode exists to avoid (section 11.4), and the point of checking it
+is that the output is still right. (`--uninit=` may be left out of a
+`Main --minic` call; the default is `memset`.) The files are left in
+`$TMPDIR/minic-check` (default `/tmp/minic-check`) for inspection.
 Nothing in `test/isabelle_test.sh` exercises MiniC; this script is the
 MiniC check.
 
@@ -1196,6 +1205,19 @@ definitions. Conventions:
   too. `ME_PtrSize` is `((uint64_t) sizeof(void *))`. All helpers are
   emitted in every file; `static inline` keeps the unused ones from
   triggering `-Wunused-function`.
+- **`MS_Uninit` is printed according to the printer options.**
+  `print_program` takes a `PrintOpts` record; its one field so far,
+  `PO_Uninit`, is `UP_Memset` (the default, `default_print_opts`) or
+  `UP_Omit`. With `UP_Memset`, `MS_Uninit p n` is `memset(p, 0, n)`: the C
+  object is fully defined, so gcc's `-Wuninitialized` has nothing to say
+  about a later `memmove` of it (section 11.4), at the cost of one `memset`
+  per variant construction. With `UP_Omit` nothing is printed and the bytes
+  are whatever the C implementation left there. Both are correct: the
+  semantics makes the bytes `MB_Undef`, a defined execution never decodes
+  them, and zero and "whatever was there" are both C states that `MB_Undef`
+  stands for. Putting the choice in the printer keeps it out of the
+  generator (which just emits `MS_Uninit`) and out of the proofs. The
+  driver's `--uninit=memset|omit` selects it (section 11.1).
 - **Shifts** are the helpers `bab_shl_<ty>`/`bab_shr_<ty>` of section 5.3
   (the idiom of `shift_binop` in `codegen.c`), taking the count as a
   `uint64_t`. **`CB_Max`** is the helper `bab_max_<ty>`, except at file
@@ -1277,11 +1299,12 @@ The `eval` lemma `example_run` checks the interpreter against it, and
 `example_prog_well_typed` checks the typing judgement, both by `eval`.
 
 Outcome (gcc 13.3, x86-64 Linux, glibc with `_FORTIFY_SOURCE` on by
-default at `-O2`): both examples compile without a warning under
-`-std=c99`, `-std=c11` and `-std=c17`, at `-O0` and `-O2`, with
-`-Wall -Wextra -pedantic -Werror`, link against `Test.c` (and `Array.c`),
-return 0 and print exactly `example_expected` and `example_array_expected`.
-Two things were found and fixed on the way:
+default at `-O2`): both examples, in both `MS_Uninit` printing modes,
+compile under `-std=c99`, `-std=c11` and `-std=c17`, at `-O0` and `-O2`,
+with `-Wall -Wextra -pedantic -Werror` (plus `-Wno-uninitialized
+-Wno-maybe-uninitialized` in the `omit` mode, see item 2), link against
+`Test.c` (and `Array.c`), return 0 and print exactly `example_expected` and
+`example_array_expected`. Two things were found and fixed on the way:
 
 1. **The driver cannot run the interpreter.** `CodeExport.thy` uses
    `Code_Binary_Nat`, and the interpreter's equations match on `Suc fuel`
@@ -1296,12 +1319,17 @@ Two things were found and fixed on the way:
    and the semantics defines it (section 2.1), but gcc 13's
    `-Wuninitialized` reports `'sh2' is used uninitialized` at `-O2` when
    `memmove` is glibc's fortified inline wrapper (the warning disappears
-   with `-D_FORTIFY_SOURCE=0`). Rather than have every generated variant
-   construction warn on a default Ubuntu toolchain, the lowering of
-   `VariantCtor` now zeroes the buffer first (section 3.3) and the example
-   does the same; `undef_copy_prog` keeps the semantics' handling of
-   undefined bytes checked in the interpreter. No change to the semantics
-   or the memory model.
+   with `-D_FORTIFY_SOURCE=0`). The first fix had the lowering of
+   `VariantCtor` zero the buffer with `MS_Zero`, which silences the warning
+   but costs a `memset` per variant construction for everyone, including
+   users who do not compile with `-Wuninitialized`, and which would have
+   needed an option threaded through the generator to turn off. Instead
+   the lowering emits `MS_Uninit` (section 3.3), whose semantics is exactly
+   the situation (the bytes are undefined), and the printer chooses between
+   `memset` and nothing (section 11.2). The example uses `MS_Uninit` and
+   is checked in both modes; `undef_copy_prog` also keeps the semantics'
+   handling of never-written bytes checked in the interpreter. The
+   semantics gained the statement; the memory model is unchanged.
 
 Not a finding, but confirmed: the `print_bool`/`print_string` prototype
 mismatches of `Test.c` (section 11.3) are harmless on this ABI, as they
