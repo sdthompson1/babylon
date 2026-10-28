@@ -149,15 +149,18 @@ static bool is_abstract_type(struct CGContext *cxt, const char *name)
 // "."         => "z_"
 // "/"         => "zs"
 // "@"         => "za"
+// "$"         => "zd"
 // "^"         => "zh"
 // Leading "_" => "zu"
 // "-"         => "zm"
 // "z"         => "zz"
-// "$"         => "zd"  (never produced by this compiler; kept in step with
-//                       the Isabelle printer, isabelle/minic/MiniCPrint.thy)
 
 // Any other underscore, any digit 0-9, or any letter a-z or A-Z maps
 // to itself.
+
+// Any other characters are rejected with a fatal_error. (The Isabelle
+// version maps them to zxNN, where NN is two hex digits, but we don't
+// implement that here.)
 
 // If the entire result comes out equal to a C keyword, or an
 // otherwise reserved name, then a lone "z" is appended.
