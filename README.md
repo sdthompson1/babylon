@@ -150,6 +150,8 @@ also edit the config file manually, and/or run `bab check-config` to
 verify that the config is correct.
 
 You can also run `make check` to run a suite of compiler self-tests.
+(Note: the tests require both `pkg-config` and `zlib` to be installed,
+although these are not needed by the compiler itself.)
 
 For instructions on how to use the compiler, check the [docs](docs)
 folder, and/or look at the `example` directories under
