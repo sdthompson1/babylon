@@ -44,14 +44,6 @@ filter_valgrind()
     return 0
 }
 
-filter_zlib_version()
-{
-    # This is an attempt to make the 'system_package_failure' and
-    # 'system_package_success' tests independent of the installed
-    # zlib version.
-    sed -i "s/version of zlib is.*$/version of zlib is/g" $1
-}
-
 write_package_file()
 {
     template_file=$1
@@ -261,13 +253,15 @@ function run_package_tests()
         # Verify
         XDG_CONFIG_HOME=test/config $COMPILER verify --quiet -p $OUT_DIR -p test/ -r $OUT_DIR/root >$OUT_DIR/verifier_stdout.txt 2>$OUT_DIR/verifier_stderr.txt
         verifier_result=$?
-        cp $OUT_DIR/verifier_stderr.txt $OUT_DIR/verifier_stderr_unfiltered.txt
         filter_valgrind $OUT_DIR/verifier_stderr.txt || return 1
-        filter_zlib_version $OUT_DIR/verifier_stderr.txt || return 1
 
         if [ -a $OUT_DIR/verifier_stderr.expected ]
         then
             diff -u $OUT_DIR/verifier_stderr.expected $OUT_DIR/verifier_stderr.txt || return 1
+            expected_verifier_result=1
+        elif [ -a $OUT_DIR/verifier_stderr.nocompare ]
+        then
+            # Failure expected, but stderr is system-dependent so is not checked
             expected_verifier_result=1
         else
             check_file_empty verifier_stdout.txt || return 1
@@ -300,8 +294,6 @@ function run_package_tests()
         # Run
         $OUT_DIR/root/build/bin/root >$OUT_DIR/prog_stdout.txt 2>$OUT_DIR/prog_stderr.txt || return 1
         check_file_empty $OUT_DIR/prog_stderr.txt || return 1
-        cp $OUT_DIR/prog_stdout.txt $OUT_DIR/prog_stdout_unfiltered.txt
-        filter_zlib_version $OUT_DIR/prog_stdout.txt || return 1
         diff -u $OUT_DIR/prog_stdout.expected $OUT_DIR/prog_stdout.txt || return 1
 
     done
