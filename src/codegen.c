@@ -153,6 +153,8 @@ static bool is_abstract_type(struct CGContext *cxt, const char *name)
 // Leading "_" => "zu"
 // "-"         => "zm"
 // "z"         => "zz"
+// "$"         => "zd"  (never produced by this compiler; kept in step with
+//                       the Isabelle printer, isabelle/minic/MiniCPrint.thy)
 
 // Any other underscore, any digit 0-9, or any letter a-z or A-Z maps
 // to itself.
@@ -198,6 +200,11 @@ static uint64_t encode_chars(const char *input, char *output)
         case '-':
             num += 2;
             if (output) { *output++ = 'z'; *output++ = 'm'; }
+            break;
+
+        case '$':
+            num += 2;
+            if (output) { *output++ = 'z'; *output++ = 'd'; }
             break;
 
         case '_':

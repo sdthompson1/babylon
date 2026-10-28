@@ -1074,21 +1074,22 @@ result. Non-termination, `TypeError`, `RuntimeError` and
     datatypes too (to be confirmed in stage 4); either way the pipeline
     runs the checks, so no elaborator proof is needed.
 11. **The printer** is unverified; precedence, integer literal syntax
-    (`INT64_MIN`), integer promotion, the shift helpers, the mangling and
-    the aliasing obligation P1 of section 5.2 are all places for silent
-    errors. Printing `ME_Load`/`MS_Store` as typed dereferences instead of
-    `memcpy` would make nearly every generated function violate C99 6.5p7
-    (every field read comes out of a `char` buffer), which gcc at `-O2`
-    does exploit, while leaving the Isabelle side unchanged. Mitigation
-    (section 11.2): the MiniC AST is small and the printer parenthesises
-    everything, casts every arithmetic result to its MiniC type, prints
-    every literal with its type's macro, and implements P1 by helper
-    functions, so each rule is one line of `MiniCPrint.thy`; the examples
-    are compiled with `-Wall -Wextra -pedantic -Werror` at `-O0` and `-O2`
-    under three standards and compared with the interpreter byte for byte
-    (section 11.4); from stage 5 on the codegen tests in
-    `test/cases/codegen` are an independent oracle. Known gaps are listed
-    in section 11.2 (reserved identifiers) and 11.3.
+    (`INT64_MIN`), integer promotion, the shift helpers and the aliasing
+    obligation P1 of section 5.2 are all places for silent errors (the
+    mangling is the one part of the printer with theorems: it is injective
+    and never produces a reserved name, section 11.2). Printing
+    `ME_Load`/`MS_Store` as typed dereferences instead of `memcpy` would make
+    nearly every generated function violate C99 6.5p7 (every field read
+    comes out of a `char` buffer), which gcc at `-O2` does exploit, while
+    leaving the Isabelle side unchanged. Mitigation (section 11.2): the MiniC
+    AST is small and the printer parenthesises everything, casts every
+    arithmetic result to its MiniC type, prints every literal with its
+    type's macro, and implements P1 by helper functions, so each rule is one
+    line of `MiniCPrint.thy`; the examples are compiled with `-Wall -Wextra
+    -pedantic -Werror` at `-O0` and `-O2` under three standards and compared
+    with the interpreter byte for byte (section 11.4); from stage 5 on the
+    codegen tests in `test/cases/codegen` are an independent oracle. Known
+    gaps are listed in section 11.2 (reserved identifiers) and 11.3.
 12. **Zero-sized aggregates** (`{}`, `T[0]`). C forbids zero-length arrays.
     Mitigation: every buffer declaration uses `max 1 |ty|`; copies of 0
     bytes are fine; the unit type is `void` in signatures.
@@ -1242,9 +1243,10 @@ definitions. Conventions:
 - **Names** are mangled as `mangle_name` in `codegen.c` and
   `docs/c-interface.md` ("Calling Babylon Functions from C"): `.` to `z_`,
   `/` to `zs`, `@` to `za`, `^` to `zh`, `-` to `zm`, `z` to `zz`, a leading
-  `_` to `zu`; and, beyond `codegen.c` (which rejects any other character),
-  any other character to `zx` followed by two hex digits, so that names such
-  as the generator's temporaries can contain `$`. A name that comes out equal
+  `_` to `zu`, `$` to `zd` (so that names such as the generator's temporaries
+  can contain `$`; `codegen.c` has the same case, unused, for consistency);
+  and, beyond `codegen.c` (which rejects any other character), any other
+  character to `zx` followed by two hex digits. A name that comes out equal
   to a C keyword (C99, C11 and C23), one of `memcpy`, `memmove`, `memset`,
   `size_t`, `NULL`, `CHAR_BIT`, the `<stdint.h>` type and `INTn_C` macro
   names, or one of the helper names gets a `z` appended (as `codegen.c` does
@@ -1252,20 +1254,30 @@ definitions. Conventions:
   (`MF_Extern = Some cname`), unmangled, both in the prototype and at each
   call; the prototype has the form of `docs/c-interface.md` because the
   parameter list of an extern `MFun` already does (section 3.9).
+- **Mangling is injective and never reserved** (`mangle_injective`,
+  `inj_mangle`, `mangle_not_reserved` in `MiniCPrint.thy`): two distinct
+  MiniC names print as distinct C identifiers, and no printed identifier is
+  on the reserved list. The `z` suffix does not break injectivity, although
+  it looks as if it might (`int` mangles to `intz`): every `z` that the
+  character encoding writes starts a two- or four-character code (`zz`,
+  `zx3f`, ...), so a reserved name followed by a lone `z` is not the encoding
+  of anything, provided no reserved name itself ends in `z`, which is
+  checked by computation over the list (`reserved_names_facts`). In
+  particular `intz` itself mangles to `intzz`. The proof goes through a
+  decoder, `unmangle_chars`, that is a left inverse of the character
+  encoding (`unmangle_mangle_chars`); the decoder exists only for the proof
+  and is not exported.
 - **Reserved identifiers.** Mangled names never start with `_`, so they do
-  not collide with the identifiers C reserves. Two residual risks, shared
+  not collide with the identifiers C reserves. One residual risk, shared
   with `codegen.c`: a mangled name can collide with a macro of an included
   header (`INT32_MAX`, ...) or with a C library function (`free`, `abort`)
   if the MiniC name is unqualified, which only the hand-written examples
   have (generated functions and globals are qualified `Mod.name`; locals
   are not, and a local named `abort` would shadow the library function
   harmlessly unless the same function also calls an extern of that C
-  name); and the `z` suffix makes mangling non-injective in the one case
-  of a name that is itself a reserved name plus `z` (`intz`). The typing
-  judgement rules out MiniC-level collisions between variables and
-  functions, and the collisions above are not MiniC-level, so they are
-  outside the theorems; stage 5 should keep temporaries' names
-  unmangleable into anything reserved (a `$` in every temporary does it).
+  name). The typing judgement rules out MiniC-level collisions between
+  variables and functions, and this collision is not MiniC-level, so it is
+  outside the theorems.
 
 ### 11.3 What the printer relies on
 

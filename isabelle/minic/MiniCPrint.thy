@@ -31,10 +31,12 @@ begin
     - Integer literals use the INTn_C/UINTn_C macros; the most negative value
       of a signed type is printed as `(-MAX - 1)`.
     - Names are mangled as in codegen.c and docs/c-interface.md (section
-      "Calling Babylon Functions from C"), extended with `zx<hex>` for any
-      other character, and with a `z` appended to C keywords and the names the
-      generated file itself uses. Extern functions are printed under their C
-      name, unmangled.
+      "Calling Babylon Functions from C"), extended with `zd` for `$` and
+      `zx<hex>` for any other character, and with a `z` appended to C keywords
+      and the names the generated file itself uses. Extern functions are
+      printed under their C name, unmangled. Mangling is proved injective and
+      never to produce a reserved name (mangle_injective, mangle_not_reserved
+      below), so distinct MiniC names never print as the same C identifier.
     - The file begins with the includes, #error guards for the assumptions A1,
       A2 and A5 of DESIGN.md, the helpers, the globals, a prototype for every
       function (so that definition order does not matter), and then the
@@ -78,9 +80,9 @@ definition is_ident_char :: "char \<Rightarrow> bool" where
      in (48 \<le> n \<and> n \<le> 57) \<or> (65 \<le> n \<and> n \<le> 90) \<or> (97 \<le> n \<and> n \<le> 122) \<or> n = 95)"
 
 (* The character encoding of codegen.c (encode_chars): `.` is z_, `/` is zs,
-   `@` is za, `^` is zh, `-` is zm, `z` is zz, a leading `_` is zu; any other
-   character that codegen.c would reject is zx followed by two hex digits.
-   `first` says whether this is the first character of the name. *)
+   `@` is za, `^` is zh, `-` is zm, `z` is zz, a leading `_` is zu, `$` is zd;
+   any other character that codegen.c would reject is zx followed by two hex
+   digits. `first` says whether this is the first character of the name. *)
 fun mangle_chars :: "bool \<Rightarrow> string \<Rightarrow> string" where
   "mangle_chars first [] = []"
 | "mangle_chars first (c # cs) =
@@ -91,6 +93,7 @@ fun mangle_chars :: "bool \<Rightarrow> string \<Rightarrow> string" where
      else if c = CHR ''-'' then ''zm''
      else if c = CHR ''z'' then ''zz''
      else if c = CHR ''_'' \<and> first then ''zu''
+     else if c = CHR ''$'' then ''zd''
      else if is_ident_char c then [c]
      else ''zx'' @ hex2 (of_char c))
     @ mangle_chars False cs"
@@ -142,6 +145,180 @@ definition mangle :: "string \<Rightarrow> string" where
   "mangle name =
     (let m = mangle_chars True name
      in if m \<in> set reserved_names then m @ ''z'' else m)"
+
+
+subsection \<open>Mangling is injective and never produces a reserved name\<close>
+
+(* Two properties the printer relies on: distinct MiniC names print as
+   distinct C identifiers, and no printed identifier is a C keyword or one of
+   the names the generated file uses. (Which is why a name such as `intz` is
+   not a problem: `int` mangles to `intz`, but `intz` mangles to `intzz`,
+   because its `z` is doubled. In general a reserved name followed by a lone
+   `z` is never the output of mangle_chars, because every `z` that
+   mangle_chars writes begins a two- or four-character code, and no reserved
+   name ends in `z`.)
+
+   The proof goes through a decoder, unmangle_chars, which is a left inverse
+   of mangle_chars; it exists only for the proofs and is not exported. *)
+
+definition unhex_digit :: "char \<Rightarrow> nat option" where
+  "unhex_digit c =
+    (let n = of_char c :: nat
+     in if 48 \<le> n \<and> n \<le> 57 then Some (n - 48)
+        else if 97 \<le> n \<and> n \<le> 102 then Some (n - 87)
+        else None)"
+
+(* The character encoded by the letter after a `z` (other than `x`). *)
+definition unmangle_code :: "char \<Rightarrow> char option" where
+  "unmangle_code d =
+    (if d = CHR ''_'' then Some (CHR ''.'')
+     else if d = CHR ''s'' then Some (CHR ''/'')
+     else if d = CHR ''a'' then Some (CHR ''@'')
+     else if d = CHR ''h'' then Some (CHR ''^'')
+     else if d = CHR ''m'' then Some (CHR ''-'')
+     else if d = CHR ''z'' then Some (CHR ''z'')
+     else if d = CHR ''u'' then Some (CHR ''_'')
+     else if d = CHR ''d'' then Some (CHR ''$'')
+     else None)"
+
+fun unmangle_chars :: "string \<Rightarrow> string option" where
+  "unmangle_chars [] = Some []"
+| "unmangle_chars (c # cs) =
+    (if c = CHR ''z'' then
+       (case cs of
+          [] \<Rightarrow> None
+        | d # cs' \<Rightarrow>
+            if d = CHR ''x'' then
+              (case cs' of
+                 h1 # h2 # cs'' \<Rightarrow>
+                   (case (unhex_digit h1, unhex_digit h2) of
+                      (Some a, Some b) \<Rightarrow> map_option ((#) (char_of (16 * a + b))) (unmangle_chars cs'')
+                    | _ \<Rightarrow> None)
+               | _ \<Rightarrow> None)
+            else (case unmangle_code d of
+                    Some c' \<Rightarrow> map_option ((#) c') (unmangle_chars cs')
+                  | None \<Rightarrow> None))
+     else map_option ((#) c) (unmangle_chars cs))"
+
+lemma unhex_digit_hex_digit: "n < 16 \<Longrightarrow> unhex_digit (hex_digit n) = Some n"
+  by (simp add: unhex_digit_def hex_digit_def)
+
+lemma unmangle_chars_zx:
+  assumes "n < 256"
+  shows "unmangle_chars (CHR ''z'' # CHR ''x'' # hex2 n @ rest) = map_option ((#) (char_of n)) (unmangle_chars rest)"
+proof -
+  have "n div 16 < 16" using assms by simp
+  then have "n div 16 mod 16 = n div 16" by simp
+  with assms show ?thesis
+    by (simp add: hex2_def unhex_digit_hex_digit)
+qed
+
+(* Decoding one encoded character. *)
+lemma unmangle_mangle_char:
+  "unmangle_chars (mangle_chars first [c] @ rest) = map_option ((#) c) (unmangle_chars rest)"
+proof (cases "c = CHR ''.'' \<or> c = CHR ''/'' \<or> c = CHR ''@'' \<or> c = CHR ''^'' \<or> c = CHR ''-''
+              \<or> c = CHR ''z'' \<or> (c = CHR ''_'' \<and> first) \<or> c = CHR ''$'' \<or> is_ident_char c")
+  case True
+  then show ?thesis
+    by (elim disjE) (simp_all add: unmangle_code_def is_ident_char_def)
+next
+  case False
+  then have "mangle_chars first [c] @ rest = CHR ''z'' # CHR ''x'' # hex2 (of_char c) @ rest"
+    by simp
+  then show ?thesis
+    by (simp only: unmangle_chars_zx[OF nat_of_char_less_256] char_of_char)
+qed
+
+lemma unmangle_mangle_chars:
+  "unmangle_chars (mangle_chars first s @ rest) = map_option ((@) s) (unmangle_chars rest)"
+proof (induction s arbitrary: first rest)
+  case Nil
+  then show ?case by (cases "unmangle_chars rest") simp_all
+next
+  case (Cons c cs)
+  have "mangle_chars first (c # cs) @ rest = mangle_chars first [c] @ (mangle_chars False cs @ rest)"
+    by simp
+  then show ?case
+    by (simp only: unmangle_mangle_char Cons.IH option.map_comp comp_def append_Cons)
+qed
+
+lemma mangle_chars_injective:
+  "mangle_chars first x = mangle_chars first y \<Longrightarrow> x = y"
+  using unmangle_mangle_chars[of first x "[]"] unmangle_mangle_chars[of first y "[]"]
+  by simp
+
+(* The two facts about the reserved names themselves, checked by computation:
+   none decodes once a `z` is appended, and none ends in `z`. *)
+lemma reserved_names_facts:
+  "list_all (\<lambda>r. unmangle_chars (r @ ''z'') = None \<and> r \<noteq> [] \<and> last r \<noteq> CHR ''z'') reserved_names"
+  by (simp add: reserved_names_def helper_names_def helper_name_def all_ctys_def all_int_tys_def
+                unmangle_code_def unhex_digit_def char_of_eq_iff take_bit_eq_mod)
+
+lemma reserved_name_z_not_mangled:
+  assumes "r \<in> set reserved_names"
+  shows "r @ ''z'' \<noteq> mangle_chars first s"
+proof
+  assume "r @ ''z'' = mangle_chars first s"
+  then have "unmangle_chars (r @ ''z'') = Some s"
+    using unmangle_mangle_chars[of first s "[]"] by simp
+  with assms reserved_names_facts show False
+    by (simp add: list_all_iff)
+qed
+
+lemma reserved_name_last:
+  assumes "r \<in> set reserved_names"
+  shows "last r \<noteq> CHR ''z''"
+  using assms reserved_names_facts by (simp add: list_all_iff)
+
+theorem mangle_injective:
+  assumes "mangle x = mangle y"
+  shows "x = y"
+proof -
+  let ?mx = "mangle_chars True x" and ?my = "mangle_chars True y"
+  consider (both) "?mx \<in> set reserved_names" "?my \<in> set reserved_names"
+    | (neither) "?mx \<notin> set reserved_names" "?my \<notin> set reserved_names"
+    | (xonly) "?mx \<in> set reserved_names" "?my \<notin> set reserved_names"
+    | (yonly) "?mx \<notin> set reserved_names" "?my \<in> set reserved_names"
+    by blast
+  then show ?thesis
+  proof cases
+    case both
+    with assms have "?mx @ ''z'' = ?my @ ''z''" by (simp add: mangle_def)
+    then have "?mx = ?my" by simp
+    then show ?thesis by (rule mangle_chars_injective)
+  next
+    case neither
+    with assms have "?mx = ?my" by (simp add: mangle_def)
+    then show ?thesis by (rule mangle_chars_injective)
+  next
+    case xonly
+    with assms have "?mx @ ''z'' = ?my" by (simp add: mangle_def)
+    with xonly(1) show ?thesis using reserved_name_z_not_mangled by blast
+  next
+    case yonly
+    with assms have "?my @ ''z'' = ?mx" by (simp add: mangle_def)
+    with yonly(2) show ?thesis using reserved_name_z_not_mangled by blast
+  qed
+qed
+
+corollary inj_mangle: "inj mangle"
+  by (rule injI) (rule mangle_injective)
+
+theorem mangle_not_reserved: "mangle x \<notin> set reserved_names"
+proof
+  assume reserved: "mangle x \<in> set reserved_names"
+  show False
+  proof (cases "mangle_chars True x \<in> set reserved_names")
+    case True
+    then have "mangle x = mangle_chars True x @ ''z''" by (simp add: mangle_def)
+    then have "last (mangle x) = CHR ''z''" by simp
+    with reserved show False using reserved_name_last by blast
+  next
+    case False
+    then have "mangle x = mangle_chars True x" by (simp add: mangle_def)
+    with False reserved show False by simp
+  qed
+qed
 
 
 section \<open>Types and literals\<close>
