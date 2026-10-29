@@ -12,7 +12,7 @@ begin
     - Every variable (local, parameter or global) is an object in byte-addressed
       memory. A "scalar" variable holds one C scalar (an exact-width integer,
       or a pointer) and is printed as e.g. `int32_t x;`; a "buffer" variable is
-      a byte array `char x[N];` (N may be a run-time expression: a VLA).
+      a byte array `char x[N];` (N may be a run-time expression, i.e. a VLA).
     - Expressions are pure: they may read memory (ME_Load, ME_Var) but cannot
       call functions, assign, store or allocate. Expression evaluation can
       still fail (undefined behaviour), e.g. a load from a dead block.
@@ -23,11 +23,11 @@ begin
 
 section \<open>C types\<close>
 
-(* The scalar C types of MiniC: the eight exact-width integer types, `char *`
-   and `void *`. Babylon's bool is CTy_Int Unsigned IntBits_8 (a uint8_t holding
-   0 or 1). Semantically the two pointer types are the same; the distinction
-   only matters to the printer (extern prototypes use `void *` for extern
-   types, everything else is `char *`). *)
+(* The scalar C types of MiniC: the eight exact-width integer types, and the
+   two pointer types (`char *` and `void *`). Babylon's bool is CTy_Int Unsigned
+   IntBits_8 (a uint8_t holding 0 or 1). Semantically the two pointer types are
+   the same; the distinction only matters to the printer (extern prototypes use
+   `void *` for extern types, everything else is `char *`). *)
 datatype CTy =
   CTy_Int Signedness IntBits
   | CTy_CharPtr
@@ -66,7 +66,7 @@ datatype CBinop =
   | CB_Max
 
 datatype MExpr =
-  ME_Int Signedness IntBits int        (* integer literal of the given type *)
+  ME_Int Signedness IntBits int         (* integer literal of the given type *)
   | ME_PtrSize                          (* the size of a pointer, as a u64: sizeof of a void pointer *)
   | ME_Var string                       (* value of a scalar variable *)
   | ME_AddrOf string                    (* the address of variable x, as a char pointer *)
@@ -79,18 +79,9 @@ datatype MExpr =
 
 section \<open>Statements\<close>
 
-(* MS_Uninit p n makes the n bytes at p undefined (MB_Undef), as if they had
-   never been written. It exists so that the code generator can say "this
-   region holds no value" without committing to a C realisation: the printer
-   either prints it as memset(p, 0, n), which makes the region defined (zero
-   bytes are one of its possible values) and keeps gcc's -Wuninitialized
-   quiet when such a buffer is later copied, or prints nothing, which costs
-   nothing at run time. Both are sound for anything the semantics defines,
-   because a program whose execution is defined never decodes those bytes.
-   See DESIGN.md, sections 3.3 and 11.2. *)
 datatype MStmt =
   MS_DeclScalar string CTy              (* T x;  (uninitialised) *)
-  | MS_DeclBuf string MExpr             (* char x[n];  n a u64 expression; the block has max 1 n bytes *)
+  | MS_DeclBuf string MExpr             (* char x[n];  n a u64 expression;  UB if n is zero *)
   | MS_Assign string MExpr              (* x = e;  (x a scalar variable) *)
   | MS_Store CTy MExpr MExpr            (* store a scalar of type T at an address: store_T(p, e) *)
   | MS_Copy MExpr MExpr MExpr           (* memmove(dst, src, n) *)
@@ -100,9 +91,17 @@ datatype MStmt =
   | MS_Loop "MStmt list"                (* while (1) { ... }; left by MS_Break or MS_Return *)
   | MS_Break
   | MS_Block "MStmt list"               (* { ... }: a scope; variables declared inside die at the end *)
-  | MS_Call "string option" string "MExpr list"
-                                        (* [x =] f(args);  x receives a scalar result *)
+  | MS_Call "string option" string "MExpr list"   (* [x =] f(args);  x receives a scalar result *)
   | MS_Return "MExpr option"
+
+(* Note: MS_Uninit p n makes the n bytes at p undefined (MB_Undef), as if they had
+   never been written. It exists so that the code generator can say "this
+   region holds no value" without committing to a C realisation: the printer
+   either prints it as memset(p, 0, n), which silences gcc's -Wuninitialized
+   warning when such a buffer is later copied, or prints nothing, which costs
+   nothing at run time. Both are sound for anything the semantics defines,
+   because a program whose execution is defined never decodes those bytes.
+   See DESIGN.md, sections 3.3 and 11.2. *)
 
 
 section \<open>Functions and programs\<close>
@@ -134,13 +133,15 @@ definition lookup_fun :: "MProgram \<Rightarrow> string \<Rightarrow> MFun optio
 section \<open>Syntactic well-formedness\<close>
 
 (* The small amount of static well-formedness that the interpreter and the
-   printer rely on. A full typing predicate is later work (stage 3b).
+   printer rely on:
     - function names are distinct, and `main` exists, taking no parameters and
       returning an int (so that the printer can emit `int main(void)`);
     - every call names a function of the program, with the right number of
       arguments;
     - MS_Break only occurs inside a loop;
-    - integer literals fit their type. *)
+    - integer literals fit their type.
+  The typing judgement proper is program_well_typed in MiniCTyping.thy, and is in
+  addition to the above checks (it does not subsume them). *)
 
 fun expr_wf :: "MExpr \<Rightarrow> bool" where
   "expr_wf (ME_Int s b i) = int_fits s b i"
