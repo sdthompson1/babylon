@@ -7,12 +7,10 @@ begin
 (* ========================================================================== *)
 
 (* A fuelled interpreter for MiniC, in the style of CoreInterp. Expressions are
-   pure and need no fuel (eval_expr returns None for undefined behaviour).
+   pure and need no fuel; eval_expr returns None for undefined behaviour.
    Statements are executed by a mutually recursive, fuelled family of functions
-   whose result distinguishes a normal result (Inr), insufficient fuel
-   (Inl MErr_Fuel) and undefined behaviour (Inl MErr_UB). MiniC has no
-   defined abnormal termination (no abort()): the generated code never needs
-   one (see DESIGN.md, sections 3.2 and 3.3).
+   which return either a normal result (Inr), insufficient fuel (Inl MErr_Fuel)
+   or undefined behaviour (Inl MErr_UB).
 
    "Undefined behaviour" means anything that a C compiler would be allowed to
    miscompile, plus anything the C standard leaves implementation-defined that

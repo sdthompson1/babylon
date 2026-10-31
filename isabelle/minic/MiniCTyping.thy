@@ -351,7 +351,7 @@ next
     using eval_cast_has_ty by (auto split: option.splits if_splits)
 next
   case (ME_PtrAdd e1 e2)
-  then obtain pty ity where ety1: "expr_type env e1 = Some pty"
+  then obtain pty where ety1: "expr_type env e1 = Some pty"
     and ty: "ty = pty" and ptr: "is_ptr_ty pty"
     by (auto split: option.splits if_splits)
   from ME_PtrAdd.prems(2) obtain v1 where ev1: "eval_expr enc st e1 = Some v1"

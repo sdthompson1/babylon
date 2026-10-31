@@ -12,9 +12,8 @@ begin
    a stored pointer. Pointers are never converted to or from integers.
 
    Integers are encoded abstractly: the encoding is a parameter (MEncoding)
-   that satisfies the laws in valid_encoding. The little-endian instance
-   le_encoding is supplied so that the interpreter can be run, but nothing is
-   proved about it beyond valid_encoding. *)
+   that satisfies the laws in valid_encoding. A little-endian instance
+   le_encoding is supplied, but nothing is proved about it beyond valid_encoding. *)
 
 
 section \<open>Pointers, bytes, values\<close>
@@ -72,9 +71,7 @@ record MEncoding =
   enc_decode   :: "Signedness \<Rightarrow> IntBits \<Rightarrow> nat list \<Rightarrow> int"
 
 (* The laws the proofs rely on:
-    - the pointer size is positive and fits a uint64_t (it is the size of a void pointer,
-      and every size the generated code computes is a uint64_t: DESIGN.md
-      section 3.2 and assumption A6);
+    - the pointer size is positive and fits a uint64_t;
     - an in-range integer encodes to exactly byte_width bytes, each < 256,
       and decodes back to itself (round trip; injectivity follows);
     - decoding any byte_width bytes gives an in-range integer (no trap
@@ -389,7 +386,7 @@ next
     have "hd (map (MB_Frag b off) [0..<enc_ptr_size enc]) = MB_Frag b off 0"
       by (simp add: upt)
     moreover have "hd (replicate (enc_ptr_size enc) (MB_Byte 0)) = MB_Byte 0"
-      using pos by (simp add: hd_replicate)
+      using pos by simp
     ultimately show False using eq by simp
   qed
   show ?thesis using MP_Addr neq by (simp add: decode_ptr_def upt)
