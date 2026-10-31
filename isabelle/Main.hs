@@ -1,7 +1,8 @@
 module Main where
 
 import CodeExport
-import MiniCPrint (print_program, default_print_opts, pO_Uninit_update, UninitPrint(..))
+import MiniCPrint (print_program, default_print_opts, pO_Uninit_update, UninitPrint(..),
+                   extern_clashes, extern_clash_message)
 import MiniCExample (minic_examples)
 import Str
 import Control.Exception
@@ -64,9 +65,11 @@ parseArg arg =
 -- prints the hand-written MiniC program NAME (from minic_examples, e.g.
 -- "example") as C to OUT.c and, if EXPECTED.txt is given, writes its
 -- documented stdout there (the text that the lemmas of MiniCExample.thy check
--- the MiniC interpreter against). --uninit chooses how the MS_Uninit
--- statement is printed: as a memset to zero (the default) or as nothing. See
--- isabelle/minic/DESIGN.md, sections 11.1 and 11.2.
+-- the MiniC interpreter against). Before printing, the program is checked
+-- for extern C names that clash with mangled names (extern_clashes); each
+-- clash is reported and nothing is written. --uninit chooses how the
+-- MS_Uninit statement is printed: as a memset to zero (the default) or as
+-- nothing. See isabelle/minic/DESIGN.md, sections 3.9, 11.1 and 11.2.
 minicMain :: UninitPrint -> Prelude.String -> FilePath -> Maybe FilePath -> IO ()
 minicMain uninit name cPath expectedPath =
   case [ (prog, out) | (n, (prog, out)) <- minic_examples, fromIsabelleString n == name ] of
@@ -75,6 +78,11 @@ minicMain uninit name cPath expectedPath =
                         ++ unwords [ fromIsabelleString n | (n, _) <- minic_examples ])
       exitWith (ExitFailure 1)
     ((prog, out) : _) -> do
+      case extern_clashes prog of
+        [] -> return ()
+        clashes -> do
+          mapM_ (hPutStrLn stderr . ("Main: " ++) . fromIsabelleString . extern_clash_message) clashes
+          exitWith (ExitFailure 1)
       let opts = pO_Uninit_update (const uninit) default_print_opts
       writeBinaryFile cPath (fromIsabelleString (print_program opts prog))
       case expectedPath of

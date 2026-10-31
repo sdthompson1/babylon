@@ -37,6 +37,9 @@ begin
       printed under their C name, unmangled. Mangling is proved injective and
       never to produce a reserved name (mangle_injective, mangle_not_reserved
       below), so distinct MiniC names never print as the same C identifier.
+      An extern's C name can still coincide with a mangled name; the
+      executable check extern_clashes finds every such clash that would make
+      the C invalid, and the driver runs it before printing.
     - The file begins with the includes, #error guards for the assumptions A1,
       A2 and A5 of DESIGN.md, the helpers, the globals, a prototype for every
       function (so that definition order does not matter), and then the
@@ -319,6 +322,97 @@ proof
     with False reserved show False by simp
   qed
 qed
+
+
+section \<open>Extern C names\<close>
+
+(* An extern function is printed under its C name, unmangled, so that name
+   shares the file's namespace with the mangled MiniC names. The typing
+   judgement (MiniCTyping.thy) keeps variables apart from MiniC function
+   names, but knows nothing of mangling or of C names, so the clashes an
+   extern's C name can cause are found by a separate, executable check on the
+   MiniC program, run before it is printed:
+
+    - no global variable and no non-extern function may have a mangled name
+      equal to an extern's C name (both are declared at file scope);
+    - at a call of an extern, no variable in scope (a parameter or a local)
+      may have a mangled name equal to the C name being called (the variable
+      would hide the function, and C rejects the call).
+
+   A variable whose mangled name is an extern's C name but which is not in
+   scope at any call of that extern is fine: it hides the function harmlessly.
+   Two externs with the same C name are not checked: C accepts a repeated
+   prototype when the types agree, and the C compiler reports the clash when
+   they do not. Checked by the driver (Main.hs, --minic) and, once there is a
+   code generator, by its driver before printing its output; a clash is a
+   compile error whose message names the function and variable involved.
+   See DESIGN.md, section 3.9. *)
+
+datatype MExternClash =
+  EC_Global string string
+    (* EC_Global x cname: the global variable x is printed as cname, an extern's C name *)
+  | EC_Function string string
+    (* EC_Function f cname: the (non-extern) function f is printed as cname, an extern's C name *)
+  | EC_Local string string string
+    (* EC_Local f x cname: in function f, the parameter or local x, printed as cname,
+       is in scope at a call of the extern with C name cname *)
+
+definition extern_cnames :: "MProgram \<Rightarrow> string list" where
+  "extern_cnames prog = List.map_filter MF_Extern (MP_Funcs prog)"
+
+definition global_extern_clashes :: "MProgram \<Rightarrow> MExternClash list" where
+  "global_extern_clashes prog =
+    [EC_Global x (mangle x). x \<leftarrow> map fst (MP_Globals prog), mangle x \<in> set (extern_cnames prog)]
+    @ [EC_Function f (mangle f). f \<leftarrow> map MF_Name (filter (\<lambda>f. MF_Extern f = None) (MP_Funcs prog)),
+                                  mangle f \<in> set (extern_cnames prog)]"
+
+(* The variables in scope are threaded through a statement list as in
+   stmts_ok (declarations extend the scope; a nested scope's declarations are
+   dropped at its end). *)
+fun stmt_extern_clashes :: "MProgram \<Rightarrow> string \<Rightarrow> string list \<Rightarrow> MStmt \<Rightarrow> MExternClash list \<times> string list"
+and stmts_extern_clashes :: "MProgram \<Rightarrow> string \<Rightarrow> string list \<Rightarrow> MStmt list \<Rightarrow> MExternClash list" where
+  "stmt_extern_clashes prog f sc (MS_DeclScalar x _) = ([], x # sc)"
+| "stmt_extern_clashes prog f sc (MS_DeclBuf x _) = ([], x # sc)"
+| "stmt_extern_clashes prog f sc (MS_If _ t e) =
+    (stmts_extern_clashes prog f sc t @ stmts_extern_clashes prog f sc e, sc)"
+| "stmt_extern_clashes prog f sc (MS_Loop body) = (stmts_extern_clashes prog f sc body, sc)"
+| "stmt_extern_clashes prog f sc (MS_Block body) = (stmts_extern_clashes prog f sc body, sc)"
+| "stmt_extern_clashes prog f sc (MS_Call _ g _) =
+    ((case lookup_fun prog g of
+        Some gf \<Rightarrow> (case MF_Extern gf of
+                      Some cname \<Rightarrow> [EC_Local f x cname. x \<leftarrow> sc, mangle x = cname]
+                    | None \<Rightarrow> [])
+      | None \<Rightarrow> []), sc)"
+| "stmt_extern_clashes prog f sc _ = ([], sc)"
+
+| "stmts_extern_clashes prog f sc [] = []"
+| "stmts_extern_clashes prog f sc (s # ss) =
+    (let (cs, sc') = stmt_extern_clashes prog f sc s
+     in cs @ stmts_extern_clashes prog f sc' ss)"
+
+definition fun_extern_clashes :: "MProgram \<Rightarrow> MFun \<Rightarrow> MExternClash list" where
+  "fun_extern_clashes prog f =
+    (if MF_Extern f \<noteq> None then []
+     else stmts_extern_clashes prog (MF_Name f) (map fst (MF_Params f)) (MF_Body f))"
+
+(* All the clashes of a program, each reported once. The program may be
+   printed if this is empty. *)
+definition extern_clashes :: "MProgram \<Rightarrow> MExternClash list" where
+  "extern_clashes prog =
+    remdups (global_extern_clashes prog @ concat (map (fun_extern_clashes prog) (MP_Funcs prog)))"
+
+(* The message for a clash. (Core carries no source locations yet, so
+   messages name functions and variables.) *)
+fun extern_clash_message :: "MExternClash \<Rightarrow> string" where
+  "extern_clash_message (EC_Global x cname) =
+    ''the global variable '' @ x @ '' would be printed as '' @ cname
+    @ '', which is the C name of an extern function''"
+| "extern_clash_message (EC_Function f cname) =
+    ''the function '' @ f @ '' would be printed as '' @ cname
+    @ '', which is the C name of an extern function''"
+| "extern_clash_message (EC_Local f x cname) =
+    ''in function '' @ f @ '', the variable '' @ x @ '' would be printed as '' @ cname
+    @ '' and is in scope at a call of the extern function of that C name''"
 
 
 section \<open>Types and literals\<close>

@@ -19,16 +19,17 @@ The theories in this directory:
 | `MiniCSemantics.thy` | states, extern models, pure expression evaluation, the fuelled statement interpreter, `run_program` |
 | `MiniCFuelMono.thy` | fuel monotonicity |
 | `MiniCTyping.thy` | the typing judgement `program_well_typed`, and `expr_type_sound` |
-| `MiniCPrint.thy` | the (unverified) printer to C, `print_program` |
+| `MiniCPrint.thy` | the (unverified) printer to C, `print_program`; the extern C name clash check `extern_clashes` (section 3.9) |
 | `MiniCExample.thy` | the hand-written example programs, their extern models, their evaluation and typing by `eval`, and the list `minic_examples` the driver exports |
 
 They are part of the main `Babylon` session (`isabelle/ROOT`); the separate
 `Babylon_MiniC` session of stage 3a is gone. To iterate on one theory
 without rebuilding the session, use
 `isabelle process -d . -l Babylon -T minic/<Theory>` from `isabelle/`.
-`front_end/CodeExport.thy` exports `print_program` and `minic_examples` to
-Haskell, and the driver `isabelle/Main.hs` prints an example to a `.c` file
-(`Main --minic`, section 11).
+`front_end/CodeExport.thy` exports `print_program`, `extern_clashes` and
+`minic_examples` to Haskell, and the driver `isabelle/Main.hs` checks an
+example for extern name clashes and prints it to a `.c` file (`Main --minic`,
+section 11).
 
 
 ## 1. The MiniC language
@@ -105,8 +106,11 @@ and the interpreter does not:
 - every variable is declared before use; no name is declared twice in one
   scope (the parameters count as declared in the outermost scope of the
   body); no variable (global, parameter or local) has the name of a
-  function, MiniC name or extern C name alike, since C has one namespace
-  for both and the interpreter keeps them apart;
+  function, since C has one namespace for both and the interpreter keeps
+  them apart. Only MiniC names are compared: the C name of an extern
+  function is not a MiniC name, and the clashes it can cause are in terms
+  of the printer's mangled names, so they are the business of a separate
+  check, `extern_clashes` (section 3.9), not of the typing judgement;
 - `expr_type env e` gives the C type of an expression or `None`: the
   operands of a binop are integers of one type (except the count of a
   shift, which may have any integer type), comparisons and `!` yield
@@ -657,6 +661,67 @@ against the map and the module going out of sync but touches every
 construction site of `CoreFunction` in the elaborator and linker.
 Implementation is stage 5 work.
 
+**Name clashes** (decided 2026-10-31). C has one namespace for functions
+and objects, and the generated file contains three kinds of identifier:
+mangled MiniC function and global names, mangled parameter and local names,
+and the C names of externs, printed verbatim. The typing judgement requires
+every variable name to differ from every MiniC function name (section 1.2).
+Nothing in well-typed Core guarantees that: the elaborator's function names
+are qualified (`Mod.name`, with a dot no variable name has), but that is a
+property of the elaborator's output, not of Core, so the generator cannot
+rely on it in a theorem about arbitrary well-typed Core. And the C name of
+an extern is chosen by the programmer, so nothing at all keeps it apart
+from the generator's names.
+
+The principle for this and for every similar gap between pipeline stages:
+no unchecked hypothesis. Where a property of stage N's output is needed by
+stage N+1 and is an invariant of stage N, it is proved. Where it is not
+(it depends on what the user wrote), an executable check between the two
+stages fails the compilation with a message that explains the problem in
+the user's terms (which function, which variable, which C name; Core has
+no source locations yet, so no line numbers), and the theorem about stage
+N+1 is stated for the case where the check passed. The checks are inside
+the executable code, so the correctness theorems acquire no hypotheses
+from them: the generator is a partial function, and the theorems say what
+holds of its output when it produces one. Concretely:
+
+- *Before generating* (stage 5), the generator checks its Core input: the
+  function names are distinct; no parameter, local or global has the name
+  of a function; and no name contains `$`, which the generator's
+  temporaries contain, so that the temporaries are fresh by construction
+  rather than by a proof about a counter. Each failure is a
+  structured error that the driver turns into a message. For elaborator
+  output these checks cannot fail (qualified function names, no `$` in
+  Babylon identifiers); proving that, so that the checks become redundant
+  for the real pipeline, is deferred, and the run-time check stands in for
+  the proof meanwhile.
+- *After generating, before printing*, `extern_clashes` (`MiniCPrint.thy`)
+  checks the MiniC program against the extern C names, which only the
+  printer consumes and which must be compared *after mangling* (a local `z`
+  prints as `zz`; it clashes with an extern named `zz`, not with one named
+  `z`): no global variable and no non-extern function may have a mangled
+  name equal to an extern's C name (both would be declared at file scope),
+  and at a call of an extern, no variable in scope (parameter or local)
+  may have a mangled name equal to the C name being called (the variable
+  would hide the function and C rejects the call). A variable that merely
+  shares an extern's C name, with no call of that extern in its scope,
+  hides it harmlessly and is allowed. Two externs with the same C name are
+  not checked: C accepts the repeated prototype when the types agree and
+  the C compiler reports it when they do not. The result is a list of
+  `MExternClash` values (`EC_Global`, `EC_Function`, `EC_Local`), each
+  naming the function, variable and C name involved, with
+  `extern_clash_message` for the driver; an empty list means the program
+  may be printed. This check is already implemented and run by
+  `Main --minic` (section 11.1); the two examples pass it by `eval`.
+
+This check replaces an earlier arrangement in which the extern C names
+were part of `fun_names` in the typing judgement. That compared them with
+*unmangled* MiniC names, which is the wrong comparison (it rejected local
+`z` against extern `z`, which prints fine, and accepted local `z` against
+extern `zz`, which does not), and it put a printer concern into the
+judgement. Now the judgement is only about the MiniC namespace and
+mangling stays in `MiniCPrint.thy`.
+
 
 ## 4. The representation relation (stage 4 preview)
 
@@ -967,7 +1032,10 @@ size bound of section 3.2, which includes acyclicity of the call graph,
 together with the facts that every closed type of the program has a byte
 size below `2^64` and that the variant tag sizes are as in section 2.3).
 The aliasing condition is written as a `RuntimeError` of the proposed Core
-check (section 3.4), so it is covered by "normal result".
+check (section 3.4), so it is covered by "normal result". The name checks
+of section 3.9 are inside `codegen_module` (it returns `None` when one
+fails) and `extern_clashes` runs on its output in the driver, so neither
+appears as a hypothesis.
 
     theorem codegen_well_typed:
       assumes "core_module_well_typed m"
@@ -1145,8 +1213,10 @@ printing `MS_Uninit`, section 11.2):
 
     isabelle/export/Babylon.CodeExport/code/export1/Main --minic --uninit=MODE NAME NAME-MODE.c NAME.expected
 
-which writes the printed C to `NAME-MODE.c` and the stdout that the MiniC
-interpreter computes for the program (the world of the extern models,
+which first runs `extern_clashes` (section 3.9) on the program, reporting
+each clash on stderr and exiting with status 1 if there are any, and
+otherwise writes the printed C to `NAME-MODE.c` and the stdout that the
+MiniC interpreter computes for the program (the world of the extern models,
 section 11.4) to `NAME.expected`; compiles `NAME-MODE.c` with
 `gcc -std=c99 -Wall -Wextra -pedantic -Werror`, and again with `-std=c11`
 and `-std=c17`, each at `-O0` and `-O2`; links it; runs it; and compares
@@ -1253,7 +1323,10 @@ definitions. Conventions:
   for its own list). Extern functions are printed under their C name
   (`MF_Extern = Some cname`), unmangled, both in the prototype and at each
   call; the prototype has the form of `docs/c-interface.md` because the
-  parameter list of an extern `MFun` already does (section 3.9).
+  parameter list of an extern `MFun` already does (section 3.9). A C name
+  may coincide with a mangled name; `extern_clashes` (section 3.9) finds
+  the cases where that makes the file invalid, and the driver refuses to
+  print a program with any.
 - **Mangling is injective and never reserved** (`mangle_injective`,
   `inj_mangle`, `mangle_not_reserved` in `MiniCPrint.thy`): two distinct
   MiniC names print as distinct C identifiers, and no printed identifier is
@@ -1273,11 +1346,12 @@ definitions. Conventions:
   header (`INT32_MAX`, ...) or with a C library function (`free`, `abort`)
   if the MiniC name is unqualified, which only the hand-written examples
   have (generated functions and globals are qualified `Mod.name`; locals
-  are not, and a local named `abort` would shadow the library function
-  harmlessly unless the same function also calls an extern of that C
-  name). The typing judgement rules out MiniC-level collisions between
-  variables and functions, and this collision is not MiniC-level, so it is
-  outside the theorems.
+  are not, and a local named `abort` shadows the library function
+  harmlessly; if the same function calls an extern of that C name while
+  the local is in scope, `extern_clashes` reports it). The typing
+  judgement rules out MiniC-level collisions between variables and
+  functions, and this collision is not MiniC-level, so it is outside the
+  theorems.
 
 ### 11.3 What the printer relies on
 
@@ -1307,8 +1381,10 @@ append the decimal number and a newline, `print_bool` appends `true` or
 its null terminator (no newline), exactly as `Test.c` writes them. So the
 interpreter's final world *is* the expected stdout, `example_expected`, and
 the driver writes it to `NAME.expected` for a byte-for-byte comparison.
-The `eval` lemma `example_run` checks the interpreter against it, and
-`example_prog_well_typed` checks the typing judgement, both by `eval`.
+The `eval` lemma `example_run` checks the interpreter against it,
+`example_prog_well_typed` checks the typing judgement and
+`example_prog_extern_clashes` checks that no extern C name clashes with a
+mangled name, all by `eval`.
 
 Outcome (gcc 13.3, x86-64 Linux, glibc with `_FORTIFY_SOURCE` on by
 default at `-O2`): both examples, in both `MS_Uninit` printing modes,

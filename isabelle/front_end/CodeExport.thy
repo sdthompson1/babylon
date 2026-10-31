@@ -68,14 +68,17 @@ fun run_compiler :: "(string \<times> string) list \<Rightarrow> CompileResult"
                       else CR_Success))))"
 
 (* Also exported: the MiniC-to-C printer (print_program, with its options:
-   default_print_opts, and the two ways of printing MS_Uninit) and the
-   hand-written MiniC example programs with the stdout the MiniC interpreter
-   computes for them (minic_examples), which the driver (Main.hs, option
-   --minic) prints to a .c file for the C-level check described in
-   minic/DESIGN.md. There is no code generator yet (stage 5), so these are the
-   only MiniC programs. *)
+   default_print_opts, and the two ways of printing MS_Uninit), the check
+   that no extern C name clashes with a mangled name (extern_clashes, with
+   extern_clash_message for reporting), and the hand-written MiniC example
+   programs with the stdout the MiniC interpreter computes for them
+   (minic_examples), which the driver (Main.hs, option --minic) checks and
+   prints to a .c file for the C-level check described in minic/DESIGN.md.
+   There is no code generator yet (stage 5), so these are the only MiniC
+   programs. *)
 export_code run_compiler CR_Success CR_Errors
-  print_program default_print_opts PO_Uninit_update UP_Memset UP_Omit minic_examples
+  print_program default_print_opts PO_Uninit_update UP_Memset UP_Omit
+  extern_clashes extern_clash_message minic_examples
   in Haskell
 
 end

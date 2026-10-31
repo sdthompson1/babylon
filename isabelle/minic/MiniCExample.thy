@@ -263,6 +263,9 @@ lemma example_prog_wf: "program_wf example_prog"
 lemma example_prog_well_typed: "program_well_typed example_prog"
   by eval
 
+lemma example_prog_extern_clashes: "extern_clashes example_prog = []"
+  by eval
+
 
 section \<open>Models of the extern functions\<close>
 
@@ -454,6 +457,9 @@ lemma example_prog_array_wf: "program_wf example_prog_array"
   by eval
 
 lemma example_prog_array_well_typed: "program_well_typed example_prog_array"
+  by eval
+
+lemma example_prog_array_extern_clashes: "extern_clashes example_prog_array = []"
   by eval
 
 (* Array.c's alloc_array: as Test.c's, but n = 0 is outside the precondition

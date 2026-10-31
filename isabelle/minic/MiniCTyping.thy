@@ -72,10 +72,14 @@ definition global_var_ty :: "MGlobal \<Rightarrow> MVarTy" where
 definition globals_env :: "MProgram \<Rightarrow> MTyEnv" where
   "globals_env prog = fmap_of_list (map (\<lambda>(x, g). (x, global_var_ty g)) (MP_Globals prog))"
 
-(* All the names under which a function of the program is visible: its MiniC
-   name and, for an extern, its C name. No variable may be called any of these. *)
+(* The names of the program's functions. No variable may be called any of
+   these: C has one namespace for functions and objects, and the interpreter
+   keeps them apart. The C names of extern functions are not MiniC names and
+   are not considered here; the clashes they can cause are in terms of the
+   printer's mangled names, and are found by extern_clashes in MiniCPrint.thy
+   (DESIGN.md, section 3.9). *)
 definition fun_names :: "MProgram \<Rightarrow> string list" where
-  "fun_names prog = map MF_Name (MP_Funcs prog) @ List.map_filter MF_Extern (MP_Funcs prog)"
+  "fun_names prog = map MF_Name (MP_Funcs prog)"
 
 
 section \<open>Expressions\<close>
