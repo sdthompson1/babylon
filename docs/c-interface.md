@@ -518,6 +518,10 @@ worth considering.)
 
 # Accessing Babylon Constants from C
 
+[Note that this section applies to the `bab` compiler, implemented in C.
+The Isabelle Babylon compiler uses a different scheme for global constants,
+not documented here.]
+
 Programmers might also occasionally wish to access constants declared
 in Babylon modules (via `const` declarations) from C code.
 
