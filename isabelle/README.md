@@ -40,6 +40,14 @@ Alternatively, a module name can be given explicitly by writing an
 argument in the form `Name=filename`, e.g. `A.B.C=dir/C.b`. This is
 needed for modules with dotted names.
 
+`Main` can also print one of the hand-written MiniC programs (the
+target language of the verified code generator, see `minic/DESIGN.md`)
+as C: `./Main --minic example example.c example.expected`
+(`--uninit=omit` after `--minic` prints the `MS_Uninit` statement as
+nothing instead of a `memset` to zero; see `minic/DESIGN.md`, section
+11.2). The script `minic/check_example.sh` compiles and runs the result,
+in both modes, and compares its output with the expected one.
+
 The program runs the front end and elaborator on the given modules. If
 everything succeeds it prints `Success`; otherwise the error messages
 are printed to stderr and the exit code is nonzero.

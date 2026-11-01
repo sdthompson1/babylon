@@ -138,4 +138,12 @@ interface
     extern function free_alloc_test(ref r: MaybeAllocTest)
         requires allocated(r);
         ensures !allocated(r);
+
+
+    // Same as print_string, but declared as returning the unit type {}.
+    // On the C side, unit-returning functions are considered equivalent
+    // to void functions, so in Test.c, this is a void function rather
+    // than a function with an extra "ret" parameter.
+    extern function print_string_unit(s: u8[]): {}
+        requires valid_string(s);
 }

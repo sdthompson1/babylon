@@ -44,15 +44,15 @@ void print_u64(uint64_t i)
     printf("%" PRIu64 "\n", i);
 }
 
-void print_bool(bool b)
+void print_bool(uint8_t b)
 {
     puts(b ? "true" : "false");
 }
 
-void print_string(void *str)
+void print_string(char *descriptor)
 {
     char *data;
-    memcpy(&data, str, sizeof(data));
+    memcpy(&data, descriptor, sizeof(data));
     printf("%s", data);
 }
 
@@ -196,4 +196,12 @@ int32_t c_test_fun()
 void c_function_with_custom_name()
 {
     printf("Hello from c_function_with_custom_name!\n");
+}
+
+// On the Babylon side, this function is declared to return unit ({}),
+// but unit return values are elided by the code generator, so here
+// it appears as a void function, just like print_string itself.
+void print_string_unit(void *str)
+{
+    print_string(str);
 }
