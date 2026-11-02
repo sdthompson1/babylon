@@ -178,6 +178,7 @@ session Babylon = "HOL-Library" +
     "codegen/SizeBound"
     "codegen/MiniCMemoryLemmas"
     "codegen/RepVal"
+    "codegen/RepValPath"
 
     (* front_end *)
     "front_end/BabRenamer"
