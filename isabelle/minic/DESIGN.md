@@ -591,6 +591,13 @@ is:
 The alternative, a hypothesis stated over an instrumented or trace-producing
 Core interpreter, is heavier and is not recommended.
 
+*Status (end of stage 4, session 3):* the check is **not yet implemented**;
+it is the one deliverable of stage 4 still open (`agent-notes/PROGRESS.md`
+has the plan). Until it is, the simulation theorem of section 8 needs the
+aliasing condition as an explicit hypothesis over the run, and
+`extern_rep`'s disjointness of the `ref` regions (section 6.2) is a
+hypothesis the caller must establish.
+
 ### 3.5 Variables, `ref` locals, lazy references
 
 The generator's environment records, for each Core variable in scope, how
@@ -954,36 +961,51 @@ is math-free), `is_well_kinded env ty` (uniform array dims) and
 `hmap 0 = MP_Null`, then `v` is represented by `|ty|` zero bytes, in every
 memory. No size bound is needed.
 
-*The store-level relation* (`StateRep.thy`): see the end of this section
-after it is written; the plan for the per-frame part follows.
-
-`state_rep` relates a Core `InterpState` to a MiniC state (memory, globals,
-locals, world): the worlds are equal; every global is represented in its
-block; every cell of `IS_Store` has a *region* (block, offset) whose bytes
-represent its value; `IS_Locals`/`IS_Refs`/`IS_TyArgs` of the current frame
-map to MiniC variables as in section 3.5 (a `ref` to a pointer variable
-whose value is the region of the cell at the path, or to a lazy term; a type
-parameter to a size variable holding `|T|`); MiniC may have any number of
-extra blocks (temporaries, dead frames' leftovers do not exist, since scopes
-free them).
+*The store-level relation* (`StateRep.thy`). A *region* is a pair (block,
+offset); `cell_rep env enc hmap mem ty v r` says the `|ty|` bytes at the
+region are readable and represent `v`; `cell_reach` is `reach_blocks` of
+those bytes and `cell_owned` is `val_owned` of them plus "the region's own
+block is not among the reachable heap blocks". `store_rep env enc hmap mem
+store storeTyping regions`: one region per cell of `IS_Store`, typed by
+`storeTyping` exactly as `state_matches_env`'s `store_well_typed`;
+`globals_rep ... globals gregion`: every global of `IS_Globals` is
+represented at `gregion g` with its `TE_GlobalVars` type. `state_rep_store
+env enc hmap st storeTyping ms regions gregion root` is their conjunction
+with equal worlds (`IS_World st = MS_World ms`) and the ownership
+conditions below; `regions`, `gregion` and `root` are parameters that the
+per-frame part of stage 6 supplies (the generator's environment knows which
+block each variable lives in), and so are the facts about `IS_Locals`,
+`IS_Refs` and `IS_TyArgs`: a mutable local maps to the region of its block,
+a `ref` to a pointer variable whose value is `loc_ptr` of the cell's region
+and `path_loc` of its path (or to a lazy term), a type parameter to a size
+variable holding `|T|` (section 3.5). MiniC may have any number of extra
+blocks (temporaries; dead frames' leftovers do not exist, since scopes free
+them).
 
 *Ownership.* Because stage 2 makes copying an allocated value a
 `RuntimeError`, a normal Core run never has two *mutable* cells holding the
 same allocated array; dropping one (leaving a scope) is a leak in C and
 harmless to the theorem (the block simply stays live and unreferenced).
-The relation states ownership as: regions of distinct cells are disjoint and
-heap blocks reachable from distinct cells are distinct, *except* that a
-cell created by `bind_const_local` (a by-value parameter, a `Let` variable,
-a `ref` to a read-only base) may share its region and heap blocks with the
-cell it was copied from. Sharing is sound because such a const cell and its
-origin are never written while both are live: a `Let` body is pure; a
-by-value parameter's origin belongs to a suspended caller and (aliasing
-hypothesis) is not reachable through the callee's `ref` parameters; a
-read-only base is never written. The invariant that the simulation
-maintains is therefore "every location writable from the current frame
-(its mutable cells, its `ref` targets, and the heap blocks reachable from
-them) is referenced by no other live cell", which every statement form
-preserves and every call establishes for the callee.
+`store_owned env enc mem store storeTyping regions root` states ownership
+as: every cell is `cell_owned`, and for cells `i ≠ j` with different roots
+the regions are disjoint (`regions_disjoint`, byte ranges in the same block
+do not overlap) and the reachable heap blocks are disjoint. The *root map*
+`root :: nat ⇒ nat` is the exception for sharing: a cell created by
+`bind_const_local` (a by-value parameter, a `Let` variable, a `ref` to a
+read-only base) may share its region and heap blocks with the cell it was
+copied from, and has that cell's root; every other cell is its own root.
+`globals_owned` gives the globals their own blocks (offset 0), distinct
+from each other, from every cell's region and from every reachable heap
+block. Sharing is sound because such a const cell and its origin are never
+written while both are live: a `Let` body is pure; a by-value parameter's
+origin belongs to a suspended caller and (aliasing hypothesis) is not
+reachable through the callee's `ref` parameters; a read-only base is never
+written. The invariant that the simulation maintains is therefore
+`writable_unshared root W n`: every cell in `W` (the set of locations
+writable from the current frame: its mutable cells and its `ref` targets)
+is its own root and no other cell has it as root, which every statement
+form preserves and every call establishes for the callee. Nothing is
+proved about `writable_unshared` in this stage.
 
 A by-value *scalar* parameter is a genuine copy (C passes it by value) and
 needs no exception.
