@@ -10,6 +10,7 @@ session Babylon = "HOL-Library" +
     "interpreter"
     "util"
     "minic"
+    "codegen"
     "front_end"
   theories
     (* Note: every theory is listed explicitly (not just the "leaves"), so that
@@ -169,6 +170,10 @@ session Babylon = "HOL-Library" +
     "minic/MiniCTyping"
     "minic/MiniCPrint"
     "minic/MiniCExample"
+
+    (* codegen: the verified code generator (stages 4 to 6) *)
+    "codegen/CoreLayout"
+    "codegen/DatatypeAcyclic"
 
     (* front_end *)
     "front_end/BabRenamer"
