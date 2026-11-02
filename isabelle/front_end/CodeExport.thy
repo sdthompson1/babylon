@@ -5,6 +5,7 @@ theory CodeExport
     "../core_passes/MatchCompilePass"
     "../minic/MiniCPrint"
     "../minic/MiniCExample"
+    "../codegen/SizeBound"
     "HOL-Library.Code_Binary_Nat"
 
     (* TODO: maybe explore other performance options, e.g. Code_Target_Numeral, or
@@ -29,6 +30,41 @@ datatype CompileResult =
   CR_Success
   | CR_Errors "string list"
 
+(* The pointer size bound P at which the static size check of
+   codegen/SizeBound.thy is run (minic/DESIGN.md, section 3.2): the
+   theorems about the generated code take enc_ptr_size enc <= P as a
+   hypothesis, so the generated code is covered on every target whose
+   pointers are at most this many bytes. This is the only place where the
+   bound is a literal. *)
+definition codegen_ptr_size_bound :: nat where
+  "codegen_ptr_size_bound = 8"
+
+(* The size check's errors in the user's terms. *)
+fun size_error_to_strings :: "SizeError \<Rightarrow> string list" where
+  "size_error_to_strings (SE_DatatypeCycle []) =
+     [''internal compiler error: datatype dependency analysis failed'']"
+| "size_error_to_strings (SE_DatatypeCycle ds) =
+     [''recursive datatypes are not supported: '' @ ShowError.intercalate '', '' (map quote ds)]"
+| "size_error_to_strings (SE_TooManyCtors d) =
+     [''datatype '' @ quote d @ '' has more than 4294967296 constructors'']"
+| "size_error_to_strings (SE_CallCycle []) =
+     [''internal compiler error: call graph analysis failed (a call to an unknown function)'']"
+| "size_error_to_strings (SE_CallCycle fs) =
+     [''recursive functions are not supported: '' @ ShowError.intercalate '', '' (map quote fs)]"
+| "size_error_to_strings (SE_BodyNotTyped f) =
+     [''internal compiler error: the body of function '' @ quote f @ '' does not typecheck'']"
+| "size_error_to_strings (SE_SizeTooLarge f ty bounds) =
+     [''in function '' @ quote f @ '', the type '' @ quote (core_type_to_string ty)
+      @ '' may need more than 18446744073709551615 bytes''
+      @ (if bounds = [] then []
+         else '' (with the type parameters bounded by ''
+              @ ShowError.intercalate '', ''
+                  (map (\<lambda>(v, n). v @ '' <= '' @ nat_to_string n @ '' bytes'') bounds)
+              @ '')'')]"
+| "size_error_to_strings (SE_GlobalTooLarge g ty) =
+     [''the type '' @ quote (core_type_to_string ty) @ '' of the global '' @ quote g
+      @ '' needs more than 18446744073709551615 bytes'']"
+
 (* Main compiler entry point for testing.
 
    The input is a list of (module name, module source text) pairs; the first
@@ -37,14 +73,24 @@ datatype CompileResult =
 
    This runs the front end (lexer, parser, loader, renamer), and then, if that
    succeeds, elaborates all the modules to Core (which includes typechecking
-   them), runs the whole-program link, erases ghost code and compiles the
-   pattern matches to flat ones (match_compile_module).
+   them), runs the whole-program link, erases ghost code, compiles the
+   pattern matches to flat ones (match_compile_module), normalizes the
+   result (normalize_module: the link leaves the abstract types to be
+   substituted later, and the code generator's input is a normalized
+   module), and runs the static checks of the code generator on it
+   (sizeable_check: datatypes and functions are non-recursive, and every
+   size the generated code would compute fits a uint64_t at pointer size
+   codegen_ptr_size_bound; see minic/DESIGN.md, section 3.2).
 
    The link should always succeed on elaborator output, and the hypothesis of the
    match compilation pass (every non-flat match has a variable scrutinee) should
    also always be true, but neither of these facts is proved yet. Therefore, they
    are checked at runtime below, and an internal compiler error is reported if
-   a check fails. *)
+   a check fails. The acyclicity parts of sizeable_check cannot fail on
+   elaborator output either (check_sccs in ElabModule.thy rejects recursion),
+   but that is not proved yet, so they are run too; the size bound is a
+   property of the program, not of elaboration, and genuinely has to be
+   checked. *)
 fun run_compiler :: "(string \<times> string) list \<Rightarrow> CompileResult"
   where
 "run_compiler [] = CR_Errors [''no input modules'']"
@@ -65,7 +111,10 @@ fun run_compiler :: "(string \<times> string) list \<Rightarrow> CompileResult"
                   (let erased = erase_ghost_module linked
                    in if \<not> core_module_match_scrutinees_ok erased
                       then CR_Errors [''internal error: match scrutinee is not a variable'']
-                      else CR_Success))))"
+                      else (case sizeable_check codegen_ptr_size_bound
+                                   (normalize_module (match_compile_module erased)) of
+                              Some err \<Rightarrow> CR_Errors (size_error_to_strings err)
+                            | None \<Rightarrow> CR_Success)))))"
 
 (* Also exported: the MiniC-to-C printer (print_program, with its options:
    default_print_opts, and the two ways of printing MS_Uninit), the check

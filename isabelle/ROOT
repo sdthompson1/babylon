@@ -175,6 +175,9 @@ session Babylon = "HOL-Library" +
     "codegen/CoreLayout"
     "codegen/DatatypeAcyclic"
     "codegen/SizeExpr"
+    "codegen/SizeBound"
+    "codegen/MiniCMemoryLemmas"
+    "codegen/RepVal"
 
     (* front_end *)
     "front_end/BabRenamer"

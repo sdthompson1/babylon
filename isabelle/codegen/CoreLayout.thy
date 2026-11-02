@@ -199,11 +199,22 @@ section \<open>Array dimensions\<close>
 definition dims_all_fixed :: "CoreDimension list \<Rightarrow> bool" where
   "dims_all_fixed dims = list_all (\<lambda>d. dim_category d = DimCat_Fixed) dims"
 
-(* The size of a fixed dimension (0 for a non-fixed one; only used when all
-   dimensions are fixed, where a well-kinded dimension is non-negative). *)
-fun dim_size :: "CoreDimension \<Rightarrow> nat" where
+(* The size of a fixed dimension as an int (0 for a non-fixed one; only used
+   when all dimensions are fixed). A well-kinded dimension is non-negative,
+   but nothing here depends on that: a negative dimension counts as zero
+   elements, as in all_indices. *)
+fun dim_fixed :: "CoreDimension \<Rightarrow> int" where
+  "dim_fixed (CoreDim_Fixed n) = n"
+| "dim_fixed _ = 0"
+
+definition dim_size :: "CoreDimension \<Rightarrow> nat" where
+  "dim_size d = nat (dim_fixed d)"
+
+lemma dim_size_simps [simp]:
   "dim_size (CoreDim_Fixed n) = nat n"
-| "dim_size _ = 0"
+  "dim_size CoreDim_Unknown = 0"
+  "dim_size CoreDim_Allocatable = 0"
+  by (simp_all add: dim_size_def)
 
 (* The number of elements of a fixed array. *)
 definition dims_count :: "CoreDimension list \<Rightarrow> nat" where
@@ -211,7 +222,7 @@ definition dims_count :: "CoreDimension list \<Rightarrow> nat" where
 
 (* The sizes of a fixed array, as the int list that CV_Array carries. *)
 definition dims_sizes :: "CoreDimension list \<Rightarrow> int list" where
-  "dims_sizes dims = map (int \<circ> dim_size) dims"
+  "dims_sizes dims = map dim_fixed dims"
 
 lemma length_dims_sizes [simp]: "length (dims_sizes dims) = length dims"
   by (simp add: dims_sizes_def)
@@ -222,7 +233,7 @@ definition sizes_count :: "int list \<Rightarrow> nat" where
   "sizes_count sizes = prod_list (map nat sizes)"
 
 lemma sizes_count_dims_sizes [simp]: "sizes_count (dims_sizes dims) = dims_count dims"
-  by (simp add: sizes_count_def dims_sizes_def dims_count_def comp_def)
+  by (simp add: sizes_count_def dims_sizes_def dims_count_def dim_size_def[abs_def] comp_def)
 
 (* The flat (Fortran-order) index of a multi-dimensional index: the first
    index varies fastest.  flat_index [n1, n2, n3] [i1, i2, i3]
