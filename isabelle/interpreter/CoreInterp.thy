@@ -1223,6 +1223,148 @@ next
 qed
 
 (* ========================================================================== *)
+(* Argument aliasing (minic/DESIGN.md, section 3.4)                           *)
+(* ========================================================================== *)
+
+(* The lvalue an argument term denotes, for the aliasing check only: like
+   interp_writable_lvalue, but a const local is accepted as the base (a
+   by-value argument may be a const local that a ref argument aliases), and
+   the index terms are evaluated by the given evaluator (the interpreter
+   passes interp_term_list, partially applied, through the congruence rule
+   below, exactly as it passes interp_statement_list to call_body). A global
+   has no store address and is not an lvalue here: a ref argument can never
+   target a global, so a global cannot alias one. Any other term is not an
+   lvalue (TypeError), and takes no part in the check. *)
+fun lvalue_of_term :: "('w InterpState \<Rightarrow> CoreTerm list \<Rightarrow> InterpError + CoreValue list)
+                       \<Rightarrow> 'w InterpState \<Rightarrow> CoreTerm \<Rightarrow> InterpError + nat \<times> LValuePath list" where
+  "lvalue_of_term ev state (CoreTm_Var varName) =
+    (case fmlookup (IS_Locals state) varName of
+       Some addr \<Rightarrow> Inr (addr, [])
+     | None \<Rightarrow> (case fmlookup (IS_Refs state) varName of
+                  Some (addr, path) \<Rightarrow> Inr (addr, path)
+                | None \<Rightarrow> Inl TypeError))"
+| "lvalue_of_term ev state (CoreTm_RecordProj tm fldName) =
+    (case lvalue_of_term ev state tm of
+       Inr (addr, path) \<Rightarrow> Inr (addr, path @ [LVPath_RecordProj fldName])
+     | Inl err \<Rightarrow> Inl err)"
+| "lvalue_of_term ev state (CoreTm_VariantProj tm ctorName) =
+    (case lvalue_of_term ev state tm of
+       Inr (addr, path) \<Rightarrow> Inr (addr, path @ [LVPath_VariantProj ctorName])
+     | Inl err \<Rightarrow> Inl err)"
+| "lvalue_of_term ev state (CoreTm_ArrayProj tm indexTms) =
+    (case lvalue_of_term ev state tm of
+       Inr (addr, path) \<Rightarrow>
+         (case ev state indexTms of
+            Inr indexVals \<Rightarrow>
+              (case interpret_index_vals indexVals of
+                 Inr indices \<Rightarrow> Inr (addr, path @ [LVPath_ArrayProj indices])
+               | Inl err \<Rightarrow> Inl err)
+          | Inl err \<Rightarrow> Inl err)
+     | Inl err \<Rightarrow> Inl err)"
+| "lvalue_of_term ev state (CoreTm_Cast targetTy tm) =
+    (case targetTy of
+       CoreTy_Array _ dims \<Rightarrow>
+         (case lvalue_of_term ev state tm of
+            Inr (addr, path) \<Rightarrow> Inr (addr, path @ [LVPath_ArrayCast dims])
+          | Inl err \<Rightarrow> Inl err)
+     | _ \<Rightarrow> Inl TypeError)"
+| "lvalue_of_term ev state _ = Inl TypeError"
+
+(* The evaluator is only applied to the index lists of the term. *)
+lemma lvalue_of_term_cong [fundef_cong]:
+  assumes "state = state'" and "tm = tm'"
+    and "\<And>tms. ev state' tms = ev' state' tms"
+  shows "lvalue_of_term ev state tm = lvalue_of_term ev' state' tm'"
+  unfolding assms(1,2) using assms(3)
+  by (induction tm' rule: lvalue_of_term.induct) (simp_all split: sum.splits CoreType.splits)
+
+(* The array casts of a path are irrelevant for aliasing (the verifier's
+   reverse_ref_chain_and_remove_casts). *)
+definition strip_casts :: "LValuePath list \<Rightarrow> LValuePath list" where
+  "strip_casts = filter (\<lambda>s. case s of LVPath_ArrayCast _ \<Rightarrow> False | _ \<Rightarrow> True)"
+
+definition path_prefix :: "LValuePath list \<Rightarrow> LValuePath list \<Rightarrow> bool" where
+  "path_prefix p q = (take (length p) q = p)"
+
+(* Two lvalues alias if they have the same address and one path is a prefix
+   of the other, ignoring casts (verify_aliasing_for_args in
+   src/verifier_terms.c: the chains may alias iff they agree step by step as
+   far as both go, the indices of array steps compared as values). *)
+definition lvalues_alias :: "nat \<times> LValuePath list \<Rightarrow> nat \<times> LValuePath list \<Rightarrow> bool" where
+  "lvalues_alias l1 l2 =
+    (fst l1 = fst l2
+     \<and> (path_prefix (strip_casts (snd l1)) (strip_casts (snd l2))
+        \<or> path_prefix (strip_casts (snd l2)) (strip_casts (snd l1))))"
+
+(* Arguments i and j, at least one of them bound by ref, resolve to aliasing
+   lvalues (a non-lvalue argument, Inl, aliases nothing). *)
+definition pair_alias :: "(string \<times> VarOrRef) list \<Rightarrow> (InterpError + nat \<times> LValuePath list) list \<Rightarrow> nat \<Rightarrow> nat \<Rightarrow> bool" where
+  "pair_alias args lvs i j =
+    (i \<noteq> j \<and> (snd (args ! i) = Ref \<or> snd (args ! j) = Ref)
+     \<and> (case (lvs ! i, lvs ! j) of (Inr l1, Inr l2) \<Rightarrow> lvalues_alias l1 l2 | _ \<Rightarrow> False))"
+
+lemma pair_alias_iff:
+  "pair_alias args lvs i j \<longleftrightarrow>
+   (i \<noteq> j \<and> (snd (args ! i) = Ref \<or> snd (args ! j) = Ref)
+    \<and> (\<exists>l1 l2. lvs ! i = Inr l1 \<and> lvs ! j = Inr l2 \<and> lvalues_alias l1 l2))"
+  unfolding pair_alias_def by (cases "lvs ! i"; cases "lvs ! j") auto
+
+(* Some pair of arguments aliases. *)
+definition args_alias :: "(string \<times> VarOrRef) list \<Rightarrow> (InterpError + nat \<times> LValuePath list) list \<Rightarrow> bool" where
+  "args_alias args lvs = list_ex (\<lambda>i. list_ex (pair_alias args lvs i) [0..<length args]) [0..<length args]"
+
+lemma args_alias_iff:
+  "args_alias args lvs \<longleftrightarrow> (\<exists>i j. i < length args \<and> j < length args \<and> pair_alias args lvs i j)"
+  unfolding args_alias_def list_ex_iff set_upt Bex_def atLeastLessThan_iff by blast
+
+(* The check a call performs on its arguments: resolve every argument as an
+   lvalue; if that runs out of fuel the call does (so that the result is
+   monotone in the fuel); otherwise RuntimeError if two arguments alias. *)
+definition call_args_alias :: "('w InterpState \<Rightarrow> CoreTerm list \<Rightarrow> InterpError + CoreValue list)
+                               \<Rightarrow> 'w InterpState \<Rightarrow> (string \<times> VarOrRef) list \<Rightarrow> CoreTerm list \<Rightarrow> InterpError option" where
+  "call_args_alias ev state args argTms =
+    (let lvs = map (lvalue_of_term ev state) argTms
+     in if list_ex (\<lambda>r. r = Inl InsufficientFuel) lvs then Some InsufficientFuel
+        else if args_alias args lvs then Some RuntimeError
+        else None)"
+
+lemma call_args_alias_cong [fundef_cong]:
+  assumes "state = state'" and "args = args'" and "argTms = argTms'"
+    and "\<And>tms. ev state' tms = ev' state' tms"
+  shows "call_args_alias ev state args argTms = call_args_alias ev' state' args' argTms'"
+proof -
+  have eq: "map (lvalue_of_term ev state') argTms' = map (lvalue_of_term ev' state') argTms'"
+    by (rule map_cong[OF refl])
+       (rule lvalue_of_term_cong[where ev = ev and ev' = ev' and state = state' and state' = state', OF refl refl assms(4)])
+  show ?thesis unfolding call_args_alias_def assms(1-3) eq ..
+qed
+
+lemma lvalues_alias_sym: "lvalues_alias l1 l2 = lvalues_alias l2 l1"
+  by (auto simp: lvalues_alias_def)
+
+(* Dropping arguments (and their lvalues) can only remove aliasing pairs:
+   the erased call of EraseGhostSimulation has a subset of the pairs. *)
+lemma args_alias_sublist:
+  assumes "\<And>k. k < length sel \<Longrightarrow> sel ! k < length args"
+    and "distinct sel"
+    and "length args' = length sel" and "length lvs' = length sel"
+    and "\<And>k. k < length sel \<Longrightarrow> args' ! k = args ! (sel ! k) \<and> lvs' ! k = lvs ! (sel ! k)"
+    and "\<not> args_alias args lvs"
+  shows "\<not> args_alias args' lvs'"
+proof
+  assume "args_alias args' lvs'"
+  then obtain i j where ij: "i < length args'" "j < length args'" and pa: "pair_alias args' lvs' i j"
+    unfolding args_alias_iff by blast
+  have ne: "sel ! i \<noteq> sel ! j" using assms(2,3) ij pa by (simp add: distinct_conv_nth pair_alias_def)
+  have "pair_alias args lvs (sel ! i) (sel ! j)"
+    using pa assms(5)[of i] assms(5)[of j] ij assms(3) ne unfolding pair_alias_def by simp
+  hence "args_alias args lvs"
+    unfolding args_alias_iff using assms(1)[of i] assms(1)[of j] ij assms(3) by auto
+  with assms(6) show False ..
+qed
+
+
+(* ========================================================================== *)
 (* The main intepreter definitions *)
 (* ========================================================================== *)
 

@@ -591,12 +591,21 @@ is:
 The alternative, a hypothesis stated over an instrumented or trace-producing
 Core interpreter, is heavier and is not recommended.
 
-*Status (end of stage 4, session 3):* the check is **not yet implemented**;
-it is the one deliverable of stage 4 still open (`agent-notes/PROGRESS.md`
-has the plan). Until it is, the simulation theorem of section 8 needs the
-aliasing condition as an explicit hypothesis over the run, and
-`extern_rep`'s disjointness of the `ref` regions (section 6.2) is a
-hypothesis the caller must establish.
+*Status (end of stage 4, session 3):* the check is defined but **not yet
+wired into `interp_function_call`**; it is the one deliverable of stage 4
+still open (`agent-notes/PROGRESS.md` has the plan). `CoreInterp.thy` has
+`lvalue_of_term` (the lvalue an argument term denotes, const locals
+included, with the index evaluator passed in through a congruence rule so
+that the mutual recursion of the interpreter is untouched),
+`lvalues_alias` (same address, one cast-stripped path a prefix of the
+other), `args_alias` over the argument pairs with at least one `ref`, and
+`call_args_alias`, which the call will run after binding its arguments:
+`InsufficientFuel` if a resolution ran out of fuel (so that the result
+stays monotone in the fuel), `RuntimeError` if two arguments alias. Until
+it is wired in, the simulation theorem of section 8 needs the aliasing
+condition as an explicit hypothesis over the run, and `extern_rep`'s
+disjointness of the `ref` regions (section 6.2) is a hypothesis the caller
+must establish.
 
 ### 3.5 Variables, `ref` locals, lazy references
 
