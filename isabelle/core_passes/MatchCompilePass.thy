@@ -96,10 +96,24 @@ lemma compile_match_tree_eq_compile_match:
   by (simp add: compile_match_tree_def compile_match_def)
 
 (* A term match with non-flat arms (whose bodies have already been
-   compiled). *)
+   compiled). When the tree is a single leaf (the first arm is a wildcard, so
+   the match always takes it), the arm body is wrapped in a match with one
+   wildcard arm, as compile_match_statement does below, so that a term that
+   is not an lvalue never compiles to an lvalue: the aliasing check of a call
+   (call_args_alias in CoreInterp) resolves the by-value arguments that are
+   lvalues, and `f(ref a, match x { case _ => a; ... })` must not compile to
+   `f(ref a, a)`, which that check rejects. *)
 definition compile_match_term ::
     "CoreTerm \<Rightarrow> (CorePattern \<times> CoreTerm) list \<Rightarrow> CoreTerm" where
-  "compile_match_term scrut arms = match_tree_to_term (compile_match_tree scrut arms)"
+  "compile_match_term scrut arms =
+    (case compile_match_tree scrut arms of
+       MT_Leaf body \<Rightarrow> CoreTm_Match scrut [(CorePat_Wildcard, body)]
+     | t \<Rightarrow> match_tree_to_term t)"
+
+(* The compiled term is always a match. *)
+lemma compile_match_term_is_Match:
+  "\<exists>sc a. compile_match_term scrut arms = CoreTm_Match sc a"
+  unfolding compile_match_term_def by (cases "compile_match_tree scrut arms") auto
 
 (* A statement match with non-flat arms. When the tree is a single leaf (the
    first arm is a wildcard, so the match always takes it), the arm body is
@@ -152,11 +166,9 @@ fun match_compile_term :: "CoreTerm \<Rightarrow> CoreTerm" where
 | "match_compile_term (CoreTm_Allocated ty tm) = CoreTm_Allocated ty (match_compile_term tm)"
 | "match_compile_term (CoreTm_Default ty) = CoreTm_Default ty"
 
-(* The pass keeps the shape of an lvalue. (A match that compiles to a single
-   leaf becomes its arm body, which may be an lvalue, so a term that is not an
-   lvalue may become one; the typing rules only ever require a term to be an
-   lvalue, never require it not to be, except for Sizeof, where the compiled
-   term is then accepted on the same terms as before.) *)
+(* The pass keeps the shape of an lvalue, and (since a compiled match is
+   always a match, compile_match_term_is_Match) a term that is not an lvalue
+   stays one that is not. *)
 lemma lvalue_base_name_match_compile_term [simp]:
   "is_lvalue tm \<Longrightarrow> lvalue_base_name (match_compile_term tm) = lvalue_base_name tm"
   by (induction tm) (auto simp: is_lvalue_def split: if_splits)

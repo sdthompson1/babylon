@@ -246,6 +246,31 @@ proof -
 qed
 
 
+(* For the aliasing check of a call (lvalue_of_term): erasure keeps a
+   non-lvalue a non-lvalue, and a non-ghost local has related bindings in the
+   two states, as rel_option facts. *)
+lemma lvalue_of_term_erase_not_shape:
+  "\<not> lvalue_shape t \<Longrightarrow> lvalue_of_term ev s (erase_ghost_term funs t) = Inl TypeError"
+  by (cases t) simp_all
+
+lemma locals_erased_rel_option:
+  assumes le: "locals_erased env emb full erased"
+    and ng: "\<not> tyenv_var_ghost env x"
+  shows "rel_option (\<lambda>a i. i < length emb \<and> emb ! i = a)
+                    (fmlookup (IS_Locals full) x) (fmlookup (IS_Locals erased) x)"
+    and "rel_option (\<lambda>(a, p) (i, p'). (i < length emb \<and> emb ! i = a) \<and> p = p')
+                    (fmlookup (IS_Refs full) x) (fmlookup (IS_Refs erased) x)"
+proof -
+  note L = locals_erased_lookup[OF le ng]
+  show "rel_option (\<lambda>a i. i < length emb \<and> emb ! i = a)
+                   (fmlookup (IS_Locals full) x) (fmlookup (IS_Locals erased) x)"
+    by (cases "fmlookup (IS_Locals full) x") (use L(1,2) in auto)
+  show "rel_option (\<lambda>(a, p) (i, p'). (i < length emb \<and> emb ! i = a) \<and> p = p')
+                   (fmlookup (IS_Refs full) x) (fmlookup (IS_Refs erased) x)"
+    by (cases "fmlookup (IS_Refs full) x") (use L(3,4) in auto)
+qed
+
+
 (* ========================================================================== *)
 (* Three kinds of step that a single state can take *)
 (* ========================================================================== *)

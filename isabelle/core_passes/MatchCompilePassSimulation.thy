@@ -180,7 +180,7 @@ next
   qed
 
   have call: "call_sim (Suc fuel) fnName tyArgs argTms" for fnName tyArgs argTms
-    by (rule sim_call[OF IH_tm IH_lv IH_stmts])
+    by (rule sim_call[OF IH_tm IH_tms IH_lv IH_stmts])
 
   show ?case using tm tms lv st sts call by blast
 qed

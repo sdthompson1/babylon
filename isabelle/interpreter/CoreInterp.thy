@@ -1296,18 +1296,39 @@ definition lvalues_alias :: "nat \<times> LValuePath list \<Rightarrow> nat \<ti
      \<and> (path_prefix (strip_casts (snd l1)) (strip_casts (snd l2))
         \<or> path_prefix (strip_casts (snd l2)) (strip_casts (snd l1))))"
 
+(* The terms that lvalue_of_term resolves structurally (any other term is
+   not an lvalue). *)
+fun lvalue_shape :: "CoreTerm \<Rightarrow> bool" where
+  "lvalue_shape (CoreTm_Var _) = True"
+| "lvalue_shape (CoreTm_RecordProj _ _) = True"
+| "lvalue_shape (CoreTm_VariantProj _ _) = True"
+| "lvalue_shape (CoreTm_ArrayProj _ _) = True"
+| "lvalue_shape (CoreTm_Cast _ _) = True"
+| "lvalue_shape _ = False"
+
+lemma lvalue_of_term_not_shape:
+  "\<not> lvalue_shape tm \<Longrightarrow> lvalue_of_term ev state tm = Inl TypeError"
+  by (cases tm) simp_all
+
+(* Two resolution results alias: both are lvalues, and they alias. *)
+definition res_alias :: "(InterpError + nat \<times> LValuePath list) \<Rightarrow> (InterpError + nat \<times> LValuePath list) \<Rightarrow> bool" where
+  "res_alias r1 r2 = (case (r1, r2) of (Inr l1, Inr l2) \<Rightarrow> lvalues_alias l1 l2 | _ \<Rightarrow> False)"
+
+lemma res_alias_iff:
+  "res_alias r1 r2 \<longleftrightarrow> (\<exists>l1 l2. r1 = Inr l1 \<and> r2 = Inr l2 \<and> lvalues_alias l1 l2)"
+  unfolding res_alias_def by (cases r1; cases r2) auto
+
 (* Arguments i and j, at least one of them bound by ref, resolve to aliasing
    lvalues (a non-lvalue argument, Inl, aliases nothing). *)
 definition pair_alias :: "(string \<times> VarOrRef) list \<Rightarrow> (InterpError + nat \<times> LValuePath list) list \<Rightarrow> nat \<Rightarrow> nat \<Rightarrow> bool" where
   "pair_alias args lvs i j =
-    (i \<noteq> j \<and> (snd (args ! i) = Ref \<or> snd (args ! j) = Ref)
-     \<and> (case (lvs ! i, lvs ! j) of (Inr l1, Inr l2) \<Rightarrow> lvalues_alias l1 l2 | _ \<Rightarrow> False))"
+    (i \<noteq> j \<and> (snd (args ! i) = Ref \<or> snd (args ! j) = Ref) \<and> res_alias (lvs ! i) (lvs ! j))"
 
 lemma pair_alias_iff:
   "pair_alias args lvs i j \<longleftrightarrow>
    (i \<noteq> j \<and> (snd (args ! i) = Ref \<or> snd (args ! j) = Ref)
     \<and> (\<exists>l1 l2. lvs ! i = Inr l1 \<and> lvs ! j = Inr l2 \<and> lvalues_alias l1 l2))"
-  unfolding pair_alias_def by (cases "lvs ! i"; cases "lvs ! j") auto
+  unfolding pair_alias_def res_alias_iff ..
 
 (* Some pair of arguments aliases. *)
 definition args_alias :: "(string \<times> VarOrRef) list \<Rightarrow> (InterpError + nat \<times> LValuePath list) list \<Rightarrow> bool" where
@@ -1342,25 +1363,171 @@ qed
 lemma lvalues_alias_sym: "lvalues_alias l1 l2 = lvalues_alias l2 l1"
   by (auto simp: lvalues_alias_def)
 
-(* Dropping arguments (and their lvalues) can only remove aliasing pairs:
-   the erased call of EraseGhostSimulation has a subset of the pairs. *)
-lemma args_alias_sublist:
-  assumes "\<And>k. k < length sel \<Longrightarrow> sel ! k < length args"
-    and "distinct sel"
-    and "length args' = length sel" and "length lvs' = length sel"
-    and "\<And>k. k < length sel \<Longrightarrow> args' ! k = args ! (sel ! k) \<and> lvs' ! k = lvs ! (sel ! k)"
-    and "\<not> args_alias args lvs"
+(* The check does not look at the evaluator beyond the index lists it
+   evaluates: evaluators that agree wherever the first has enough fuel give
+   the same resolutions and the same check, provided the first did not run
+   out of fuel (fuel and depth monotonicity). *)
+lemma lvalue_of_term_agree:
+  assumes agree: "\<And>tms. ev state tms \<noteq> Inl InsufficientFuel \<Longrightarrow> ev' state tms = ev state tms"
+    and nf: "lvalue_of_term ev state tm \<noteq> Inl InsufficientFuel"
+  shows "lvalue_of_term ev' state tm = lvalue_of_term ev state tm"
+  using nf
+proof (induction tm)
+  case (CoreTm_RecordProj t f)
+  thus ?case by (auto split: sum.splits)
+next
+  case (CoreTm_VariantProj t c)
+  thus ?case by (auto split: sum.splits)
+next
+  case (CoreTm_ArrayProj t idx)
+  have nf_t: "lvalue_of_term ev state t \<noteq> Inl InsufficientFuel"
+    using CoreTm_ArrayProj.prems by (auto split: sum.splits)
+  note IH = CoreTm_ArrayProj.IH(1)[OF nf_t]
+  show ?case
+  proof (cases "lvalue_of_term ev state t")
+    case (Inl err)
+    thus ?thesis using IH by simp
+  next
+    case (Inr l)
+    have "ev state idx \<noteq> Inl InsufficientFuel"
+      using CoreTm_ArrayProj.prems Inr by (auto split: sum.splits)
+    from agree[OF this] show ?thesis using IH Inr by simp
+  qed
+next
+  case (CoreTm_Cast ty t)
+  thus ?case by (cases ty) (auto split: sum.splits)
+qed simp_all
+
+lemma call_args_alias_agree:
+  assumes agree: "\<And>tms. ev state tms \<noteq> Inl InsufficientFuel \<Longrightarrow> ev' state tms = ev state tms"
+    and nf: "call_args_alias ev state args argTms \<noteq> Some InsufficientFuel"
+  shows "call_args_alias ev' state args argTms = call_args_alias ev state args argTms"
+proof -
+  have "\<not> list_ex (\<lambda>r. r = Inl InsufficientFuel) (map (lvalue_of_term ev state) argTms)"
+    using nf unfolding call_args_alias_def Let_def by (auto split: if_splits)
+  hence "\<And>tm. tm \<in> set argTms \<Longrightarrow> lvalue_of_term ev state tm \<noteq> Inl InsufficientFuel"
+    by (auto simp: list_ex_iff image_iff)
+  hence mapeq: "map (lvalue_of_term ev' state) argTms = map (lvalue_of_term ev state) argTms"
+    by (intro map_cong refl lvalue_of_term_agree[of ev state ev', OF agree])
+  show ?thesis unfolding call_args_alias_def Let_def mapeq ..
+qed
+
+(* The check only ever fails with InsufficientFuel or RuntimeError (type
+   soundness). *)
+lemma call_args_alias_Some_sound:
+  "call_args_alias ev state args argTms = Some err \<Longrightarrow> err = InsufficientFuel \<or> err = RuntimeError"
+  unfolding call_args_alias_def Let_def by (auto split: if_splits)
+
+lemma call_args_alias_NoneD:
+  assumes "call_args_alias ev state args argTms = None"
+  shows "\<And>tm. tm \<in> set argTms \<Longrightarrow> lvalue_of_term ev state tm \<noteq> Inl InsufficientFuel"
+    and "\<not> args_alias args (map (lvalue_of_term ev state) argTms)"
+  using assms unfolding call_args_alias_def Let_def
+  by (auto simp: list_ex_iff image_iff split: if_splits)
+
+lemma call_args_alias_NoneI:
+  assumes "\<And>tm. tm \<in> set argTms \<Longrightarrow> lvalue_of_term ev state tm \<noteq> Inl InsufficientFuel"
+    and "\<not> args_alias args (map (lvalue_of_term ev state) argTms)"
+  shows "call_args_alias ev state args argTms = None"
+proof -
+  have "\<not> list_ex (\<lambda>r. r = Inl InsufficientFuel) (map (lvalue_of_term ev state) argTms)"
+  proof
+    assume "list_ex (\<lambda>r. r = Inl InsufficientFuel) (map (lvalue_of_term ev state) argTms)"
+    then obtain tm where "tm \<in> set argTms" and "lvalue_of_term ev state tm = Inl InsufficientFuel"
+      unfolding list_ex_iff by auto
+    with assms(1) show False by blast
+  qed
+  with assms(2) show ?thesis unfolding call_args_alias_def Let_def by simp
+qed
+
+(* Selecting arguments (and their lvalues) can only remove aliasing pairs:
+   the erased call of EraseGhostSimulation has a subset of the pairs of the
+   full call, and the compiled call of MatchCompilePassSimCall the same pairs.
+   The lvalues of the selected arguments need not be equal to the originals,
+   only alias no more than they do (the erased state has other addresses). *)
+lemma args_alias_sublist_rel:
+  assumes sel_lt: "\<And>k. k < length sel \<Longrightarrow> sel ! k < length args"
+    and dist: "distinct sel"
+    and len1: "length args' = length sel"
+    and flags: "\<And>k. k < length sel \<Longrightarrow> snd (args' ! k) = snd (args ! (sel ! k))"
+    and rel: "\<And>k k'. k < length sel \<Longrightarrow> k' < length sel \<Longrightarrow> res_alias (lvs' ! k) (lvs' ! k')
+               \<Longrightarrow> res_alias (lvs ! (sel ! k)) (lvs ! (sel ! k'))"
+    and no: "\<not> args_alias args lvs"
   shows "\<not> args_alias args' lvs'"
 proof
   assume "args_alias args' lvs'"
   then obtain i j where ij: "i < length args'" "j < length args'" and pa: "pair_alias args' lvs' i j"
     unfolding args_alias_iff by blast
-  have ne: "sel ! i \<noteq> sel ! j" using assms(2,3) ij pa by (simp add: distinct_conv_nth pair_alias_def)
+  from pa have ne: "i \<noteq> j" and ref: "snd (args' ! i) = Ref \<or> snd (args' ! j) = Ref"
+    and ra: "res_alias (lvs' ! i) (lvs' ! j)"
+    unfolding pair_alias_def by simp_all
+  have ne': "sel ! i \<noteq> sel ! j" using dist ne ij len1 by (simp add: distinct_conv_nth)
   have "pair_alias args lvs (sel ! i) (sel ! j)"
-    using pa assms(5)[of i] assms(5)[of j] ij assms(3) ne unfolding pair_alias_def by simp
-  hence "args_alias args lvs"
-    unfolding args_alias_iff using assms(1)[of i] assms(1)[of j] ij assms(3) by auto
-  with assms(6) show False ..
+    unfolding pair_alias_def using ne' ref flags[of i] flags[of j] rel[OF _ _ ra] ij len1 by simp
+  hence "args_alias args lvs" unfolding args_alias_iff using sel_lt[of i] sel_lt[of j] ij len1 by auto
+  with no show False ..
+qed
+
+lemma call_args_alias_None_rel:
+  assumes none: "call_args_alias ev state args argTms = None"
+    and lenA: "length argTms = length args"
+    and sel_lt: "\<And>k. k < length sel \<Longrightarrow> sel ! k < length args"
+    and dist: "distinct sel"
+    and len1: "length args' = length sel" and len2: "length argTms' = length sel"
+    and flags: "\<And>k. k < length sel \<Longrightarrow> snd (args' ! k) = snd (args ! (sel ! k))"
+    and nf: "\<And>k. k < length sel \<Longrightarrow> lvalue_of_term ev' state' (argTms' ! k) \<noteq> Inl InsufficientFuel"
+    and rel: "\<And>k k'. k < length sel \<Longrightarrow> k' < length sel \<Longrightarrow>
+               res_alias (lvalue_of_term ev' state' (argTms' ! k)) (lvalue_of_term ev' state' (argTms' ! k'))
+               \<Longrightarrow> res_alias (lvalue_of_term ev state (argTms ! (sel ! k))) (lvalue_of_term ev state (argTms ! (sel ! k')))"
+  shows "call_args_alias ev' state' args' argTms' = None"
+proof (rule call_args_alias_NoneI)
+  fix tm assume "tm \<in> set argTms'"
+  then obtain k where "k < length argTms'" "tm = argTms' ! k" by (auto simp: in_set_conv_nth)
+  thus "lvalue_of_term ev' state' tm \<noteq> Inl InsufficientFuel" using nf len2 by simp
+next
+  show "\<not> args_alias args' (map (lvalue_of_term ev' state') argTms')"
+  proof (rule args_alias_sublist_rel[OF sel_lt dist len1 flags _ call_args_alias_NoneD(2)[OF none]])
+    fix k k' assume k: "k < length sel" and k': "k' < length sel"
+      and ra: "res_alias (map (lvalue_of_term ev' state') argTms' ! k)
+                         (map (lvalue_of_term ev' state') argTms' ! k')"
+    have "res_alias (lvalue_of_term ev' state' (argTms' ! k)) (lvalue_of_term ev' state' (argTms' ! k'))"
+      using ra k k' len2 by simp
+    from rel[OF k k' this]
+    show "res_alias (map (lvalue_of_term ev state) argTms ! (sel ! k))
+                    (map (lvalue_of_term ev state) argTms ! (sel ! k'))"
+      using sel_lt[OF k] sel_lt[OF k'] lenA by simp
+  qed
+qed
+
+(* The same, for a call with the same parameters and transformed arguments. *)
+lemma call_args_alias_None_map:
+  assumes none: "call_args_alias ev state args argTms = None"
+    and lenA: "length argTms = length args"
+    and len2: "length argTms' = length args"
+    and nf: "\<And>k. k < length args \<Longrightarrow> lvalue_of_term ev' state' (argTms' ! k) \<noteq> Inl InsufficientFuel"
+    and rel: "\<And>k k'. k < length args \<Longrightarrow> k' < length args \<Longrightarrow>
+               res_alias (lvalue_of_term ev' state' (argTms' ! k)) (lvalue_of_term ev' state' (argTms' ! k'))
+               \<Longrightarrow> res_alias (lvalue_of_term ev state (argTms ! k)) (lvalue_of_term ev state (argTms ! k'))"
+  shows "call_args_alias ev' state' args argTms' = None"
+proof (rule call_args_alias_None_rel[where sel = "[0..<length args]", OF none lenA])
+  fix k assume "k < length [0..<length args]"
+  thus "[0..<length args] ! k < length args" by simp
+next
+  show "distinct [0..<length args]" by simp
+  show "length args = length [0..<length args]" by simp
+  show "length argTms' = length [0..<length args]" using len2 by simp
+next
+  fix k assume "k < length [0..<length args]"
+  thus "snd (args ! k) = snd (args ! ([0..<length args] ! k))" by simp
+next
+  fix k assume "k < length [0..<length args]"
+  thus "lvalue_of_term ev' state' (argTms' ! k) \<noteq> Inl InsufficientFuel" using nf by simp
+next
+  fix k k' assume "k < length [0..<length args]" "k' < length [0..<length args]"
+    and "res_alias (lvalue_of_term ev' state' (argTms' ! k)) (lvalue_of_term ev' state' (argTms' ! k'))"
+  thus "res_alias (lvalue_of_term ev state (argTms ! ([0..<length args] ! k)))
+                  (lvalue_of_term ev state (argTms ! ([0..<length args] ! k')))"
+    using rel by simp
 qed
 
 
@@ -1837,12 +2004,18 @@ where
               (case fold process_one_arg argTuples (Inr clearedState) of
                 Inl err \<Rightarrow> Inl err
               | Inr preCallState \<Rightarrow>
+                  \<comment> \<open>The arguments must not alias (minic/DESIGN.md section 3.4): a
+                      RuntimeError if two of them, at least one bound by ref, denote
+                      overlapping lvalues.\<close>
+                  (case call_args_alias (interp_term_list d fuel) state (IF_Args f) argTms of
+                    Some err \<Rightarrow> Inl err
+                  | None \<Rightarrow>
                   \<comment> \<open>Now delegate to 'checked_call' to run the pre- and post-condition checks,
                      and 'call_body' to run the function itself.\<close>
                   checked_call (interp_term_list d fuel) f refResults valResults
                     calleeTyArgs clearedState
                     (call_body (interp_statement_list d fuel) state f refResults valResults
-                       preCallState)))
+                       preCallState))))
     | None \<Rightarrow> Inl TypeError)"
 
   by pat_completeness auto
@@ -1914,11 +2087,18 @@ next
     next
       case fold: (Inr preCallState)
       from H lk len fold
-      have "checked_call (interp_term_list d fuel) f ?refResults ?valResults
+      have "(case call_args_alias (interp_term_list d fuel) state (IF_Args f) argTms of
+               Some err \<Rightarrow> Inl err
+             | None \<Rightarrow> checked_call (interp_term_list d fuel) f ?refResults ?valResults
+                         ?calleeTyArgs ?clearedState
+                         (call_body (interp_statement_list d fuel) state f ?refResults ?valResults
+                            preCallState)) = Inr r"
+        by (simp add: Let_def)
+      hence "checked_call (interp_term_list d fuel) f ?refResults ?valResults
               ?calleeTyArgs ?clearedState
               (call_body (interp_statement_list d fuel) state f ?refResults ?valResults
                  preCallState) = Inr r"
-        by (simp add: Let_def)
+        by (auto split: option.splits)
       from checked_call_Inr[OF this]
       have body: "call_body (interp_statement_list d fuel) state f ?refResults ?valResults
                     preCallState = Inr r" .
@@ -1926,5 +2106,13 @@ next
     qed
   qed
 qed
+
+(* A call that succeeds passed the aliasing check. *)
+lemma interp_function_call_Inr_no_alias:
+  assumes H: "interp_function_call d (Suc fuel) state fnName argTys argTms = Inr r"
+    and lk: "fmlookup (IS_Functions state) fnName = Some f"
+  shows "call_args_alias (interp_term_list d fuel) state (IF_Args f) argTms = None"
+  using H lk by (auto simp: Let_def split: if_split_asm sum.splits option.splits)
+
 
 end

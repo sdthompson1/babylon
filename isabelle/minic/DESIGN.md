@@ -591,21 +591,71 @@ is:
 The alternative, a hypothesis stated over an instrumented or trace-producing
 Core interpreter, is heavier and is not recommended.
 
-*Status (end of stage 4, session 3):* the check is defined but **not yet
-wired into `interp_function_call`**; it is the one deliverable of stage 4
-still open (`agent-notes/PROGRESS.md` has the plan). `CoreInterp.thy` has
-`lvalue_of_term` (the lvalue an argument term denotes, const locals
-included, with the index evaluator passed in through a congruence rule so
-that the mutual recursion of the interpreter is untouched),
-`lvalues_alias` (same address, one cast-stripped path a prefix of the
-other), `args_alias` over the argument pairs with at least one `ref`, and
-`call_args_alias`, which the call will run after binding its arguments:
-`InsufficientFuel` if a resolution ran out of fuel (so that the result
-stays monotone in the fuel), `RuntimeError` if two arguments alias. Until
-it is wired in, the simulation theorem of section 8 needs the aliasing
-condition as an explicit hypothesis over the run, and `extern_rep`'s
-disjointness of the `ref` regions (section 6.2) is a hypothesis the caller
-must establish.
+*Status (end of stage 4): implemented.* `interp_function_call`
+(`CoreInterp.thy`) binds the arguments (`fold process_one_arg`) and then
+runs `call_args_alias (interp_term_list d fuel) state (IF_Args f) argTms`
+before the contract checks and the body:
+
+- `lvalue_of_term ev state tm` is the lvalue an argument term denotes, for
+  this check only: like `interp_writable_lvalue`, but a const local is
+  accepted as the base (a by-value argument may be a const local that a
+  `ref` argument aliases), a global is not an lvalue (a `ref` can never
+  target a global, so nothing aliases one), and the index terms are
+  evaluated by the evaluator `ev` passed in (the interpreter passes
+  `interp_term_list d fuel` through the congruence rule
+  `lvalue_of_term_cong`/`call_args_alias_cong`, exactly as it passes
+  `interp_statement_list` to `call_body`, so the mutual recursion of the
+  interpreter is untouched). Any other term is not an lvalue (`TypeError`)
+  and takes no part in the check.
+- `lvalues_alias`: same address and, with `LVPath_ArrayCast` steps removed
+  (`strip_casts`), one path a prefix of the other (`path_prefix`); the
+  index lists of `LVPath_ArrayProj` steps are compared as values.
+- `args_alias args lvs`: some pair `i ≠ j` of arguments with at least one
+  bound `Ref` has aliasing resolutions (`pair_alias`, `res_alias`).
+- `call_args_alias`: `Some InsufficientFuel` if any resolution ran out of
+  fuel (keeps the result monotone in the fuel), `Some RuntimeError` if
+  `args_alias`, else `None`; the call returns `Inl err` on `Some err`.
+
+It applies to every call (extern functions included) and every pair of
+arguments, ghost calls and ghost arguments included, as the verifier does.
+Differences from the proposal: none in substance; the "readable lvalue"
+variant is `lvalue_of_term` with the evaluator as a parameter rather than a
+fuelled copy of `interp_writable_lvalue`.
+
+The dependent proofs were repaired as stage 2 did for the copy check.
+Fuel and depth monotonicity (`CoreInterpFuelMono`): the check agrees across
+evaluators that agree on every index list with enough fuel
+(`call_args_alias_agree`); frame, world, preservation and type soundness
+need nothing new (`interp_function_call_InrE` keeps its five facts; a call
+that succeeds passed the check, `interp_function_call_Inr_no_alias`; the
+check fails only with `InsufficientFuel` or `RuntimeError`,
+`call_args_alias_Some_sound`). The two simulations carry the check across
+by `lvalue_of_term_rel` (`CoreInterpFuelMono`): for a transformation of
+state and term that keeps the shape of lvalues, turns non-lvalues into
+non-lvalues and relates the addresses of locals, an argument that evaluates
+as an rvalue in both states resolves to no lvalue in both, or to lvalues
+with the same path and related addresses. Ghost erasure then uses that the
+erased call's argument pairs are the full call's pairs at the non-ghost
+positions (`args_alias_sublist_rel`, `call_args_alias_None_rel`,
+`notghost_positions` in `CoreTyEnv`); match compilation uses the same with
+the identity selection (`call_args_alias_None_map`).
+
+**One change to the match compiler was necessary** (`MatchCompilePass.thy`,
+`compile_match_term`): a non-flat match whose first arm is a wildcard
+compiled to the bare arm body, so `f(ref a, match x { case _ => a; ... })`
+(accepted: the match term is not an lvalue) compiled to `f(ref a, a)`,
+which the check rejects, and the match-compilation simulation would have
+been false. A single-leaf tree is now wrapped in a match with one wildcard
+arm, as `compile_match_statement` already did for statements; a compiled
+match is always a match (`compile_match_term_is_Match`), so the pass never
+turns a non-lvalue into an lvalue. (`lvalue_base_name_match_compile_term`
+is unchanged.) The generated C is unaffected: the extra flat match is a
+test-free match that stage 5 lowers as any flat match.
+
+With the check in place, the simulation theorem of section 8 needs no
+aliasing hypothesis over the run, and `extern_rep`'s disjointness of the
+`ref` regions (section 6.2) follows from the Core run reaching a normal
+result.
 
 ### 3.5 Variables, `ref` locals, lazy references
 
@@ -1338,9 +1388,15 @@ result. Non-termination, `TypeError`, `RuntimeError` and
 
 1. **Aliasing between call arguments** (section 3.4). Core and C disagree on
    aliased `ref`/value arguments. Mitigation: the Core runtime check, so
-   the condition becomes part of "normal result". Without it the theorem
-   needs a hypothesis over the run, which cannot be stated with the
-   existing interpreter. Status: see section 3.4.
+   the condition becomes part of "normal result". Status: implemented in
+   stage 4 (`call_args_alias` in `interp_function_call`), with every
+   dependent proof repaired. Discharged, with one new fact learned: the
+   check is sensitive to which arguments are lvalues, so a Core-to-Core
+   pass must not turn a non-lvalue argument into an lvalue; the match
+   compiler did, for a single-leaf match term, and was changed (section
+   3.4). Any future pass (and stage 5's own treatment of by-value
+   aggregate arguments, which passes the place of an lvalue argument
+   without a copy) must keep this property.
 2. **Size overflow in generic code** (section 3.2). The `uint64_t` size
    arithmetic of a generic function could wrap for an instantiation at a
    huge type. Mitigation: the static bound `core_module_sizeable`, checked
@@ -1453,7 +1509,10 @@ result. Non-termination, `TypeError`, `RuntimeError` and
 
 ## 10. Proposals for changes outside this directory, and deferred items
 
-Implemented in stage 4: the `core_module_sizeable`/`datatypes_acyclic`
+Implemented in stage 4: the argument aliasing check in `CoreInterp`
+(section 3.4), with the match compiler's single-leaf term matches wrapped
+in a one-arm match so that the pass keeps non-lvalues non-lvalues (section
+3.4); the `core_module_sizeable`/`datatypes_acyclic`
 checks run in `run_compiler` (`CodeExport.thy`, after match compilation,
 with user-level messages), and the pipeline now normalizes the linked
 module (`normalize_module`) *before* ghost erasure: erasing first deleted
@@ -1464,8 +1523,6 @@ erasure and match-compilation theorems assume a normalized module anyway.
 
 Still proposed / deferred:
 
-- `CoreInterp`: the argument aliasing check (section 3.4), if not yet
-  implemented when you read this (section 3.4 says).
 - `elab_program`/driver: return the extern C-name map (section 3.9), stage 5.
 - Proving that elaboration output has acyclic datatypes (`check_sccs` in
   `ElabModule.thy` rejects recursive datatypes) would let the theorems be

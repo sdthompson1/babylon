@@ -419,6 +419,14 @@ lemma interp_statement_list_single:
    \<Longrightarrow> interp_statement_list d (Suc (Suc f)) s [stmt] = Inr res"
   by (cases res) simp_all
 
+(* A match with one wildcard arm evaluates as its arm body does. *)
+lemma interp_wild_match:
+  "interp_term d f1 s scrut = Inr sv \<Longrightarrow> interp_term d f2 s body = Inr v
+   \<Longrightarrow> interp_term d (Suc (max f1 f2)) s (CoreTm_Match scrut [(CorePat_Wildcard, body)]) = Inr v"
+  using interp_term_more_fuel[of d f1 s scrut "Inr sv" "max f1 f2"]
+        interp_term_more_fuel[of d f2 s body "Inr v" "max f1 f2"]
+  by simp
+
 (* A term tree whose walk picks the leaf b evaluates, in the interpreter, as
    b does, at some fuel. *)
 lemma match_tree_to_term_eval:

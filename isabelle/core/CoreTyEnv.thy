@@ -226,6 +226,36 @@ next
   show ?case by (cases gh) (simp_all add: p Cons.IH)
 qed
 
+(* drop_ghost as a selection of positions: the elements kept are those at the
+   NotGhost positions of the flag list, in order. (Used to relate the
+   argument pairs of an erased call to those of the full call.) *)
+definition notghost_positions :: "GhostOrNot list \<Rightarrow> nat list" where
+  "notghost_positions flags = filter (\<lambda>i. flags ! i = NotGhost) [0..<length flags]"
+
+lemma drop_ghost_positions:
+  assumes "length xs = length flags"
+  shows "drop_ghost flags xs = map (\<lambda>i. xs ! i) (notghost_positions flags)"
+proof -
+  have "zip flags xs = map (\<lambda>i. (flags ! i, xs ! i)) [0..<length flags]"
+    by (rule nth_equalityI) (use assms in auto)
+  thus ?thesis
+    unfolding drop_ghost_def notghost_positions_def
+    by (simp add: filter_map comp_def case_prod_beta)
+qed
+
+lemma notghost_positions_lt:
+  "k < length (notghost_positions flags) \<Longrightarrow> notghost_positions flags ! k < length flags"
+  unfolding notghost_positions_def
+  using nth_mem[of k "filter (\<lambda>i. flags ! i = NotGhost) [0..<length flags]"] by auto
+
+lemma notghost_positions_NotGhost:
+  "k < length (notghost_positions flags) \<Longrightarrow> flags ! (notghost_positions flags ! k) = NotGhost"
+  unfolding notghost_positions_def
+  using nth_mem[of k "filter (\<lambda>i. flags ! i = NotGhost) [0..<length flags]"] by auto
+
+lemma notghost_positions_distinct: "distinct (notghost_positions flags)"
+  unfolding notghost_positions_def by simp
+
 (* Is a variable ghost? For locals, check TE_GhostLocals; globals are never
    ghost (in Core).
    Note that locals shadow globals, so if a name is both local and global, the

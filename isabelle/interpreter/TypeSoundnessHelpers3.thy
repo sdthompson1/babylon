@@ -2165,11 +2165,14 @@ proof -
      = (case fold process_one_arg ?argTuples (Inr ?clearedState) of
           Inl err \<Rightarrow> Inl err
         | Inr preCallState \<Rightarrow>
-            checked_call (interp_term_list d fuel) f ?refResults ?valResults
-              tySubst ?clearedState
-              (call_body (interp_statement_list d fuel) state f?refResults ?valResults preCallState))"
+            (case call_args_alias (interp_term_list d fuel) state (IF_Args f) argTms of
+               Some err \<Rightarrow> Inl err
+             | None \<Rightarrow>
+                 checked_call (interp_term_list d fuel) f ?refResults ?valResults
+                   tySubst ?clearedState
+                   (call_body (interp_statement_list d fuel) state f?refResults ?valResults preCallState)))"
     using f_lookup len_argTms len_tyArgs tySubst_def tyargs_eq
-    by (simp add: Let_def cong: sum.case_cong)
+    by (simp add: Let_def cong: sum.case_cong option.case_cong)
 
   \<comment> \<open>Build the per-argument soundness facts from the IH. The IH gives us
       sound_term_result / sound_lvalue_result at the type produced by
@@ -3298,14 +3301,25 @@ proof -
       qed
     qed
 
-    \<comment> \<open>Assemble. \<close>
-    have call_eq:
-      "interp_function_call d (Suc fuel) state fnName tyArgs argTms
-         = checked_call (interp_term_list d fuel) f ?refResults ?valResults tySubst ?clearedState
-             (call_body (interp_statement_list d fuel) state f?refResults ?valResults preCallState)"
-      unfolding interp_eq using fold_Inr by simp
+    \<comment> \<open>Assemble. The aliasing check fails only with a sound error. \<close>
     show ?thesis
-      unfolding call_eq by (rule checked_call_sound[OF call_sound pre_ok post_ok])
+    proof (cases "call_args_alias (interp_term_list d fuel) state (IF_Args f) argTms")
+      case (Some err)
+      have "sound_error_result err"
+        using call_args_alias_Some_sound[OF Some] by auto
+      moreover have "interp_function_call d (Suc fuel) state fnName tyArgs argTms = Inl err"
+        unfolding interp_eq using fold_Inr Some by simp
+      ultimately show ?thesis by simp
+    next
+      case None
+      have call_eq:
+        "interp_function_call d (Suc fuel) state fnName tyArgs argTms
+           = checked_call (interp_term_list d fuel) f ?refResults ?valResults tySubst ?clearedState
+               (call_body (interp_statement_list d fuel) state f?refResults ?valResults preCallState)"
+        unfolding interp_eq using fold_Inr None by simp
+      show ?thesis
+        unfolding call_eq by (rule checked_call_sound[OF call_sound pre_ok post_ok])
+    qed
   qed
 qed
 

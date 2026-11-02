@@ -819,12 +819,31 @@ proof (rule term_simI)
     with tree have tree': "match_tree_eval (var_env (mc_state full))
                              (compile_match_tree (CoreTm_Var x) ?arms') = Some (match_compile_term body)"
       by simp
-    from match_tree_to_term_eval[OF tree' f2] obtain f3 where
-      "interp_term d f3 (mc_state full)
-         (match_tree_to_term (compile_match_tree (CoreTm_Var x) ?arms')) = Inr v" by blast
-    hence "interp_term d f3 (mc_state full) (match_compile_term (CoreTm_Match scrut arms)) = Inr v"
-      using False scrut_eq by (simp add: compile_match_term_def Let_def)
-    thus ?thesis by blast
+    show ?thesis
+    proof (cases "compile_match_tree (CoreTm_Var x) ?arms'")
+      case (MT_Leaf b)
+      \<comment> \<open>A single leaf: the compiled term is a match with one wildcard arm
+         around the compiled body of the arm the original match picks.\<close>
+      from tree' have b_eq: "b = match_compile_term body" by (simp add: MT_Leaf)
+      from term_simD[OF IH fe fs sme wf s_ty ok_s sv] obtain f1 where
+        f1: "interp_term d f1 (mc_state full) (match_compile_term scrut) = Inr sv" by auto
+      hence f1': "interp_term d f1 (mc_state full) (CoreTm_Var x) = Inr sv" by (simp add: scrut_eq)
+      have "interp_term d (Suc (max f1 f2)) (mc_state full)
+              (CoreTm_Match (CoreTm_Var x) [(CorePat_Wildcard, b)]) = Inr v"
+        unfolding b_eq by (rule interp_wild_match[OF f1' f2])
+      hence "interp_term d (Suc (max f1 f2)) (mc_state full)
+               (match_compile_term (CoreTm_Match scrut arms)) = Inr v"
+        using False scrut_eq MT_Leaf by (simp add: compile_match_term_def Let_def)
+      thus ?thesis by blast
+    next
+      case (MT_Test sc tarms)
+      from match_tree_to_term_eval[OF tree' f2] obtain f3 where
+        "interp_term d f3 (mc_state full)
+           (match_tree_to_term (compile_match_tree (CoreTm_Var x) ?arms')) = Inr v" by blast
+      hence "interp_term d f3 (mc_state full) (match_compile_term (CoreTm_Match scrut arms)) = Inr v"
+        using False scrut_eq MT_Test by (simp add: compile_match_term_def Let_def)
+      thus ?thesis by blast
+    qed
   qed
 qed
 section \<open>Term lists\<close>
