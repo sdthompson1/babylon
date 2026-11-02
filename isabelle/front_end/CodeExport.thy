@@ -73,11 +73,14 @@ fun size_error_to_strings :: "SizeError \<Rightarrow> string list" where
 
    This runs the front end (lexer, parser, loader, renamer), and then, if that
    succeeds, elaborates all the modules to Core (which includes typechecking
-   them), runs the whole-program link, erases ghost code, compiles the
-   pattern matches to flat ones (match_compile_module), normalizes the
-   result (normalize_module: the link leaves the abstract types to be
-   substituted later, and the code generator's input is a normalized
-   module), and runs the static checks of the code generator on it
+   them), runs the whole-program link, normalizes the linked module
+   (normalize_module: the link leaves the abstract types to be substituted
+   later; the erasure and match compilation theorems, the interpreter and
+   the code generator all take a normalized module, and erasing first would
+   erase a datatype whose payload is an abstract type realized by a runtime
+   type, since such a datatype is ghost until the substitution is applied),
+   erases ghost code, compiles the pattern matches to flat ones
+   (match_compile_module), and runs the static checks of the code generator on it
    (sizeable_check: datatypes and functions are non-recursive, and every
    size the generated code would compute fits a uint64_t at pointer size
    codegen_ptr_size_bound; see minic/DESIGN.md, section 3.2).
@@ -108,11 +111,11 @@ fun run_compiler :: "(string \<times> string) list \<Rightarrow> CompileResult"
               (case whole_program_link ps of
                 Inl err \<Rightarrow> CR_Errors (whole_program_link_error_to_strings err)
               | Inr linked \<Rightarrow>
-                  (let erased = erase_ghost_module linked
+                  (let erased = erase_ghost_module (normalize_module linked)
                    in if \<not> core_module_match_scrutinees_ok erased
                       then CR_Errors [''internal error: match scrutinee is not a variable'']
                       else (case sizeable_check codegen_ptr_size_bound
-                                   (normalize_module (match_compile_module erased)) of
+                                   (match_compile_module erased) of
                               Some err \<Rightarrow> CR_Errors (size_error_to_strings err)
                             | None \<Rightarrow> CR_Success)))))"
 
