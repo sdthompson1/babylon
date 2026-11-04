@@ -1,5 +1,5 @@
 theory EraseGhostSimulation
-  imports ErasedSteps "../interpreter/CoreInterpFuelMono"
+  imports ErasedSteps "../interpreter/CoreInterpLvalueRel"
 begin
 
 (* The simulation theorem for ghost erasure.

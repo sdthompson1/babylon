@@ -638,7 +638,7 @@ facts; a call that succeeds passed the check,
 `interp_function_call_Inr_no_alias`; the check fails only with
 `InsufficientFuel` or `RuntimeError`, `call_args_alias_Some_sound`). The
 two simulations carry the check across by `interp_lvalue_rel`
-(`CoreInterpFuelMono`): for a transformation of state and term that keeps
+(`CoreInterpLvalueRel`): for a transformation of state and term that keeps
 the shape of lvalues, turns non-lvalues into non-lvalues and relates the
 addresses of locals, an argument that evaluates as an rvalue in both states
 resolves to no lvalue in both, or to lvalues with the same path and related

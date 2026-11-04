@@ -1,6 +1,6 @@
 theory MatchCompilePassState
   imports MatchCompilePassTyping MatchCompileSemantics
-    "../ghost_erasure/ErasedSteps" "../interpreter/TypeSoundness" "../interpreter/CoreInterpFuelMono"
+    "../ghost_erasure/ErasedSteps" "../interpreter/TypeSoundness" "../interpreter/CoreInterpLvalueRel"
     "../core/TypeSubstHelpers"
 begin
 
