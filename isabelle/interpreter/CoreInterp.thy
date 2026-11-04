@@ -1226,57 +1226,19 @@ qed
 (* Argument aliasing (minic/DESIGN.md, section 3.4)                           *)
 (* ========================================================================== *)
 
-(* The lvalue an argument term denotes, for the aliasing check only: like
-   interp_writable_lvalue, but a const local is accepted as the base (a
-   by-value argument may be a const local that a ref argument aliases), and
-   the index terms are evaluated by the given evaluator (the interpreter
-   passes interp_term_list, partially applied, through the congruence rule
-   below, exactly as it passes interp_statement_list to call_body). A global
-   has no store address and is not an lvalue here: a ref argument can never
-   target a global, so a global cannot alias one. Any other term is not an
-   lvalue (TypeError), and takes no part in the check. *)
-fun lvalue_of_term :: "('w InterpState \<Rightarrow> CoreTerm list \<Rightarrow> InterpError + CoreValue list)
-                       \<Rightarrow> 'w InterpState \<Rightarrow> CoreTerm \<Rightarrow> InterpError + nat \<times> LValuePath list" where
-  "lvalue_of_term ev state (CoreTm_Var varName) =
-    (case fmlookup (IS_Locals state) varName of
-       Some addr \<Rightarrow> Inr (addr, [])
-     | None \<Rightarrow> (case fmlookup (IS_Refs state) varName of
-                  Some (addr, path) \<Rightarrow> Inr (addr, path)
-                | None \<Rightarrow> Inl TypeError))"
-| "lvalue_of_term ev state (CoreTm_RecordProj tm fldName) =
-    (case lvalue_of_term ev state tm of
-       Inr (addr, path) \<Rightarrow> Inr (addr, path @ [LVPath_RecordProj fldName])
-     | Inl err \<Rightarrow> Inl err)"
-| "lvalue_of_term ev state (CoreTm_VariantProj tm ctorName) =
-    (case lvalue_of_term ev state tm of
-       Inr (addr, path) \<Rightarrow> Inr (addr, path @ [LVPath_VariantProj ctorName])
-     | Inl err \<Rightarrow> Inl err)"
-| "lvalue_of_term ev state (CoreTm_ArrayProj tm indexTms) =
-    (case lvalue_of_term ev state tm of
-       Inr (addr, path) \<Rightarrow>
-         (case ev state indexTms of
-            Inr indexVals \<Rightarrow>
-              (case interpret_index_vals indexVals of
-                 Inr indices \<Rightarrow> Inr (addr, path @ [LVPath_ArrayProj indices])
-               | Inl err \<Rightarrow> Inl err)
-          | Inl err \<Rightarrow> Inl err)
-     | Inl err \<Rightarrow> Inl err)"
-| "lvalue_of_term ev state (CoreTm_Cast targetTy tm) =
-    (case targetTy of
-       CoreTy_Array _ dims \<Rightarrow>
-         (case lvalue_of_term ev state tm of
-            Inr (addr, path) \<Rightarrow> Inr (addr, path @ [LVPath_ArrayCast dims])
-          | Inl err \<Rightarrow> Inl err)
-     | _ \<Rightarrow> Inl TypeError)"
-| "lvalue_of_term ev state _ = Inl TypeError"
 
-(* The evaluator is only applied to the index lists of the term. *)
-lemma lvalue_of_term_cong [fundef_cong]:
-  assumes "state = state'" and "tm = tm'"
-    and "\<And>tms. ev state' tms = ev' state' tms"
-  shows "lvalue_of_term ev state tm = lvalue_of_term ev' state' tm'"
-  unfolding assms(1,2) using assms(3)
-  by (induction tm' rule: lvalue_of_term.induct) (simp_all split: sum.splits CoreType.splits)
+(* The check resolves every argument of a call as an lvalue with
+   interp_lvalue (below) in its non-writable mode: a by-value argument may be
+   a const local that a ref argument aliases. The terms that resolve
+   structurally are these (any other term is not an lvalue, and takes no part
+   in the check). *)
+fun lvalue_shape :: "CoreTerm \<Rightarrow> bool" where
+  "lvalue_shape (CoreTm_Var _) = True"
+| "lvalue_shape (CoreTm_RecordProj _ _) = True"
+| "lvalue_shape (CoreTm_VariantProj _ _) = True"
+| "lvalue_shape (CoreTm_ArrayProj _ _) = True"
+| "lvalue_shape (CoreTm_Cast _ _) = True"
+| "lvalue_shape _ = False"
 
 (* The array casts of a path are irrelevant for aliasing (the verifier's
    reverse_ref_chain_and_remove_casts). *)
@@ -1296,19 +1258,6 @@ definition lvalues_alias :: "nat \<times> LValuePath list \<Rightarrow> nat \<ti
      \<and> (path_prefix (strip_casts (snd l1)) (strip_casts (snd l2))
         \<or> path_prefix (strip_casts (snd l2)) (strip_casts (snd l1))))"
 
-(* The terms that lvalue_of_term resolves structurally (any other term is
-   not an lvalue). *)
-fun lvalue_shape :: "CoreTerm \<Rightarrow> bool" where
-  "lvalue_shape (CoreTm_Var _) = True"
-| "lvalue_shape (CoreTm_RecordProj _ _) = True"
-| "lvalue_shape (CoreTm_VariantProj _ _) = True"
-| "lvalue_shape (CoreTm_ArrayProj _ _) = True"
-| "lvalue_shape (CoreTm_Cast _ _) = True"
-| "lvalue_shape _ = False"
-
-lemma lvalue_of_term_not_shape:
-  "\<not> lvalue_shape tm \<Longrightarrow> lvalue_of_term ev state tm = Inl TypeError"
-  by (cases tm) simp_all
 
 (* Two resolution results alias: both are lvalues, and they alias. *)
 definition res_alias :: "(InterpError + nat \<times> LValuePath list) \<Rightarrow> (InterpError + nat \<times> LValuePath list) \<Rightarrow> bool" where
@@ -1338,107 +1287,42 @@ lemma args_alias_iff:
   "args_alias args lvs \<longleftrightarrow> (\<exists>i j. i < length args \<and> j < length args \<and> pair_alias args lvs i j)"
   unfolding args_alias_def list_ex_iff set_upt Bex_def atLeastLessThan_iff by blast
 
-(* The check a call performs on its arguments: resolve every argument as an
-   lvalue; if that runs out of fuel the call does (so that the result is
-   monotone in the fuel); otherwise RuntimeError if two arguments alias. *)
-definition call_args_alias :: "('w InterpState \<Rightarrow> CoreTerm list \<Rightarrow> InterpError + CoreValue list)
-                               \<Rightarrow> 'w InterpState \<Rightarrow> (string \<times> VarOrRef) list \<Rightarrow> CoreTerm list \<Rightarrow> InterpError option" where
-  "call_args_alias ev state args argTms =
-    (let lvs = map (lvalue_of_term ev state) argTms
-     in if list_ex (\<lambda>r. r = Inl InsufficientFuel) lvs then Some InsufficientFuel
-        else if args_alias args lvs then Some RuntimeError
-        else None)"
-
-lemma call_args_alias_cong [fundef_cong]:
-  assumes "state = state'" and "args = args'" and "argTms = argTms'"
-    and "\<And>tms. ev state' tms = ev' state' tms"
-  shows "call_args_alias ev state args argTms = call_args_alias ev' state' args' argTms'"
-proof -
-  have eq: "map (lvalue_of_term ev state') argTms' = map (lvalue_of_term ev' state') argTms'"
-    by (rule map_cong[OF refl])
-       (rule lvalue_of_term_cong[where ev = ev and ev' = ev' and state = state' and state' = state', OF refl refl assms(4)])
-  show ?thesis unfolding call_args_alias_def assms(1-3) eq ..
-qed
+(* The check a call performs on its arguments, given their resolutions as
+   lvalues (interp_function_call passes map (interp_lvalue d fuel False state)
+   argTms): if any resolution ran out of fuel the call does (so that the
+   result is monotone in the fuel); otherwise RuntimeError if two arguments
+   alias. *)
+definition call_args_alias :: "(string \<times> VarOrRef) list \<Rightarrow> (InterpError + nat \<times> LValuePath list) list
+                               \<Rightarrow> InterpError option" where
+  "call_args_alias args lvs =
+    (if list_ex (\<lambda>r. r = Inl InsufficientFuel) lvs then Some InsufficientFuel
+     else if args_alias args lvs then Some RuntimeError
+     else None)"
 
 lemma lvalues_alias_sym: "lvalues_alias l1 l2 = lvalues_alias l2 l1"
   by (auto simp: lvalues_alias_def)
 
-(* The check does not look at the evaluator beyond the index lists it
-   evaluates: evaluators that agree wherever the first has enough fuel give
-   the same resolutions and the same check, provided the first did not run
-   out of fuel (fuel and depth monotonicity). *)
-lemma lvalue_of_term_agree:
-  assumes agree: "\<And>tms. ev state tms \<noteq> Inl InsufficientFuel \<Longrightarrow> ev' state tms = ev state tms"
-    and nf: "lvalue_of_term ev state tm \<noteq> Inl InsufficientFuel"
-  shows "lvalue_of_term ev' state tm = lvalue_of_term ev state tm"
-  using nf
-proof (induction tm)
-  case (CoreTm_RecordProj t f)
-  thus ?case by (auto split: sum.splits)
-next
-  case (CoreTm_VariantProj t c)
-  thus ?case by (auto split: sum.splits)
-next
-  case (CoreTm_ArrayProj t idx)
-  have nf_t: "lvalue_of_term ev state t \<noteq> Inl InsufficientFuel"
-    using CoreTm_ArrayProj.prems by (auto split: sum.splits)
-  note IH = CoreTm_ArrayProj.IH(1)[OF nf_t]
-  show ?case
-  proof (cases "lvalue_of_term ev state t")
-    case (Inl err)
-    thus ?thesis using IH by simp
-  next
-    case (Inr l)
-    have "ev state idx \<noteq> Inl InsufficientFuel"
-      using CoreTm_ArrayProj.prems Inr by (auto split: sum.splits)
-    from agree[OF this] show ?thesis using IH Inr by simp
-  qed
-next
-  case (CoreTm_Cast ty t)
-  thus ?case by (cases ty) (auto split: sum.splits)
-qed simp_all
-
-lemma call_args_alias_agree:
-  assumes agree: "\<And>tms. ev state tms \<noteq> Inl InsufficientFuel \<Longrightarrow> ev' state tms = ev state tms"
-    and nf: "call_args_alias ev state args argTms \<noteq> Some InsufficientFuel"
-  shows "call_args_alias ev' state args argTms = call_args_alias ev state args argTms"
-proof -
-  have "\<not> list_ex (\<lambda>r. r = Inl InsufficientFuel) (map (lvalue_of_term ev state) argTms)"
-    using nf unfolding call_args_alias_def Let_def by (auto split: if_splits)
-  hence "\<And>tm. tm \<in> set argTms \<Longrightarrow> lvalue_of_term ev state tm \<noteq> Inl InsufficientFuel"
-    by (auto simp: list_ex_iff image_iff)
-  hence mapeq: "map (lvalue_of_term ev' state) argTms = map (lvalue_of_term ev state) argTms"
-    by (intro map_cong refl lvalue_of_term_agree[of ev state ev', OF agree])
-  show ?thesis unfolding call_args_alias_def Let_def mapeq ..
-qed
-
 (* The check only ever fails with InsufficientFuel or RuntimeError (type
    soundness). *)
 lemma call_args_alias_Some_sound:
-  "call_args_alias ev state args argTms = Some err \<Longrightarrow> err = InsufficientFuel \<or> err = RuntimeError"
-  unfolding call_args_alias_def Let_def by (auto split: if_splits)
+  "call_args_alias args lvs = Some err \<Longrightarrow> err = InsufficientFuel \<or> err = RuntimeError"
+  unfolding call_args_alias_def by (auto split: if_splits)
+
+lemma call_args_alias_not_fuelD:
+  "call_args_alias args lvs \<noteq> Some InsufficientFuel \<Longrightarrow> r \<in> set lvs \<Longrightarrow> r \<noteq> Inl InsufficientFuel"
+  unfolding call_args_alias_def by (auto simp: list_ex_iff)
 
 lemma call_args_alias_NoneD:
-  assumes "call_args_alias ev state args argTms = None"
-  shows "\<And>tm. tm \<in> set argTms \<Longrightarrow> lvalue_of_term ev state tm \<noteq> Inl InsufficientFuel"
-    and "\<not> args_alias args (map (lvalue_of_term ev state) argTms)"
-  using assms unfolding call_args_alias_def Let_def
-  by (auto simp: list_ex_iff image_iff split: if_splits)
+  assumes "call_args_alias args lvs = None"
+  shows "\<And>r. r \<in> set lvs \<Longrightarrow> r \<noteq> Inl InsufficientFuel"
+    and "\<not> args_alias args lvs"
+  using assms unfolding call_args_alias_def by (auto simp: list_ex_iff split: if_splits)
 
 lemma call_args_alias_NoneI:
-  assumes "\<And>tm. tm \<in> set argTms \<Longrightarrow> lvalue_of_term ev state tm \<noteq> Inl InsufficientFuel"
-    and "\<not> args_alias args (map (lvalue_of_term ev state) argTms)"
-  shows "call_args_alias ev state args argTms = None"
-proof -
-  have "\<not> list_ex (\<lambda>r. r = Inl InsufficientFuel) (map (lvalue_of_term ev state) argTms)"
-  proof
-    assume "list_ex (\<lambda>r. r = Inl InsufficientFuel) (map (lvalue_of_term ev state) argTms)"
-    then obtain tm where "tm \<in> set argTms" and "lvalue_of_term ev state tm = Inl InsufficientFuel"
-      unfolding list_ex_iff by auto
-    with assms(1) show False by blast
-  qed
-  with assms(2) show ?thesis unfolding call_args_alias_def Let_def by simp
-qed
+  assumes "\<And>r. r \<in> set lvs \<Longrightarrow> r \<noteq> Inl InsufficientFuel"
+    and "\<not> args_alias args lvs"
+  shows "call_args_alias args lvs = None"
+  using assms unfolding call_args_alias_def by (auto simp: list_ex_iff)
 
 (* Selecting arguments (and their lvalues) can only remove aliasing pairs:
    the erased call of EraseGhostSimulation has a subset of the pairs of the
@@ -1469,70 +1353,55 @@ proof
 qed
 
 lemma call_args_alias_None_rel:
-  assumes none: "call_args_alias ev state args argTms = None"
-    and lenA: "length argTms = length args"
+  assumes none: "call_args_alias args lvs = None"
     and sel_lt: "\<And>k. k < length sel \<Longrightarrow> sel ! k < length args"
     and dist: "distinct sel"
-    and len1: "length args' = length sel" and len2: "length argTms' = length sel"
+    and len1: "length args' = length sel" and len2: "length lvs' = length sel"
     and flags: "\<And>k. k < length sel \<Longrightarrow> snd (args' ! k) = snd (args ! (sel ! k))"
-    and nf: "\<And>k. k < length sel \<Longrightarrow> lvalue_of_term ev' state' (argTms' ! k) \<noteq> Inl InsufficientFuel"
-    and rel: "\<And>k k'. k < length sel \<Longrightarrow> k' < length sel \<Longrightarrow>
-               res_alias (lvalue_of_term ev' state' (argTms' ! k)) (lvalue_of_term ev' state' (argTms' ! k'))
-               \<Longrightarrow> res_alias (lvalue_of_term ev state (argTms ! (sel ! k))) (lvalue_of_term ev state (argTms ! (sel ! k')))"
-  shows "call_args_alias ev' state' args' argTms' = None"
+    and nf: "\<And>k. k < length sel \<Longrightarrow> lvs' ! k \<noteq> Inl InsufficientFuel"
+    and rel: "\<And>k k'. k < length sel \<Longrightarrow> k' < length sel \<Longrightarrow> res_alias (lvs' ! k) (lvs' ! k')
+               \<Longrightarrow> res_alias (lvs ! (sel ! k)) (lvs ! (sel ! k'))"
+  shows "call_args_alias args' lvs' = None"
 proof (rule call_args_alias_NoneI)
-  fix tm assume "tm \<in> set argTms'"
-  then obtain k where "k < length argTms'" "tm = argTms' ! k" by (auto simp: in_set_conv_nth)
-  thus "lvalue_of_term ev' state' tm \<noteq> Inl InsufficientFuel" using nf len2 by simp
+  fix r assume "r \<in> set lvs'"
+  then obtain k where "k < length lvs'" "r = lvs' ! k" by (auto simp: in_set_conv_nth)
+  thus "r \<noteq> Inl InsufficientFuel" using nf len2 by simp
 next
-  show "\<not> args_alias args' (map (lvalue_of_term ev' state') argTms')"
-  proof (rule args_alias_sublist_rel[OF sel_lt dist len1 flags _ call_args_alias_NoneD(2)[OF none]])
-    fix k k' assume k: "k < length sel" and k': "k' < length sel"
-      and ra: "res_alias (map (lvalue_of_term ev' state') argTms' ! k)
-                         (map (lvalue_of_term ev' state') argTms' ! k')"
-    have "res_alias (lvalue_of_term ev' state' (argTms' ! k)) (lvalue_of_term ev' state' (argTms' ! k'))"
-      using ra k k' len2 by simp
-    from rel[OF k k' this]
-    show "res_alias (map (lvalue_of_term ev state) argTms ! (sel ! k))
-                    (map (lvalue_of_term ev state) argTms ! (sel ! k'))"
-      using sel_lt[OF k] sel_lt[OF k'] lenA by simp
-  qed
+  show "\<not> args_alias args' lvs'"
+    by (rule args_alias_sublist_rel[OF sel_lt dist len1 flags rel call_args_alias_NoneD(2)[OF none]])
 qed
 
 (* The same, for a call with the same parameters and transformed arguments. *)
 lemma call_args_alias_None_map:
-  assumes none: "call_args_alias ev state args argTms = None"
-    and lenA: "length argTms = length args"
-    and len2: "length argTms' = length args"
-    and nf: "\<And>k. k < length args \<Longrightarrow> lvalue_of_term ev' state' (argTms' ! k) \<noteq> Inl InsufficientFuel"
-    and rel: "\<And>k k'. k < length args \<Longrightarrow> k' < length args \<Longrightarrow>
-               res_alias (lvalue_of_term ev' state' (argTms' ! k)) (lvalue_of_term ev' state' (argTms' ! k'))
-               \<Longrightarrow> res_alias (lvalue_of_term ev state (argTms ! k)) (lvalue_of_term ev state (argTms ! k'))"
-  shows "call_args_alias ev' state' args argTms' = None"
-proof (rule call_args_alias_None_rel[where sel = "[0..<length args]", OF none lenA])
+  assumes none: "call_args_alias args lvs = None"
+    and len2: "length lvs' = length args"
+    and nf: "\<And>k. k < length args \<Longrightarrow> lvs' ! k \<noteq> Inl InsufficientFuel"
+    and rel: "\<And>k k'. k < length args \<Longrightarrow> k' < length args \<Longrightarrow> res_alias (lvs' ! k) (lvs' ! k')
+               \<Longrightarrow> res_alias (lvs ! k) (lvs ! k')"
+  shows "call_args_alias args lvs' = None"
+proof (rule call_args_alias_None_rel[where sel = "[0..<length args]", OF none])
   fix k assume "k < length [0..<length args]"
   thus "[0..<length args] ! k < length args" by simp
 next
   show "distinct [0..<length args]" by simp
   show "length args = length [0..<length args]" by simp
-  show "length argTms' = length [0..<length args]" using len2 by simp
+  show "length lvs' = length [0..<length args]" using len2 by simp
 next
   fix k assume "k < length [0..<length args]"
   thus "snd (args ! k) = snd (args ! ([0..<length args] ! k))" by simp
 next
   fix k assume "k < length [0..<length args]"
-  thus "lvalue_of_term ev' state' (argTms' ! k) \<noteq> Inl InsufficientFuel" using nf by simp
+  thus "lvs' ! k \<noteq> Inl InsufficientFuel" using nf by simp
 next
   fix k k' assume "k < length [0..<length args]" "k' < length [0..<length args]"
-    and "res_alias (lvalue_of_term ev' state' (argTms' ! k)) (lvalue_of_term ev' state' (argTms' ! k'))"
-  thus "res_alias (lvalue_of_term ev state (argTms ! ([0..<length args] ! k)))
-                  (lvalue_of_term ev state (argTms ! ([0..<length args] ! k')))"
+    and "res_alias (lvs' ! k) (lvs' ! k')"
+  thus "res_alias (lvs ! ([0..<length args] ! k)) (lvs ! ([0..<length args] ! k'))"
     using rel by simp
 qed
 
 
 (* ========================================================================== *)
-(* The main intepreter definitions *)
+(* The main interpreter definitions *)
 (* ========================================================================== *)
 
 (* The interpreter runs both Ghost and NotGhost code. As a consequence, it is
@@ -1551,7 +1420,7 @@ qed
 
 function interp_term :: "nat \<Rightarrow> nat \<Rightarrow> 'w InterpState \<Rightarrow> CoreTerm \<Rightarrow> InterpError + CoreValue"
   and interp_term_list :: "nat \<Rightarrow> nat \<Rightarrow> 'w InterpState \<Rightarrow> CoreTerm list \<Rightarrow> InterpError + CoreValue list"
-  and interp_writable_lvalue :: "nat \<Rightarrow> nat \<Rightarrow> 'w InterpState \<Rightarrow> CoreTerm \<Rightarrow> InterpError + nat \<times> LValuePath list"
+  and interp_lvalue :: "nat \<Rightarrow> nat \<Rightarrow> bool \<Rightarrow> 'w InterpState \<Rightarrow> CoreTerm \<Rightarrow> InterpError + nat \<times> LValuePath list"
   and interp_statement :: "nat \<Rightarrow> nat \<Rightarrow> 'w InterpState \<Rightarrow> CoreStatement \<Rightarrow> InterpError + 'w ExecResult"
   and interp_statement_list :: "nat \<Rightarrow> nat \<Rightarrow> 'w InterpState \<Rightarrow> CoreStatement list \<Rightarrow> InterpError + 'w ExecResult"
   and interp_function_call :: "nat \<Rightarrow> nat \<Rightarrow> 'w InterpState \<Rightarrow> string \<Rightarrow> CoreType list \<Rightarrow> CoreTerm list \<Rightarrow> InterpError + ('w InterpState \<times> CoreValue)"
@@ -1709,16 +1578,22 @@ where
 | "interp_term _ (Suc fuel) state (CoreTm_Default ty) =
     default_value fuel state (apply_subst (IS_TyArgs state) ty)"
 
-  (* Evaluate a writable lvalue into (addr, path).
-     Returns TypeError if the base variable is read-only (in IS_ConstLocals).
+  (* Evaluate an lvalue into (addr, path).
+     With writable = True (interp_writable_lvalue, the abbreviation after the
+     definition) a read-only base variable (in IS_ConstLocals) is a TypeError.
+     With writable = False it is accepted: the aliasing check of a call
+     (call_args_alias) resolves every argument this way, since a by-value
+     argument may be a const local that a ref argument aliases. In either mode
+     a global is not an lvalue (it has no store address, and a ref can never
+     target one).
      Note: this doesn't check for "bad paths" (e.g. incorrect field name); that happens
      later when the path is used. It does, however, check whether the base variable name
      exists and whether any array indices can be successfully evaluated. *)
-| "interp_writable_lvalue _ 0 _ _ = Inl InsufficientFuel"
-| "interp_writable_lvalue d (Suc fuel) state tm =
+| "interp_lvalue _ 0 _ _ _ = Inl InsufficientFuel"
+| "interp_lvalue d (Suc fuel) writable state tm =
     (case tm of
       CoreTm_Var varName \<Rightarrow>
-        if varName |\<in>| IS_ConstLocals state then Inl TypeError  \<comment> \<open>read-only variable\<close>
+        if writable \<and> varName |\<in>| IS_ConstLocals state then Inl TypeError  \<comment> \<open>read-only variable\<close>
         else
         (case fmlookup (IS_Locals state) varName of
           Some addr \<Rightarrow> Inr (addr, [])
@@ -1727,15 +1602,15 @@ where
               Some (addr, path) \<Rightarrow> Inr (addr, path)
             | None \<Rightarrow> Inl TypeError))
     | CoreTm_RecordProj tm fldName \<Rightarrow>
-        (case interp_writable_lvalue d fuel state tm of
+        (case interp_lvalue d fuel writable state tm of
           Inr (addr, path) \<Rightarrow> Inr (addr, path @ [LVPath_RecordProj fldName])
         | Inl err \<Rightarrow> Inl err)
     | CoreTm_VariantProj tm ctorName \<Rightarrow>
-        (case interp_writable_lvalue d fuel state tm of
+        (case interp_lvalue d fuel writable state tm of
           Inr (addr, path) \<Rightarrow> Inr (addr, path @ [LVPath_VariantProj ctorName])
         | Inl err \<Rightarrow> Inl err)
     | CoreTm_ArrayProj tm indexTms \<Rightarrow>
-        (case interp_writable_lvalue d fuel state tm of
+        (case interp_lvalue d fuel writable state tm of
           Inr (addr, path) \<Rightarrow>
             (case interp_term_list d fuel state indexTms of
               Inr indexVals \<Rightarrow>
@@ -1749,7 +1624,7 @@ where
             record the cast as a path step. Casts to other types are not lvalues.\<close>
         (case targetTy of
           CoreTy_Array _ dims \<Rightarrow>
-            (case interp_writable_lvalue d fuel state tm of
+            (case interp_lvalue d fuel writable state tm of
               Inr (addr, path) \<Rightarrow> Inr (addr, path @ [LVPath_ArrayCast dims])
             | Inl err \<Rightarrow> Inl err)
         | _ \<Rightarrow> Inl TypeError)
@@ -1810,7 +1685,7 @@ where
           | Inr val \<Rightarrow> Inr (Continue (bind_const_local varName val state)))
         else
           \<comment> \<open>Base variable is writable: alias via writable lvalue. \<close>
-          (case interp_writable_lvalue d fuel state lvalueTm of
+          (case interp_lvalue d fuel True state lvalueTm of
             Inr addrAndPath \<Rightarrow> Inr (Continue (bind_ref varName addrAndPath state))
           | Inl err \<Rightarrow> Inl err)
     | None \<Rightarrow> Inl TypeError)"
@@ -1821,7 +1696,7 @@ where
         term (impure-call rhs's use CoreStmt_AssignCall). State is unchanged by
         evaluating it. A non-ghost assignment must not copy an allocated value
         (rule 2 of copy_check).\<close>
-    (case interp_writable_lvalue d fuel state lhsLvalue of
+    (case interp_lvalue d fuel True state lhsLvalue of
       Inr (addr, path) \<Rightarrow>
         (case interp_term d fuel state rhsTm of
           Inr rhsVal \<Rightarrow>
@@ -1840,7 +1715,7 @@ where
 | "interp_statement d (Suc fuel) state (CoreStmt_AssignCall _ lhsLvalue castOpt fnName argTys argTms) =
     \<comment> \<open>Resolve the lhs first, then run the (possibly impure) call observing its
         state effect, apply the optional cast, and store the result.\<close>
-    (case interp_writable_lvalue d fuel state lhsLvalue of
+    (case interp_lvalue d fuel True state lhsLvalue of
       Inr (addr, path) \<Rightarrow>
         (case interp_function_call d fuel state fnName argTys argTms of
           Inr (newState, retVal) \<Rightarrow>
@@ -1857,10 +1732,10 @@ where
 
   (* Swap *)
 | "interp_statement d (Suc fuel) state (CoreStmt_Swap _ lhsTm rhsTm) =
-    (case interp_writable_lvalue d fuel state lhsTm of
+    (case interp_lvalue d fuel True state lhsTm of
       Inl err \<Rightarrow> Inl err
     | Inr lhsLvalue \<Rightarrow>
-        (case interp_writable_lvalue d fuel state rhsTm of
+        (case interp_lvalue d fuel True state rhsTm of
           Inl err \<Rightarrow> Inl err
         | Inr rhsLvalue \<Rightarrow>
             (case perform_swap state lhsLvalue rhsLvalue of
@@ -1984,7 +1859,7 @@ where
             \<comment> \<open>Evaluate each argument, both as an lvalue and as an rvalue.\<close>
             \<comment> \<open>(Both are needed, because, e.g., `a[10]` might evaluate successfully as an
                 lvalue, but fail as an rvalue, if 10 was out of bounds for the array.)\<close>
-            let refResults = map (interp_writable_lvalue d fuel state) argTms;
+            let refResults = map (interp_lvalue d fuel True state) argTms;
                 valResults = map (interp_term d fuel state) argTms;
                 argTuples = zip (IF_Args f) (zip refResults valResults);
                 \<comment> \<open>Resolve each argTy against the caller's IS_TyArgs (which is
@@ -2006,8 +1881,9 @@ where
               | Inr preCallState \<Rightarrow>
                   \<comment> \<open>The arguments must not alias (minic/DESIGN.md section 3.4): a
                       RuntimeError if two of them, at least one bound by ref, denote
-                      overlapping lvalues.\<close>
-                  (case call_args_alias (interp_term_list d fuel) state (IF_Args f) argTms of
+                      overlapping lvalues. For this every argument is resolved as an
+                      lvalue once more, now accepting a read-only base.\<close>
+                  (case call_args_alias (IF_Args f) (map (interp_lvalue d fuel False state) argTms) of
                     Some err \<Rightarrow> Inl err
                   | None \<Rightarrow>
                   \<comment> \<open>Now delegate to 'checked_call' to run the pre- and post-condition checks,
@@ -2031,6 +1907,26 @@ termination by (relation "inv_image (less_than <*lex*> less_than) (\<lambda>x. c
   | Inr (Inr (Inl (d, fuel, _))) \<Rightarrow> (d, fuel)
   | Inr (Inr (Inr (d, fuel, _))) \<Rightarrow> (d, fuel)
 )", auto)
+
+(* A writable lvalue: interp_lvalue rejecting a read-only base. This is what
+   the statements (ref declarations, assignments, swaps) and the ref
+   arguments of a call use. Being an abbreviation, the equations of the
+   interpreter and every lemma about them read in terms of it. *)
+abbreviation interp_writable_lvalue :: "nat \<Rightarrow> nat \<Rightarrow> 'w InterpState \<Rightarrow> CoreTerm \<Rightarrow> InterpError + nat \<times> LValuePath list" where
+  "interp_writable_lvalue d fuel \<equiv> interp_lvalue d fuel True"
+
+(* Only the terms of lvalue_shape resolve. *)
+lemma interp_lvalue_not_shape:
+  "\<not> lvalue_shape tm \<Longrightarrow> interp_lvalue d (Suc fuel) writable state tm = Inl TypeError"
+  by (cases tm) simp_all
+
+(* The writable mode never resolves more than the other. *)
+lemma interp_lvalue_writable_Inr:
+  "interp_writable_lvalue d fuel state tm = Inr r \<Longrightarrow> interp_lvalue d fuel False state tm = Inr r"
+proof (induction fuel arbitrary: tm r)
+  case (Suc fuel)
+  thus ?case by (cases tm) (auto split: sum.splits if_splits CoreType.splits)
+qed simp
 
 
 (* ========================================================================== *)
@@ -2087,7 +1983,7 @@ next
     next
       case fold: (Inr preCallState)
       from H lk len fold
-      have "(case call_args_alias (interp_term_list d fuel) state (IF_Args f) argTms of
+      have "(case call_args_alias (IF_Args f) (map (interp_lvalue d fuel False state) argTms) of
                Some err \<Rightarrow> Inl err
              | None \<Rightarrow> checked_call (interp_term_list d fuel) f ?refResults ?valResults
                          ?calleeTyArgs ?clearedState
@@ -2111,7 +2007,7 @@ qed
 lemma interp_function_call_Inr_no_alias:
   assumes H: "interp_function_call d (Suc fuel) state fnName argTys argTms = Inr r"
     and lk: "fmlookup (IS_Functions state) fnName = Some f"
-  shows "call_args_alias (interp_term_list d fuel) state (IF_Args f) argTms = None"
+  shows "call_args_alias (IF_Args f) (map (interp_lvalue d fuel False state) argTms) = None"
   using H lk by (auto simp: Let_def split: if_split_asm sum.splits option.splits)
 
 

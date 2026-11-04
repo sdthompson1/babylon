@@ -2165,7 +2165,7 @@ proof -
      = (case fold process_one_arg ?argTuples (Inr ?clearedState) of
           Inl err \<Rightarrow> Inl err
         | Inr preCallState \<Rightarrow>
-            (case call_args_alias (interp_term_list d fuel) state (IF_Args f) argTms of
+            (case call_args_alias (IF_Args f) (map (interp_lvalue d fuel False state) argTms) of
                Some err \<Rightarrow> Inl err
              | None \<Rightarrow>
                  checked_call (interp_term_list d fuel) f ?refResults ?valResults
@@ -3303,7 +3303,7 @@ proof -
 
     \<comment> \<open>Assemble. The aliasing check fails only with a sound error. \<close>
     show ?thesis
-    proof (cases "call_args_alias (interp_term_list d fuel) state (IF_Args f) argTms")
+    proof (cases "call_args_alias (IF_Args f) (map (interp_lvalue d fuel False state) argTms)")
       case (Some err)
       have "sound_error_result err"
         using call_args_alias_Some_sound[OF Some] by auto

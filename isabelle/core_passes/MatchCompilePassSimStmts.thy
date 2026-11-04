@@ -115,7 +115,7 @@ lemma interp_function_call_I:
                            IS_TyArgs := fmap_of_list (zip (IF_TyArgs f)
                                           (map (apply_subst (IS_TyArgs state)) argTys)) \<rparr>))
            = Inr preCallState"
-      and "call_args_alias (interp_term_list d fuel) state (IF_Args f) argTms = None"
+      and "call_args_alias (IF_Args f) (map (interp_lvalue d fuel False state) argTms) = None"
       and "IF_Requires f = []" and "IF_Ensures f = []"
       and "call_body (interp_statement_list d fuel) state f
              (map (interp_writable_lvalue d fuel state) argTms)

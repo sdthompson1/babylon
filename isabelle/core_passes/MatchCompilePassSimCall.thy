@@ -290,10 +290,10 @@ proof (rule call_simI)
 
   \<comment> \<open>The aliasing check of the compiled call passes, since the original's
       did: the compiled arguments denote the same lvalues in the compiled state
-      (lvalue_of_term_rel, with the compiled index lists evaluating to the
+      (interp_lvalue_rel, with the compiled index lists evaluating to the
       same values by the term list simulation, and a compiled match never an
       lvalue, compile_match_term_is_Match).\<close>
-  have aliasF: "call_args_alias (interp_term_list d fuel) full (IF_Args f) argTms = None"
+  have aliasF: "call_args_alias (IF_Args f) (map (interp_lvalue d fuel False full) argTms) = None"
     by (rule interp_function_call_Inr_no_alias[OF ev f_lookup])
   have allInr: "\<exists>v. interp_term d fuel full tm = Inr v" if "tm \<in> set argTms" for tm
   proof -
@@ -303,12 +303,11 @@ proof (rule call_simI)
     from fold_process_one_arg_all_ok[OF foldF l1 l2 this] show ?thesis by blast
   qed
   have compiled_alias:
-    "call_args_alias (interp_term_list d G) (mc_state full)
-       (IF_Args (mc_interp_fun f)) (map match_compile_term argTms) = None"
+    "call_args_alias (IF_Args (mc_interp_fun f))
+       (map (interp_lvalue d G False (mc_state full)) (map match_compile_term argTms)) = None"
     if agree: "\<forall>tm \<in> set argTms. args_agree fuel full G tm" for G
   proof -
     let ?Q = "\<lambda>tm. (\<exists>ty. core_term_type env NotGhost tm = Some ty) \<and> core_term_match_scrutinees_ok tm"
-    let ?evG = "interp_term_list d G"
     have idx: "vs = vs'"
       if "list_all ?Q tms" and "interp_term_list d fuel full tms = Inr vs"
         and "interp_term_list d G (mc_state full) (map match_compile_term tms) = Inr vs'"
@@ -345,12 +344,11 @@ proof (rule call_simI)
               (fmlookup (IS_Refs full) x) (fmlookup (IS_Refs (mc_state full)) x)"
         by (cases "fmlookup (IS_Refs full) x") auto
     qed
-    have tr_other: "\<And>t ev2. \<not> lvalue_shape t
-                      \<Longrightarrow> lvalue_of_term ev2 (mc_state full) (match_compile_term t) = Inl TypeError"
+    have tr_other: "\<And>t. \<not> lvalue_shape t \<Longrightarrow> \<not> lvalue_shape (match_compile_term t)"
     proof -
-      fix t :: CoreTerm and ev2 :: "'w InterpState \<Rightarrow> CoreTerm list \<Rightarrow> InterpError + CoreValue list"
+      fix t :: CoreTerm
       assume "\<not> lvalue_shape t"
-      thus "lvalue_of_term ev2 (mc_state full) (match_compile_term t) = Inl TypeError"
+      thus "\<not> lvalue_shape (match_compile_term t)"
       proof (cases t)
         case (CoreTm_Match scrut arms)
         obtain sc a where "compile_match_term (match_compile_term scrut)
@@ -359,10 +357,10 @@ proof (rule call_simI)
         thus ?thesis unfolding CoreTm_Match by (simp add: Let_def)
       qed simp_all
     qed
-    have lvrel: "(lvalue_of_term (interp_term_list d fuel) full (argTms ! k) = Inl TypeError
-                  \<and> lvalue_of_term ?evG (mc_state full) (match_compile_term (argTms ! k)) = Inl TypeError)
-                 \<or> (\<exists>a p a'. lvalue_of_term (interp_term_list d fuel) full (argTms ! k) = Inr (a, p)
-                          \<and> lvalue_of_term ?evG (mc_state full) (match_compile_term (argTms ! k)) = Inr (a', p)
+    have lvrel: "(interp_lvalue d fuel False full (argTms ! k) = Inl TypeError
+                  \<and> interp_lvalue d G False (mc_state full) (match_compile_term (argTms ! k)) = Inl TypeError)
+                 \<or> (\<exists>a p a'. interp_lvalue d fuel False full (argTms ! k) = Inr (a, p)
+                          \<and> interp_lvalue d G False (mc_state full) (match_compile_term (argTms ! k)) = Inr (a', p)
                           \<and> a = a')"
       if k: "k < length argTms" for k
     proof -
@@ -372,28 +370,30 @@ proof (rule call_simI)
         by (rule args_agree_term[OF bspec[OF agree nth_mem[OF k]] evF])
       have Qk: "?Q (argTms ! k)" using arg_ty[OF k] ok k by (auto simp: list_all_length)
       show ?thesis
-        by (rule lvalue_of_term_rel[where Q = ?Q and R = "(=)" and tr = match_compile_term,
+        by (rule interp_lvalue_rel[where Q = ?Q and R = "(=)" and tr = match_compile_term,
                  OF Qsub1 Qsub2 Qsub3 Qsub4 locs refs match_compile_term.simps(4,13,14,15,5)
-                    tr_other idx evF le_refl evG le_refl Qk])
+                    tr_other idx evF le_refl le_refl evG le_refl le_refl Qk])
     qed
     show ?thesis
       unfolding mc_interp_fun_simps(2)
-    proof (rule call_args_alias_None_map[OF aliasF len_args])
-      show "length (map match_compile_term argTms) = length (IF_Args f)" using len_args by simp
+    proof (rule call_args_alias_None_map[OF aliasF])
+      show "length (map (interp_lvalue d G False (mc_state full)) (map match_compile_term argTms))
+              = length (IF_Args f)" using len_args by simp
     next
       fix k assume "k < length (IF_Args f)"
       hence k: "k < length argTms" using len_args by simp
       from lvrel[OF k]
-      show "lvalue_of_term ?evG (mc_state full) (map match_compile_term argTms ! k) \<noteq> Inl InsufficientFuel"
+      show "map (interp_lvalue d G False (mc_state full)) (map match_compile_term argTms) ! k
+              \<noteq> Inl InsufficientFuel"
         using k by auto
     next
       fix k k' assume "k < length (IF_Args f)" "k' < length (IF_Args f)"
-        and ra: "res_alias (lvalue_of_term ?evG (mc_state full) (map match_compile_term argTms ! k))
-                           (lvalue_of_term ?evG (mc_state full) (map match_compile_term argTms ! k'))"
+        and ra: "res_alias (map (interp_lvalue d G False (mc_state full)) (map match_compile_term argTms) ! k)
+                           (map (interp_lvalue d G False (mc_state full)) (map match_compile_term argTms) ! k')"
       hence k: "k < length argTms" and k': "k' < length argTms" using len_args by simp_all
       from lvrel[OF k] lvrel[OF k'] ra
-      show "res_alias (lvalue_of_term (interp_term_list d fuel) full (argTms ! k))
-                      (lvalue_of_term (interp_term_list d fuel) full (argTms ! k'))"
+      show "res_alias (map (interp_lvalue d fuel False full) argTms ! k)
+                      (map (interp_lvalue d fuel False full) argTms ! k')"
         using k k' by (auto simp: res_alias_iff)
     qed
   qed

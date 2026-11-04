@@ -593,50 +593,58 @@ Core interpreter, is heavier and is not recommended.
 
 *Status (end of stage 4): implemented.* `interp_function_call`
 (`CoreInterp.thy`) binds the arguments (`fold process_one_arg`) and then
-runs `call_args_alias (interp_term_list d fuel) state (IF_Args f) argTms`
-before the contract checks and the body:
+runs `call_args_alias (IF_Args f) (map (interp_lvalue d fuel False state)
+argTms)` before the contract checks and the body:
 
-- `lvalue_of_term ev state tm` is the lvalue an argument term denotes, for
-  this check only: like `interp_writable_lvalue`, but a const local is
-  accepted as the base (a by-value argument may be a const local that a
-  `ref` argument aliases), a global is not an lvalue (a `ref` can never
-  target a global, so nothing aliases one), and the index terms are
-  evaluated by the evaluator `ev` passed in (the interpreter passes
-  `interp_term_list d fuel` through the congruence rule
-  `lvalue_of_term_cong`/`call_args_alias_cong`, exactly as it passes
-  `interp_statement_list` to `call_body`, so the mutual recursion of the
-  interpreter is untouched). Any other term is not an lvalue (`TypeError`)
-  and takes no part in the check.
+- `interp_lvalue d fuel writable state tm` is the interpreter's lvalue
+  resolver (one of the mutually recursive functions; it was
+  `interp_writable_lvalue`, which is now the abbreviation
+  `interp_lvalue d fuel True`). The mode `writable` decides whether a
+  read-only base variable (in `IS_ConstLocals`) is a `TypeError` (`True`:
+  ref declarations, assignments, swaps and the `ref` arguments of a call)
+  or accepted (`False`: the aliasing check, since a by-value argument may be
+  a const local that a `ref` argument aliases). In either mode a global is
+  not an lvalue (a `ref` can never target a global, so nothing aliases
+  one), and any term outside `lvalue_shape` is `TypeError` and takes no
+  part in the check. The index terms are evaluated by `interp_term_list`
+  at the fuel of the enclosing level, as before.
 - `lvalues_alias`: same address and, with `LVPath_ArrayCast` steps removed
   (`strip_casts`), one path a prefix of the other (`path_prefix`); the
   index lists of `LVPath_ArrayProj` steps are compared as values.
 - `args_alias args lvs`: some pair `i ≠ j` of arguments with at least one
   bound `Ref` has aliasing resolutions (`pair_alias`, `res_alias`).
-- `call_args_alias`: `Some InsufficientFuel` if any resolution ran out of
-  fuel (keeps the result monotone in the fuel), `Some RuntimeError` if
-  `args_alias`, else `None`; the call returns `Inl err` on `Some err`.
+- `call_args_alias args lvs`, on the list of resolutions: `Some
+  InsufficientFuel` if any resolution ran out of fuel (keeps the result
+  monotone in the fuel), `Some RuntimeError` if `args_alias`, else `None`;
+  the call returns `Inl err` on `Some err`.
 
 It applies to every call (extern functions included) and every pair of
 arguments, ghost calls and ghost arguments included, as the verifier does.
 Differences from the proposal: none in substance; the "readable lvalue"
-variant is `lvalue_of_term` with the evaluator as a parameter rather than a
-fuelled copy of `interp_writable_lvalue`.
+variant is the non-writable mode of the one resolver rather than a copy of
+it. (A first version had a separate copy, `lvalue_of_term`, parametrised by
+the index evaluator; it was folded into `interp_lvalue` to remove the
+duplication. The only cost is that the mode is an argument of the mutually
+recursive definition, so the fuel and depth monotonicity inductions carry
+it; every other lemma reads unchanged through the abbreviation.)
 
 The dependent proofs were repaired as stage 2 did for the copy check.
-Fuel and depth monotonicity (`CoreInterpFuelMono`): the check agrees across
-evaluators that agree on every index list with enough fuel
-(`call_args_alias_agree`); frame, world, preservation and type soundness
-need nothing new (`interp_function_call_InrE` keeps its five facts; a call
-that succeeds passed the check, `interp_function_call_Inr_no_alias`; the
-check fails only with `InsufficientFuel` or `RuntimeError`,
-`call_args_alias_Some_sound`). The two simulations carry the check across
-by `lvalue_of_term_rel` (`CoreInterpFuelMono`): for a transformation of
-state and term that keeps the shape of lvalues, turns non-lvalues into
-non-lvalues and relates the addresses of locals, an argument that evaluates
-as an rvalue in both states resolves to no lvalue in both, or to lvalues
-with the same path and related addresses. Ghost erasure then uses that the
-erased call's argument pairs are the full call's pairs at the non-ghost
-positions (`args_alias_sublist_rel`, `call_args_alias_None_rel`,
+Fuel and depth monotonicity (`CoreInterpFuelMono`): the non-writable
+resolutions of the arguments are covered by the same induction case as the
+writable ones, and agree with more fuel or depth unless one ran out of fuel
+(`call_args_alias_not_fuelD`); frame, world, preservation and type
+soundness need nothing new (`interp_function_call_InrE` keeps its five
+facts; a call that succeeds passed the check,
+`interp_function_call_Inr_no_alias`; the check fails only with
+`InsufficientFuel` or `RuntimeError`, `call_args_alias_Some_sound`). The
+two simulations carry the check across by `interp_lvalue_rel`
+(`CoreInterpFuelMono`): for a transformation of state and term that keeps
+the shape of lvalues, turns non-lvalues into non-lvalues and relates the
+addresses of locals, an argument that evaluates as an rvalue in both states
+resolves to no lvalue in both, or to lvalues with the same path and related
+addresses. Ghost erasure then uses that the erased call's argument pairs
+are the full call's pairs at the non-ghost positions
+(`args_alias_sublist_rel`, `call_args_alias_None_rel`,
 `notghost_positions` in `CoreTyEnv`); match compilation uses the same with
 the identity selection (`call_args_alias_None_map`).
 

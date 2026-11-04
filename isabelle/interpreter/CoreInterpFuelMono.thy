@@ -805,9 +805,9 @@ lemma interp_fuel_mono:
     and interp_term_list_fuel_mono:
             "interp_term_list d f (state :: 'w InterpState) tms \<noteq> Inl InsufficientFuel
                \<Longrightarrow> \<forall>f'\<ge>f. interp_term_list d f' state tms = interp_term_list d f state tms"
-    and interp_writable_lvalue_fuel_mono:
-            "interp_writable_lvalue d f (state :: 'w InterpState) tm \<noteq> Inl InsufficientFuel
-               \<Longrightarrow> \<forall>f'\<ge>f. interp_writable_lvalue d f' state tm = interp_writable_lvalue d f state tm"
+    and interp_lvalue_fuel_mono:
+            "interp_lvalue d f wr (state :: 'w InterpState) tm \<noteq> Inl InsufficientFuel
+               \<Longrightarrow> \<forall>f'\<ge>f. interp_lvalue d f' wr state tm = interp_lvalue d f wr state tm"
     and interp_statement_fuel_mono:
             "interp_statement d f (state :: 'w InterpState) stmt \<noteq> Inl InsufficientFuel
                \<Longrightarrow> \<forall>f'\<ge>f. interp_statement d f' state stmt = interp_statement d f state stmt"
@@ -818,7 +818,12 @@ lemma interp_fuel_mono:
             "interp_function_call d f (state :: 'w InterpState) fnName argTys argTms \<noteq> Inl InsufficientFuel
                \<Longrightarrow> \<forall>f'\<ge>f. interp_function_call d f' state fnName argTys argTms
                     = interp_function_call d f state fnName argTys argTms"
-proof (induction rule: interp_term_interp_term_list_interp_writable_lvalue_interp_statement_interp_statement_list_interp_function_call.induct)
+proof (induction d f state tm and d f state tms and d f wr state tm and d f state stmt
+                 and d f state stmts and d f state fnName argTys argTms
+       rule: interp_term_interp_term_list_interp_lvalue_interp_statement_interp_statement_list_interp_function_call.induct)
+  \<comment> \<open>The induction variables are given explicitly: with the boolean mode argument
+      of interp_lvalue, the method would otherwise unify the lvalue goal as a mere
+      projection onto that argument.\<close>
   (* interp_term, fuel = 0 *)
   case (1 d state tm)
   then show ?case by simp
@@ -1266,50 +1271,50 @@ next
                        = interp_term d (Suc fuel) state (CoreTm_Default ty)" by simp
   qed
 next
-  (* interp_writable_lvalue, fuel = 0 *)
-  case (22 d state tm)
+  (* interp_lvalue, fuel = 0 *)
+  case (22 d wr state tm)
   then show ?case by simp
 next
-  (* interp_writable_lvalue, fuel > 0 *)
-  case (23 d fuel state tm)
+  (* interp_lvalue, fuel > 0 *)
+  case (23 d fuel wr state tm)
   then show ?case
   proof (intro allI impI)
     fix f' assume "f' \<ge> Suc fuel"
     then obtain f'' where f'_eq: "f' = Suc f''" and f''_ge: "f'' \<ge> fuel"
       using Suc_le_D by auto
-    assume noFuel: "interp_writable_lvalue d (Suc fuel) state tm \<noteq> Inl InsufficientFuel"
-    show "interp_writable_lvalue d f' state tm = interp_writable_lvalue d (Suc fuel) state tm"
+    assume noFuel: "interp_lvalue d (Suc fuel) wr state tm \<noteq> Inl InsufficientFuel"
+    show "interp_lvalue d f' wr state tm = interp_lvalue d (Suc fuel) wr state tm"
     proof (cases tm)
       case (CoreTm_Var varName)
       thus ?thesis using f'_eq by simp
     next
       case (CoreTm_RecordProj tm' fldName)
-      hence sub_noFuel: "interp_writable_lvalue d fuel state tm' \<noteq> Inl InsufficientFuel"
+      hence sub_noFuel: "interp_lvalue d fuel wr state tm' \<noteq> Inl InsufficientFuel"
         using noFuel by (auto split: sum.splits)
-      hence IH: "\<forall>f'\<ge>fuel. interp_writable_lvalue d f' state tm' = interp_writable_lvalue d fuel state tm'"
+      hence IH: "\<forall>f'\<ge>fuel. interp_lvalue d f' wr state tm' = interp_lvalue d fuel wr state tm'"
         using "23.IH"(2) CoreTm_RecordProj by blast
-      from IH f''_ge have "interp_writable_lvalue d f'' state tm' = interp_writable_lvalue d fuel state tm'"
+      from IH f''_ge have "interp_lvalue d f'' wr state tm' = interp_lvalue d fuel wr state tm'"
         by metis
       thus ?thesis using f'_eq CoreTm_RecordProj by simp
     next
       case (CoreTm_VariantProj tm' ctorName)
-      hence sub_noFuel: "interp_writable_lvalue d fuel state tm' \<noteq> Inl InsufficientFuel"
+      hence sub_noFuel: "interp_lvalue d fuel wr state tm' \<noteq> Inl InsufficientFuel"
         using noFuel by (auto split: sum.splits)
-      hence IH: "\<forall>f'\<ge>fuel. interp_writable_lvalue d f' state tm' = interp_writable_lvalue d fuel state tm'"
+      hence IH: "\<forall>f'\<ge>fuel. interp_lvalue d f' wr state tm' = interp_lvalue d fuel wr state tm'"
         using "23.IH"(3) CoreTm_VariantProj by blast
-      from IH f''_ge have "interp_writable_lvalue d f'' state tm' = interp_writable_lvalue d fuel state tm'"
+      from IH f''_ge have "interp_lvalue d f'' wr state tm' = interp_lvalue d fuel wr state tm'"
         by metis
       thus ?thesis using f'_eq CoreTm_VariantProj by simp
     next
       case (CoreTm_ArrayProj tm' indexTms)
-      hence lv_noFuel: "interp_writable_lvalue d fuel state tm' \<noteq> Inl InsufficientFuel"
+      hence lv_noFuel: "interp_lvalue d fuel wr state tm' \<noteq> Inl InsufficientFuel"
         using noFuel by (auto split: sum.splits)
-      hence IH_lv: "\<forall>f'\<ge>fuel. interp_writable_lvalue d f' state tm' = interp_writable_lvalue d fuel state tm'"
+      hence IH_lv: "\<forall>f'\<ge>fuel. interp_lvalue d f' wr state tm' = interp_lvalue d fuel wr state tm'"
         using "23.IH"(4) CoreTm_ArrayProj by blast
       show ?thesis
-      proof (cases "interp_writable_lvalue d fuel state tm'")
+      proof (cases "interp_lvalue d fuel wr state tm'")
         case (Inl err)
-        hence "interp_writable_lvalue d f'' state tm' = Inl err" using IH_lv f''_ge by metis
+        hence "interp_lvalue d f'' wr state tm' = Inl err" using IH_lv f''_ge by metis
         thus ?thesis using f'_eq CoreTm_ArrayProj Inl by simp
       next
         case (Inr addrPath)
@@ -1318,7 +1323,7 @@ next
         hence IH_idx: "\<forall>f'\<ge>fuel. interp_term_list d f' state indexTms = interp_term_list d fuel state indexTms"
           using "23.IH"(5) CoreTm_ArrayProj Inr
           by (metis prod.exhaust)
-        have "interp_writable_lvalue d f'' state tm' = Inr addrPath" using IH_lv Inr f''_ge by metis
+        have "interp_lvalue d f'' wr state tm' = Inr addrPath" using IH_lv Inr f''_ge by metis
         moreover have "interp_term_list d f'' state indexTms = interp_term_list d fuel state indexTms"
           using IH_idx f''_ge by metis
         ultimately show ?thesis using f'_eq CoreTm_ArrayProj Inr by simp
@@ -1337,11 +1342,11 @@ next
       show ?thesis
       proof (cases targetTy)
         case (CoreTy_Array elemTy dims)
-        hence lv_noFuel: "interp_writable_lvalue d fuel state tm' \<noteq> Inl InsufficientFuel"
+        hence lv_noFuel: "interp_lvalue d fuel wr state tm' \<noteq> Inl InsufficientFuel"
           using noFuel CoreTm_Cast by (auto split: sum.splits)
-        hence IH: "\<forall>f'\<ge>fuel. interp_writable_lvalue d f' state tm' = interp_writable_lvalue d fuel state tm'"
+        hence IH: "\<forall>f'\<ge>fuel. interp_lvalue d f' wr state tm' = interp_lvalue d fuel wr state tm'"
           using "23.IH"(1) CoreTm_Cast CoreTy_Array by blast
-        from IH f''_ge have "interp_writable_lvalue d f'' state tm' = interp_writable_lvalue d fuel state tm'"
+        from IH f''_ge have "interp_lvalue d f'' wr state tm' = interp_lvalue d fuel wr state tm'"
           by metis
         thus ?thesis using f'_eq CoreTm_Cast CoreTy_Array by simp
       qed (simp_all add: f'_eq CoreTm_Cast)
@@ -2181,46 +2186,48 @@ next
                             = Inr preCallState"
               using fold_eq PreCall by simp
 
-            (* The aliasing check: the IH for interp_term_list (through
-               call_args_alias_cong) says the index lists agree, so the check
-               gives the same answer with more fuel, unless it ran out of fuel,
-               which the call did not. *)
-            have alias_nf: "call_args_alias (interp_term_list d fuel) state (IF_Args fn) argTms
+            (* The aliasing check: the IH for the (non-writable) resolutions of
+               the arguments says they agree with more fuel, unless one ran out
+               of fuel, which the call did not. *)
+            have alias_nf: "call_args_alias (IF_Args fn) (map (interp_lvalue d fuel False state) argTms)
                               \<noteq> Some InsufficientFuel"
             proof
-              assume "call_args_alias (interp_term_list d fuel) state (IF_Args fn) argTms = Some InsufficientFuel"
+              assume "call_args_alias (IF_Args fn) (map (interp_lvalue d fuel False state) argTms) = Some InsufficientFuel"
               hence "interp_function_call d (Suc fuel) state fnName argTys argTms = Inl InsufficientFuel"
                 using Some len_args len_tys PreCall by (simp add: Let_def)
               with noFuel show False ..
             qed
-            have IH_alias0: "\<And>tms. interp_term_list d fuel state tms \<noteq> Inl InsufficientFuel
-                              \<Longrightarrow> \<forall>f'\<ge>fuel. interp_term_list d f' state tms = interp_term_list d fuel state tms"
+            have IH_alias0: "\<And>argTm. argTm \<in> set argTms
+                              \<Longrightarrow> interp_lvalue d fuel False state argTm \<noteq> Inl InsufficientFuel
+                              \<Longrightarrow> \<forall>f'\<ge>fuel. interp_lvalue d f' False state argTm = interp_lvalue d fuel False state argTm"
               by (rule "50.IH"(3)[OF Some False tyLen refl refl refl refl refl PreCall])
-            have IH_alias: "\<And>tms. interp_term_list d fuel state tms \<noteq> Inl InsufficientFuel
-                             \<Longrightarrow> interp_term_list d f'' state tms = interp_term_list d fuel state tms"
-              using IH_alias0 f''_ge by blast
-            have alias_eq: "call_args_alias (interp_term_list d f'') state (IF_Args fn) argTms
-                            = call_args_alias (interp_term_list d fuel) state (IF_Args fn) argTms"
-              by (rule call_args_alias_agree[where ev = "interp_term_list d fuel"
-                        and ev' = "interp_term_list d f''" and state = state, OF IH_alias alias_nf])
+            have alias_eq: "call_args_alias (IF_Args fn) (map (interp_lvalue d f'' False state) argTms)
+                            = call_args_alias (IF_Args fn) (map (interp_lvalue d fuel False state) argTms)"
+            proof (rule arg_cong[where f = "call_args_alias (IF_Args fn)"], rule map_cong[OF refl])
+              fix argTm assume mem: "argTm \<in> set argTms"
+              hence "interp_lvalue d fuel False state argTm \<noteq> Inl InsufficientFuel"
+                using call_args_alias_not_fuelD[OF alias_nf] by auto
+              from IH_alias0[OF mem this] f''_ge
+              show "interp_lvalue d f'' False state argTm = interp_lvalue d fuel False state argTm" by blast
+            qed
 
             (* Both sides, in terms of the aliasing check, checked_call and call_body. *)
             have lhs0: "interp_function_call d f' state fnName argTys argTms
-                         = (case call_args_alias (interp_term_list d fuel) state (IF_Args fn) argTms of
+                         = (case call_args_alias (IF_Args fn) (map (interp_lvalue d fuel False state) argTms) of
                               Some err \<Rightarrow> Inl err
                             | None \<Rightarrow> checked_call (interp_term_list d f'') fn ?refs'' ?vals''
                                         ?calleeTyArgs ?clearedState
                                         (call_body (interp_statement_list d f'') state fn?refs'' ?vals'' preCallState))"
               using f'_eq using Some len_args len_tys fold'' alias_eq by (simp add: Let_def)
             have rhs0: "interp_function_call d (Suc fuel) state fnName argTys argTms
-                         = (case call_args_alias (interp_term_list d fuel) state (IF_Args fn) argTms of
+                         = (case call_args_alias (IF_Args fn) (map (interp_lvalue d fuel False state) argTms) of
                               Some err \<Rightarrow> Inl err
                             | None \<Rightarrow> checked_call (interp_term_list d fuel) fn ?refResults ?valResults
                                         ?calleeTyArgs ?clearedState
                                         (call_body (interp_statement_list d fuel) state fn?refResults ?valResults preCallState))"
               using Some len_args len_tys PreCall by (simp add: Let_def)
             show ?thesis
-            proof (cases "call_args_alias (interp_term_list d fuel) state (IF_Args fn) argTms")
+            proof (cases "call_args_alias (IF_Args fn) (map (interp_lvalue d fuel False state) argTms)")
               case (Some err)
               thus ?thesis unfolding lhs0 rhs0 by simp
             next
@@ -2307,6 +2314,8 @@ next
     qed
   qed
 qed
+
+lemmas interp_writable_lvalue_fuel_mono = interp_lvalue_fuel_mono[where wr = True]
 
 
 (* ========================================================================== *)
@@ -2408,9 +2417,9 @@ lemma interp_depth_mono:
     and interp_term_list_depth_mono:
             "interp_term_list d f (state :: 'w InterpState) tms \<noteq> Inl InsufficientFuel
                \<Longrightarrow> \<forall>d'\<ge>d. interp_term_list d' f state tms = interp_term_list d f state tms"
-    and interp_writable_lvalue_depth_mono:
-            "interp_writable_lvalue d f (state :: 'w InterpState) tm \<noteq> Inl InsufficientFuel
-               \<Longrightarrow> \<forall>d'\<ge>d. interp_writable_lvalue d' f state tm = interp_writable_lvalue d f state tm"
+    and interp_lvalue_depth_mono:
+            "interp_lvalue d f wr (state :: 'w InterpState) tm \<noteq> Inl InsufficientFuel
+               \<Longrightarrow> \<forall>d'\<ge>d. interp_lvalue d' f wr state tm = interp_lvalue d f wr state tm"
     and interp_statement_depth_mono:
             "interp_statement d f (state :: 'w InterpState) stmt \<noteq> Inl InsufficientFuel
                \<Longrightarrow> \<forall>d'\<ge>d. interp_statement d' f state stmt = interp_statement d f state stmt"
@@ -2421,7 +2430,12 @@ lemma interp_depth_mono:
             "interp_function_call d f (state :: 'w InterpState) fnName argTys argTms \<noteq> Inl InsufficientFuel
                \<Longrightarrow> \<forall>d'\<ge>d. interp_function_call d' f state fnName argTys argTms
                     = interp_function_call d f state fnName argTys argTms"
-proof (induction rule: interp_term_interp_term_list_interp_writable_lvalue_interp_statement_interp_statement_list_interp_function_call.induct)
+proof (induction d f state tm and d f state tms and d f wr state tm and d f state stmt
+                 and d f state stmts and d f state fnName argTys argTms
+       rule: interp_term_interp_term_list_interp_lvalue_interp_statement_interp_statement_list_interp_function_call.induct)
+  \<comment> \<open>The induction variables are given explicitly: with the boolean mode argument
+      of interp_lvalue, the method would otherwise unify the lvalue goal as a mere
+      projection onto that argument.\<close>
   (* interp_term, fuel = 0 *)
   case 1 then show ?case by simp
 next
@@ -2745,37 +2759,37 @@ next
   (* Default: default_value does not take a depth *)
   case 21 then show ?case by simp
 next
-  (* interp_writable_lvalue, fuel = 0 *)
+  (* interp_lvalue, fuel = 0 *)
   case 22 then show ?case by simp
 next
-  (* interp_writable_lvalue, fuel > 0 *)
-  case (23 d fuel state tm)
+  (* interp_lvalue, fuel > 0 *)
+  case (23 d fuel wr state tm)
   show ?case
   proof (intro allI impI)
     fix d' assume d'_ge: "d' \<ge> d"
-    show "interp_writable_lvalue d' (Suc fuel) state tm = interp_writable_lvalue d (Suc fuel) state tm"
+    show "interp_lvalue d' (Suc fuel) wr state tm = interp_lvalue d (Suc fuel) wr state tm"
     proof (cases tm)
       case (CoreTm_RecordProj tm' fldName)
-      hence "interp_writable_lvalue d fuel state tm' \<noteq> Inl InsufficientFuel"
+      hence "interp_lvalue d fuel wr state tm' \<noteq> Inl InsufficientFuel"
         using "23.prems" by (auto split: sum.splits)
-      hence "interp_writable_lvalue d' fuel state tm' = interp_writable_lvalue d fuel state tm'"
+      hence "interp_lvalue d' fuel wr state tm' = interp_lvalue d fuel wr state tm'"
         using "23.IH"(2) CoreTm_RecordProj d'_ge by blast
       thus ?thesis using CoreTm_RecordProj by simp
     next
       case (CoreTm_VariantProj tm' ctorName)
-      hence "interp_writable_lvalue d fuel state tm' \<noteq> Inl InsufficientFuel"
+      hence "interp_lvalue d fuel wr state tm' \<noteq> Inl InsufficientFuel"
         using "23.prems" by (auto split: sum.splits)
-      hence "interp_writable_lvalue d' fuel state tm' = interp_writable_lvalue d fuel state tm'"
+      hence "interp_lvalue d' fuel wr state tm' = interp_lvalue d fuel wr state tm'"
         using "23.IH"(3) CoreTm_VariantProj d'_ge by blast
       thus ?thesis using CoreTm_VariantProj by simp
     next
       case (CoreTm_ArrayProj tm' indexTms)
-      hence "interp_writable_lvalue d fuel state tm' \<noteq> Inl InsufficientFuel"
+      hence "interp_lvalue d fuel wr state tm' \<noteq> Inl InsufficientFuel"
         using "23.prems" by (auto split: sum.splits)
-      hence lv_eq: "interp_writable_lvalue d' fuel state tm' = interp_writable_lvalue d fuel state tm'"
+      hence lv_eq: "interp_lvalue d' fuel wr state tm' = interp_lvalue d fuel wr state tm'"
         using "23.IH"(4) CoreTm_ArrayProj d'_ge by blast
       show ?thesis
-      proof (cases "interp_writable_lvalue d fuel state tm'")
+      proof (cases "interp_lvalue d fuel wr state tm'")
         case (Inl err)
         thus ?thesis using CoreTm_ArrayProj lv_eq by simp
       next
@@ -2794,9 +2808,9 @@ next
       show ?thesis
       proof (cases targetTy)
         case (CoreTy_Array elemTy dims)
-        hence "interp_writable_lvalue d fuel state tm' \<noteq> Inl InsufficientFuel"
+        hence "interp_lvalue d fuel wr state tm' \<noteq> Inl InsufficientFuel"
           using "23.prems" CoreTm_Cast by (auto split: sum.splits)
-        hence "interp_writable_lvalue d' fuel state tm' = interp_writable_lvalue d fuel state tm'"
+        hence "interp_lvalue d' fuel wr state tm' = interp_lvalue d fuel wr state tm'"
           using "23.IH"(1) CoreTm_Cast CoreTy_Array d'_ge by blast
         thus ?thesis using CoreTm_Cast CoreTy_Array by simp
       qed (simp_all add: CoreTm_Cast)
@@ -3429,42 +3443,45 @@ next
               using fold_eq PreCall by simp
 
             (* The aliasing check, as in the fuel case. *)
-            have alias_nf: "call_args_alias (interp_term_list d fuel) state (IF_Args fn) argTms
+            have alias_nf: "call_args_alias (IF_Args fn) (map (interp_lvalue d fuel False state) argTms)
                               \<noteq> Some InsufficientFuel"
             proof
-              assume "call_args_alias (interp_term_list d fuel) state (IF_Args fn) argTms = Some InsufficientFuel"
+              assume "call_args_alias (IF_Args fn) (map (interp_lvalue d fuel False state) argTms) = Some InsufficientFuel"
               hence "interp_function_call d (Suc fuel) state fnName argTys argTms = Inl InsufficientFuel"
                 using Some len_args len_tys PreCall by (simp add: Let_def)
               with noFuel show False ..
             qed
-            have IH_alias0: "\<And>tms. interp_term_list d fuel state tms \<noteq> Inl InsufficientFuel
-                              \<Longrightarrow> \<forall>d'\<ge>d. interp_term_list d' fuel state tms = interp_term_list d fuel state tms"
+            have IH_alias0: "\<And>argTm. argTm \<in> set argTms
+                              \<Longrightarrow> interp_lvalue d fuel False state argTm \<noteq> Inl InsufficientFuel
+                              \<Longrightarrow> \<forall>d'\<ge>d. interp_lvalue d' fuel False state argTm = interp_lvalue d fuel False state argTm"
               by (rule "50.IH"(3)[OF Some False tyLen refl refl refl refl refl PreCall])
-            have IH_alias: "\<And>tms. interp_term_list d fuel state tms \<noteq> Inl InsufficientFuel
-                             \<Longrightarrow> interp_term_list d' fuel state tms = interp_term_list d fuel state tms"
-              using IH_alias0 d'_ge by blast
-            have alias_eq: "call_args_alias (interp_term_list d' fuel) state (IF_Args fn) argTms
-                            = call_args_alias (interp_term_list d fuel) state (IF_Args fn) argTms"
-              by (rule call_args_alias_agree[where ev = "interp_term_list d fuel"
-                        and ev' = "interp_term_list d' fuel" and state = state, OF IH_alias alias_nf])
+            have alias_eq: "call_args_alias (IF_Args fn) (map (interp_lvalue d' fuel False state) argTms)
+                            = call_args_alias (IF_Args fn) (map (interp_lvalue d fuel False state) argTms)"
+            proof (rule arg_cong[where f = "call_args_alias (IF_Args fn)"], rule map_cong[OF refl])
+              fix argTm assume mem: "argTm \<in> set argTms"
+              hence "interp_lvalue d fuel False state argTm \<noteq> Inl InsufficientFuel"
+                using call_args_alias_not_fuelD[OF alias_nf] by auto
+              from IH_alias0[OF mem this] d'_ge
+              show "interp_lvalue d' fuel False state argTm = interp_lvalue d fuel False state argTm" by blast
+            qed
 
             (* Both sides, in terms of the aliasing check, checked_call and call_body. *)
             have lhs0: "interp_function_call d' (Suc fuel) state fnName argTys argTms
-                         = (case call_args_alias (interp_term_list d fuel) state (IF_Args fn) argTms of
+                         = (case call_args_alias (IF_Args fn) (map (interp_lvalue d fuel False state) argTms) of
                               Some err \<Rightarrow> Inl err
                             | None \<Rightarrow> checked_call (interp_term_list d' fuel) fn ?refs' ?vals'
                                         ?calleeTyArgs ?clearedState
                                         (call_body (interp_statement_list d' fuel) state fn?refs' ?vals' preCallState))"
               using Some len_args len_tys fold' alias_eq by (simp add: Let_def)
             have rhs0: "interp_function_call d (Suc fuel) state fnName argTys argTms
-                         = (case call_args_alias (interp_term_list d fuel) state (IF_Args fn) argTms of
+                         = (case call_args_alias (IF_Args fn) (map (interp_lvalue d fuel False state) argTms) of
                               Some err \<Rightarrow> Inl err
                             | None \<Rightarrow> checked_call (interp_term_list d fuel) fn ?refResults ?valResults
                                         ?calleeTyArgs ?clearedState
                                         (call_body (interp_statement_list d fuel) state fn?refResults ?valResults preCallState))"
               using Some len_args len_tys PreCall by (simp add: Let_def)
             show ?thesis
-            proof (cases "call_args_alias (interp_term_list d fuel) state (IF_Args fn) argTms")
+            proof (cases "call_args_alias (IF_Args fn) (map (interp_lvalue d fuel False state) argTms)")
               case (Some err)
               thus ?thesis unfolding lhs0 rhs0 by simp
             next
@@ -3551,6 +3568,8 @@ next
     qed
   qed
 qed
+
+lemmas interp_writable_lvalue_depth_mono = interp_lvalue_depth_mono[where wr = True]
 
 
 (* ========================================================================== *)
@@ -3689,18 +3708,42 @@ qed
 (* The lvalue of an argument across a transformation of state and term         *)
 (* ========================================================================== *)
 
-(* The aliasing check of a call resolves every argument with lvalue_of_term.
-   The ghost erasure and match compilation simulations need the resolutions of
-   the transformed arguments in the transformed state, from those of the
-   original arguments in the original state. Both transformations keep the
-   shape of lvalues (tr_simps), turn a non-lvalue into a non-lvalue
-   (tr_other), and relate the addresses of the local variables (R). The
-   argument evaluates as an rvalue in both states (so every index list of the
-   lvalue skeleton does, at the respective fuel), and index lists that
-   evaluate in both states evaluate to the same values (idx). Then either both
-   resolutions are TypeError (no lvalue), or both are lvalues with the same
-   path and related addresses. *)
-lemma lvalue_of_term_rel:
+(* The aliasing check of a call resolves every argument with interp_lvalue
+   in its non-writable mode. The ghost erasure and match compilation
+   simulations need the resolutions of the transformed arguments in the
+   transformed state, from those of the original arguments in the original
+   state. Both transformations keep the shape of lvalues (tr_simps), turn a
+   non-lvalue into a non-lvalue (tr_other), and relate the addresses of the
+   local variables (R). The argument evaluates as an rvalue in both states
+   (so every index list of the lvalue skeleton does, at the respective fuel),
+   and index lists that evaluate in both states evaluate to the same values
+   (idx, at the fuels F and F'). Then, resolving at any fuels G and G' between
+   those of the evaluations and F and F', either both resolutions are
+   TypeError (no lvalue), or both are lvalues with the same path and related
+   addresses. *)
+
+lemma interp_term_Inr_le_Suc:
+  "interp_term d fuel s tm = Inr v \<Longrightarrow> fuel \<le> G \<Longrightarrow> \<exists>G0. G = Suc G0"
+  by (cases fuel; cases G) simp_all
+
+(* A term that is not an lvalue resolves to TypeError in both states (the
+   fuels are positive, as the terms evaluated). *)
+lemma interp_lvalue_rel_other:
+  assumes "\<not> lvalue_shape tm" and "\<not> lvalue_shape tm'"
+    and "interp_term d fuel s tm = Inr v" and "fuel \<le> G"
+    and "interp_term d fuel' s' tm' = Inr v'" and "fuel' \<le> G'"
+  shows "(interp_lvalue d G wr s tm = Inl TypeError \<and> interp_lvalue d G' wr' s' tm' = Inl TypeError) \<or> P"
+proof -
+  obtain G0 where G: "G = Suc G0" using interp_term_Inr_le_Suc[OF assms(3,4)] by blast
+  obtain G0' where G': "G' = Suc G0'" using interp_term_Inr_le_Suc[OF assms(5,6)] by blast
+  have "interp_lvalue d G wr s tm = Inl TypeError"
+    unfolding G by (rule interp_lvalue_not_shape[OF assms(1)])
+  moreover have "interp_lvalue d G' wr' s' tm' = Inl TypeError"
+    unfolding G' by (rule interp_lvalue_not_shape[OF assms(2)])
+  ultimately show ?thesis by simp
+qed
+
+lemma interp_lvalue_rel:
   fixes tr :: "CoreTerm \<Rightarrow> CoreTerm" and R :: "nat \<Rightarrow> nat \<Rightarrow> bool" and Q :: "CoreTerm \<Rightarrow> bool"
     and s s' :: "'w InterpState"
   assumes Q_sub: "\<And>t f. Q (CoreTm_RecordProj t f) \<Longrightarrow> Q t"
@@ -3715,22 +3758,24 @@ lemma lvalue_of_term_rel:
                   "\<And>t c. tr (CoreTm_VariantProj t c) = CoreTm_VariantProj (tr t) c"
                   "\<And>t idx. tr (CoreTm_ArrayProj t idx) = CoreTm_ArrayProj (tr t) (map tr idx)"
                   "\<And>ty t. tr (CoreTm_Cast ty t) = CoreTm_Cast ty (tr t)"
-    and tr_other: "\<And>t ev2. \<not> lvalue_shape t \<Longrightarrow> lvalue_of_term ev2 s' (tr t) = Inl TypeError"
+    and tr_other: "\<And>t. \<not> lvalue_shape t \<Longrightarrow> \<not> lvalue_shape (tr t)"
     and idx: "\<And>tms vs vs'. list_all Q tms \<Longrightarrow> interp_term_list d F s tms = Inr vs
                 \<Longrightarrow> interp_term_list d F' s' (map tr tms) = Inr vs' \<Longrightarrow> vs = vs'"
-    and ev: "interp_term d fuel s tm = Inr v" and F: "fuel \<le> F"
-    and ev': "interp_term d fuel' s' (tr tm) = Inr v'" and F': "fuel' \<le> F'"
+    and ev: "interp_term d fuel s tm = Inr v" and F: "fuel \<le> G" and GF: "G \<le> F"
+    and ev': "interp_term d fuel' s' (tr tm) = Inr v'" and F': "fuel' \<le> G'" and GF': "G' \<le> F'"
     and Q: "Q tm"
-  shows "(lvalue_of_term (interp_term_list d F) s tm = Inl TypeError
-          \<and> lvalue_of_term (interp_term_list d F') s' (tr tm) = Inl TypeError)
-         \<or> (\<exists>a p a'. lvalue_of_term (interp_term_list d F) s tm = Inr (a, p)
-                  \<and> lvalue_of_term (interp_term_list d F') s' (tr tm) = Inr (a', p) \<and> R a a')"
-  using ev F ev' F' Q
-proof (induction tm arbitrary: fuel fuel' v v')
+  shows "(interp_lvalue d G False s tm = Inl TypeError
+          \<and> interp_lvalue d G' False s' (tr tm) = Inl TypeError)
+         \<or> (\<exists>a p a'. interp_lvalue d G False s tm = Inr (a, p)
+                  \<and> interp_lvalue d G' False s' (tr tm) = Inr (a', p) \<and> R a a')"
+  using ev F GF ev' F' GF' Q
+proof (induction tm arbitrary: fuel fuel' v v' G G')
   case (CoreTm_Var x)
-  note Qx = CoreTm_Var.prems(5)
+  note Qx = CoreTm_Var.prems(7)
+  obtain G0 where G: "G = Suc G0" using interp_term_Inr_le_Suc[OF CoreTm_Var.prems(1,2)] by blast
+  obtain G0' where G': "G' = Suc G0'" using interp_term_Inr_le_Suc[OF CoreTm_Var.prems(4,5)] by blast
   show ?case
-    using locals[OF Qx] refs[OF Qx]
+    using locals[OF Qx] refs[OF Qx] unfolding G G'
     by (cases "fmlookup (IS_Locals s) x"; cases "fmlookup (IS_Locals s') x";
         cases "fmlookup (IS_Refs s) x"; cases "fmlookup (IS_Refs s') x")
        (auto simp: tr_simps(1))
@@ -3739,60 +3784,76 @@ next
   from CoreTm_RecordProj.prems(1) obtain f0 w where fuel: "fuel = Suc f0"
     and evt: "interp_term d f0 s t = Inr w"
     by (cases fuel) (auto split: sum.splits CoreValue.splits)
-  from CoreTm_RecordProj.prems(3) obtain f0' w' where fuel': "fuel' = Suc f0'"
+  from CoreTm_RecordProj.prems(4) obtain f0' w' where fuel': "fuel' = Suc f0'"
     and evt': "interp_term d f0' s' (tr t) = Inr w'"
     unfolding tr_simps(2) by (cases fuel') (auto split: sum.splits CoreValue.splits)
-  have Qt: "Q t" using Q_sub(1) CoreTm_RecordProj.prems(5) by blast
-  have le: "f0 \<le> F" "f0' \<le> F'" using fuel fuel' CoreTm_RecordProj.prems(2,4) by simp_all
-  from CoreTm_RecordProj.IH[OF evt le(1) evt' le(2) Qt]
-  show ?case unfolding tr_simps(2) by auto
+  obtain G0 where G: "G = Suc G0" using Suc_le_D[OF CoreTm_RecordProj.prems(2)[unfolded fuel]] by blast
+  obtain G0' where G': "G' = Suc G0'" using Suc_le_D[OF CoreTm_RecordProj.prems(5)[unfolded fuel']] by blast
+  have Qt: "Q t" using Q_sub(1) CoreTm_RecordProj.prems(7) by blast
+  have le: "f0 \<le> G0" "G0 \<le> F" "f0' \<le> G0'" "G0' \<le> F'"
+    using fuel fuel' G G' CoreTm_RecordProj.prems(2,3,5,6) by simp_all
+  from CoreTm_RecordProj.IH[OF evt le(1,2) evt' le(3,4) Qt]
+  show ?case unfolding tr_simps(2) G G' by auto
 next
   case (CoreTm_VariantProj t c)
   from CoreTm_VariantProj.prems(1) obtain f0 w where fuel: "fuel = Suc f0"
     and evt: "interp_term d f0 s t = Inr w"
     by (cases fuel) (auto split: sum.splits CoreValue.splits if_splits)
-  from CoreTm_VariantProj.prems(3) obtain f0' w' where fuel': "fuel' = Suc f0'"
+  from CoreTm_VariantProj.prems(4) obtain f0' w' where fuel': "fuel' = Suc f0'"
     and evt': "interp_term d f0' s' (tr t) = Inr w'"
     unfolding tr_simps(3) by (cases fuel') (auto split: sum.splits CoreValue.splits if_splits)
-  have Qt: "Q t" using Q_sub(2) CoreTm_VariantProj.prems(5) by blast
-  have le: "f0 \<le> F" "f0' \<le> F'" using fuel fuel' CoreTm_VariantProj.prems(2,4) by simp_all
-  from CoreTm_VariantProj.IH[OF evt le(1) evt' le(2) Qt]
-  show ?case unfolding tr_simps(3) by auto
+  obtain G0 where G: "G = Suc G0" using Suc_le_D[OF CoreTm_VariantProj.prems(2)[unfolded fuel]] by blast
+  obtain G0' where G': "G' = Suc G0'" using Suc_le_D[OF CoreTm_VariantProj.prems(5)[unfolded fuel']] by blast
+  have Qt: "Q t" using Q_sub(2) CoreTm_VariantProj.prems(7) by blast
+  have le: "f0 \<le> G0" "G0 \<le> F" "f0' \<le> G0'" "G0' \<le> F'"
+    using fuel fuel' G G' CoreTm_VariantProj.prems(2,3,5,6) by simp_all
+  from CoreTm_VariantProj.IH[OF evt le(1,2) evt' le(3,4) Qt]
+  show ?case unfolding tr_simps(3) G G' by auto
 next
   case (CoreTm_ArrayProj t idx)
   from CoreTm_ArrayProj.prems(1) obtain f0 w ivs indices where fuel: "fuel = Suc f0"
     and evt: "interp_term d f0 s t = Inr w" and evi: "interp_term_list d f0 s idx = Inr ivs"
     and ii: "interpret_index_vals ivs = Inr indices"
     by (cases fuel) (auto split: sum.splits CoreValue.splits option.splits)
-  from CoreTm_ArrayProj.prems(3) obtain f0' w' ivs' where fuel': "fuel' = Suc f0'"
+  from CoreTm_ArrayProj.prems(4) obtain f0' w' ivs' where fuel': "fuel' = Suc f0'"
     and evt': "interp_term d f0' s' (tr t) = Inr w'"
     and evi': "interp_term_list d f0' s' (map tr idx) = Inr ivs'"
     unfolding tr_simps(4) by (cases fuel') (auto split: sum.splits CoreValue.splits option.splits)
-  have Qt: "Q t" and Qi: "list_all Q idx" using Q_sub(3) CoreTm_ArrayProj.prems(5) by blast+
-  have le: "f0 \<le> F" "f0' \<le> F'" using fuel fuel' CoreTm_ArrayProj.prems(2,4) by simp_all
-  have eviF: "interp_term_list d F s idx = Inr ivs"
+  obtain G0 where G: "G = Suc G0" using Suc_le_D[OF CoreTm_ArrayProj.prems(2)[unfolded fuel]] by blast
+  obtain G0' where G': "G' = Suc G0'" using Suc_le_D[OF CoreTm_ArrayProj.prems(5)[unfolded fuel']] by blast
+  have Qt: "Q t" and Qi: "list_all Q idx" using Q_sub(3) CoreTm_ArrayProj.prems(7) by blast+
+  have le: "f0 \<le> G0" "G0 \<le> F" "f0' \<le> G0'" "G0' \<le> F'"
+    using fuel fuel' G G' CoreTm_ArrayProj.prems(2,3,5,6) by simp_all
+  have eviG: "interp_term_list d G0 s idx = Inr ivs"
     by (rule interp_term_list_more_fuel[OF evi _ le(1)]) simp
+  have eviG': "interp_term_list d G0' s' (map tr idx) = Inr ivs'"
+    by (rule interp_term_list_more_fuel[OF evi' _ le(3)]) simp
+  have eviF: "interp_term_list d F s idx = Inr ivs"
+    by (rule interp_term_list_more_fuel[OF evi _ order_trans[OF le(1,2)]]) simp
   have eviF': "interp_term_list d F' s' (map tr idx) = Inr ivs'"
-    by (rule interp_term_list_more_fuel[OF evi' _ le(2)]) simp
+    by (rule interp_term_list_more_fuel[OF evi' _ order_trans[OF le(3,4)]]) simp
   have "ivs = ivs'" by (rule idx[OF Qi eviF eviF'])
-  with CoreTm_ArrayProj.IH(1)[OF evt le(1) evt' le(2) Qt] eviF eviF' ii
-  show ?case unfolding tr_simps(4) by (auto split: sum.splits)
+  with CoreTm_ArrayProj.IH(1)[OF evt le(1,2) evt' le(3,4) Qt] eviG eviG' ii
+  show ?case unfolding tr_simps(4) G G' by (auto split: sum.splits)
 next
   case (CoreTm_Cast ty t)
+  obtain G0 where G: "G = Suc G0" using interp_term_Inr_le_Suc[OF CoreTm_Cast.prems(1,2)] by blast
+  obtain G0' where G': "G' = Suc G0'" using interp_term_Inr_le_Suc[OF CoreTm_Cast.prems(4,5)] by blast
   show ?case
   proof (cases ty)
     case (CoreTy_Array e dims)
     from CoreTm_Cast.prems(1) obtain f0 w where fuel: "fuel = Suc f0"
       and evt: "interp_term d f0 s t = Inr w"
       by (cases fuel) (auto split: sum.splits)
-    from CoreTm_Cast.prems(3) obtain f0' w' where fuel': "fuel' = Suc f0'"
+    from CoreTm_Cast.prems(4) obtain f0' w' where fuel': "fuel' = Suc f0'"
       and evt': "interp_term d f0' s' (tr t) = Inr w'"
       unfolding tr_simps(5) by (cases fuel') (auto split: sum.splits)
-    have Qt: "Q t" using Q_sub(4) CoreTm_Cast.prems(5) by blast
-    have le: "f0 \<le> F" "f0' \<le> F'" using fuel fuel' CoreTm_Cast.prems(2,4) by simp_all
-    from CoreTm_Cast.IH[OF evt le(1) evt' le(2) Qt]
-    show ?thesis unfolding tr_simps(5) CoreTy_Array by auto
-  qed (simp_all add: tr_simps(5))
-qed (simp_all add: tr_other)
+    have Qt: "Q t" using Q_sub(4) CoreTm_Cast.prems(7) by blast
+    have le: "f0 \<le> G0" "G0 \<le> F" "f0' \<le> G0'" "G0' \<le> F'"
+      using fuel fuel' G G' CoreTm_Cast.prems(2,3,5,6) by simp_all
+    from CoreTm_Cast.IH[OF evt le(1,2) evt' le(3,4) Qt]
+    show ?thesis unfolding tr_simps(5) CoreTy_Array G G' by auto
+  qed (simp_all add: tr_simps(5) G G')
+qed ((rule interp_lvalue_rel_other[OF _ tr_other]; (assumption | simp))+)
 
 end

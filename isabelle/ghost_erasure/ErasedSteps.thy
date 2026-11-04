@@ -246,11 +246,11 @@ proof -
 qed
 
 
-(* For the aliasing check of a call (lvalue_of_term): erasure keeps a
+(* For the aliasing check of a call (interp_lvalue): erasure keeps a
    non-lvalue a non-lvalue, and a non-ghost local has related bindings in the
    two states, as rel_option facts. *)
-lemma lvalue_of_term_erase_not_shape:
-  "\<not> lvalue_shape t \<Longrightarrow> lvalue_of_term ev s (erase_ghost_term funs t) = Inl TypeError"
+lemma lvalue_shape_erase:
+  "\<not> lvalue_shape t \<Longrightarrow> \<not> lvalue_shape (erase_ghost_term funs t)"
   by (cases t) simp_all
 
 lemma locals_erased_rel_option:
