@@ -64,21 +64,28 @@ lemmas size_array_lookup' = size_array_lookup[simplified]
 
 section \<open>Descriptors\<close>
 
+(* An array descriptor is a pointer to the array data, followed immediately by one or more
+   uint64_t element counts (the dimensions of the array).
+
+   The following invariant is satisfied: if all dimensions are nonzero, then the pointer
+   is valid and points to the elements (one after the other without padding); or if at
+   least one dimension is zero, the pointer is null.
+
+   Additionally, if the descriptor is for an allocatable array (CoreDim_Allocatable), the
+   pointer points to a whole heap block (which free_array frees).
+*)
+
 (* The dimension k of a descriptor is a uint64_t at desc_dim_offset P k. *)
 definition desc_dims_ok :: "MEncoding \<Rightarrow> int list \<Rightarrow> MByte list \<Rightarrow> bool" where
   "desc_dims_ok enc sizes bs =
     (\<forall>k < length sizes. slice (desc_dim_offset (enc_ptr_size enc) k) 8 bs = encode_val enc (MV_U64 (sizes ! k)))"
 
-(* An array with an allocatable dimension owns its data: the data is a whole
-   heap block (which free_array frees). An incomplete array (CoreDim_Unknown
-   dimensions) may be a view of a region inside a block (a cast of a fixed
-   array). *)
+(* True if there is an allocatable dimension. *)
 definition allocatable_dims :: "CoreDimension list \<Rightarrow> bool" where
   "allocatable_dims dims = list_ex (\<lambda>d. d = CoreDim_Allocatable) dims"
 
-(* The data of a descriptor with a nonzero number of elements: n readable bytes at p,
-   a whole block if owned. (A descriptor with zero elements always has a null data
-   pointer.) *)
+(* True if there are n readable bytes at p, equal to data, and (if owned = True) p points
+   to a whole heap block. *)
 definition data_region_ok :: "MMem \<Rightarrow> bool \<Rightarrow> MPtr \<Rightarrow> nat \<Rightarrow> MByte list \<Rightarrow> bool" where
   "data_region_ok mem owned p n data =
     (mem_read mem p n = Some data
@@ -121,19 +128,25 @@ function rep_val :: "CoreTyEnv \<Rightarrow> MEncoding \<Rightarrow> (nat \<Righ
          sizes_match_dims sizes dims
          \<and> fmdom elems = fset_of_list (all_indices sizes)
          \<and> (if dims_all_fixed dims then
+              \<comment> \<open>Fixed-sized array case (CoreDim_Fixed)\<close>
               length bs = gsz env enc elemTy * sizes_count sizes
               \<and> (\<forall>idx v. fmlookup elems idx = Some v \<longrightarrow>
                    rep_val env enc hmap mem elemTy v
                      (slice (elem_offset (gsz env enc elemTy) sizes idx) (gsz env enc elemTy) bs))
             else
+              \<comment> \<open>Descriptor case (CoreDim_Allocatable or CoreDim_Unknown)\<close>
               sizes_valid sizes
               \<and> sizes_count sizes < u64_max
               \<and> gsz env enc elemTy * sizes_count sizes < u64_max
               \<and> length bs = desc_size (enc_ptr_size enc) (length dims)
               \<and> desc_dims_ok enc sizes bs
               \<and> (\<exists>p. take (enc_ptr_size enc) bs = encode_ptr enc p
-                   \<and> (if sizes_count sizes = 0 then p = MP_Null
-                      else (\<exists>data. data_region_ok mem (allocatable_dims dims) p
+                   \<and> (if sizes_count sizes = 0 then
+                        \<comment> \<open>No elements, pointer is null\<close>
+                        p = MP_Null
+                      else
+                        \<comment> \<open>One or more elements, pointed to by p\<close>
+                        (\<exists>data. data_region_ok mem (allocatable_dims dims) p
                                       (gsz env enc elemTy * sizes_count sizes) data
                               \<and> (\<forall>idx v. fmlookup elems idx = Some v \<longrightarrow>
                                    rep_val env enc hmap mem elemTy v
@@ -210,7 +223,7 @@ proof -
   qed
 qed (use assms in simp_all)
 
-(* The descriptor clause. *)
+(* The array descriptor clause. *)
 lemma rep_val_Desc_E:
   assumes "rep_val env enc hmap mem (CoreTy_Array elemTy dims) (CV_Array sizes elems) bs"
     and "\<not> dims_all_fixed dims"
@@ -396,11 +409,6 @@ lemma rep_val_scalar_mem:
 
 section \<open>Reachable heap blocks and the frame condition\<close>
 
-(* The heap blocks that the representation of v in bs refers to: the block
-   a descriptor's data pointer points into (for a descriptor with elements,
-   its data block; for an empty one, the block its non-null pointer is
-   valid in), and recursively the blocks of the elements. Computed from the
-   bytes, since the pointers are in the bytes, not in the Core value. *)
 (* The congruence rule that lets the function package see the hypothesis
    fmlookup elems idx = Some v of the union over the elements. *)
 lemma UN_fmlookup_cong [fundef_cong]:
@@ -408,7 +416,17 @@ lemma UN_fmlookup_cong [fundef_cong]:
   shows "\<Union> {f idx v | idx v. fmlookup elems idx = Some v} = \<Union> {g idx v | idx v. fmlookup elems' idx = Some v}"
   using assms by auto
 
-function reach_blocks :: "CoreTyEnv \<Rightarrow> MEncoding \<Rightarrow> MMem \<Rightarrow> CoreType \<Rightarrow> CoreValue \<Rightarrow> MByte list \<Rightarrow> nat set" where
+(* The heap blocks reachable from a given CoreValue, whose byte-representation is bs.
+   For an array descriptor, this is the block that the descriptor's data pointer points into,
+     together with (recursively) the blocks reachable from the array elements.
+   For records, variants or fixed-sized arrays, this just recursively computes the blocks
+     reachable from the fields, payload or array elements.
+   For anything else, the result is empty (bools or finite ints contain no pointers, and
+     CV_Extern values are not considered "real" pointers, or at least, they do not point
+     into our heap).
+   Computed from the bytes, since the pointers are in the bytes, not in the Core value. *)
+function reach_blocks :: "CoreTyEnv \<Rightarrow> MEncoding \<Rightarrow> MMem \<Rightarrow> CoreType \<Rightarrow> CoreValue \<Rightarrow> MByte list
+                            \<Rightarrow> nat set" where
   "reach_blocks env enc mem ty (CV_Record fvs) bs =
     (case ty of
        CoreTy_Record ftys \<Rightarrow>
@@ -474,7 +492,7 @@ lemma reach_blocks_Record_fld_nth:
   shows "reach_blocks env enc mem fty v (slice (field_offset env (enc_ptr_size enc) (\<lambda>_. 0) ftys n2) (gsz env enc fty) bs)
          \<subseteq> reach_blocks env enc mem (CoreTy_Record ftys) (CV_Record fvs) bs"
 proof (rule reach_blocks_Record_fld)
-  have "zip fvs ftys ! i = ((n1, v), (n2, fty))" using assms by (simp add: nth_zip)
+  have "zip fvs ftys ! i = ((n1, v), (n2, fty))" using assms by simp
   thus "((n1, v), (n2, fty)) \<in> set (zip fvs ftys)" using assms(1,2) by (metis nth_mem length_zip min_less_iff_conj)
 qed
 
@@ -774,8 +792,7 @@ next
   qed
 qed simp_all
 
-(* A memory with the same blocks (e.g. after a write to an unreachable
-   block) represents the same values. *)
+(* Writing to a block not reachable from v, does not change the representation of v. *)
 lemma rep_val_frame_write:
   assumes "valid_encoding enc"
     and "rep_val env enc hmap mem ty v bs"
@@ -808,9 +825,9 @@ proof -
   let ?t = "tag_size env dt"
   have tag: "take ?t bs' = take ?t bs"
   proof -
-    have "take ?t bs' = take ?t (take (?t + ?psz) bs')" by (simp add: take_take)
+    have "take ?t bs' = take ?t (take (?t + ?psz) bs')" by simp
     also have "\<dots> = take ?t (take (?t + ?psz) bs)" unfolding assms(4) ..
-    also have "\<dots> = take ?t bs" by (simp add: take_take)
+    also have "\<dots> = take ?t bs" by simp
     finally show ?thesis .
   qed
   have payload: "slice ?t ?psz bs' = slice ?t ?psz bs"
