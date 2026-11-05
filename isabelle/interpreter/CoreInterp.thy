@@ -221,6 +221,7 @@ lemma find_matching_arm_in_arms:
   "find_matching_arm v arms = Inr rhs \<Longrightarrow> rhs \<in> snd ` set arms"
   by (induction v arms rule: find_matching_arm.induct) (auto split: if_splits)
 
+
 (* ========================================================================== *)
 (* Lvalue path operations *)
 (* ========================================================================== *)
@@ -879,6 +880,7 @@ definition conditions_error :: "CoreValue list \<Rightarrow> InterpError option"
      else if CV_Bool False \<in> set vals then Some RuntimeError
      else None)"
 
+
 (* ========================================================================== *)
 (* Decreases-terms of loops *)
 (* ========================================================================== *)
@@ -976,6 +978,7 @@ lemma eval_decreases_Inl:
    \<exists>tm. decr = Some tm
         \<and> (ev tm = Inl err \<or> (\<exists>v. ev tm = Inr v \<and> decreases_value_error v = Some err))"
   by (cases decr) (auto split: sum.splits option.splits)
+
 
 (* ========================================================================== *)
 (* Function contracts *)
@@ -1222,16 +1225,19 @@ next
   with assms(1-5) show ?thesis by (simp add: call_body_def)
 qed
 
+
 (* ========================================================================== *)
 (* Argument aliasing (minic/DESIGN.md, section 3.4)                           *)
 (* ========================================================================== *)
 
+(* In Babylon it's illegal (i.e., undefined behaviour) for a `ref` argument to a function
+   to alias any other lvalue argument (whether `ref` or not) to the same function. In the
+   interpreter, any violation of this rule results in a RuntimeError. This section
+   contains definitions and lemmas that support the aliasing checks. *)
 
-(* The check resolves every argument of a call as an lvalue with
-   interp_lvalue (below) in its non-writable mode: a by-value argument may be
-   a const local that a ref argument aliases. The terms that resolve
-   structurally are these (any other term is not an lvalue, and takes no part
-   in the check). *)
+(* A term is of "lvalue shape" if it starts with one of the constructors
+   that can be used for an lvalue. This does NOT look recursively into sub-terms.
+   (All lvalues have lvalue shape, but not everything of lvalue shape is an lvalue.) *)
 fun lvalue_shape :: "CoreTerm \<Rightarrow> bool" where
   "lvalue_shape (CoreTm_Var _) = True"
 | "lvalue_shape (CoreTm_RecordProj _ _) = True"
@@ -1240,26 +1246,24 @@ fun lvalue_shape :: "CoreTerm \<Rightarrow> bool" where
 | "lvalue_shape (CoreTm_Cast _ _) = True"
 | "lvalue_shape _ = False"
 
-(* The array casts of a path are irrelevant for aliasing (the verifier's
-   reverse_ref_chain_and_remove_casts). *)
+(* Remove all array casts from an lvalue path. (Array casts are irrelevant
+   for the aliasing check.) *)
 definition strip_casts :: "LValuePath list \<Rightarrow> LValuePath list" where
   "strip_casts = filter (\<lambda>s. case s of LVPath_ArrayCast _ \<Rightarrow> False | _ \<Rightarrow> True)"
 
+(* True if p is a prefix of q. *)
 definition path_prefix :: "LValuePath list \<Rightarrow> LValuePath list \<Rightarrow> bool" where
   "path_prefix p q = (take (length p) q = p)"
 
-(* Two lvalues alias if they have the same address and one path is a prefix
-   of the other, ignoring casts (verify_aliasing_for_args in
-   src/verifier_terms.c: the chains may alias iff they agree step by step as
-   far as both go, the indices of array steps compared as values). *)
+(* True if two lvalues (each expressed as an address and LValuePath) alias.
+   Two lvalues alias if they have the same address and one path is a prefix of the other. *)
 definition lvalues_alias :: "nat \<times> LValuePath list \<Rightarrow> nat \<times> LValuePath list \<Rightarrow> bool" where
   "lvalues_alias l1 l2 =
     (fst l1 = fst l2
      \<and> (path_prefix (strip_casts (snd l1)) (strip_casts (snd l2))
         \<or> path_prefix (strip_casts (snd l2)) (strip_casts (snd l1))))"
 
-
-(* Two resolution results alias: both are lvalues, and they alias. *)
+(* True if two interp_lvalue results were both Inr and they alias (according to lvalues_alias). *)
 definition res_alias :: "(InterpError + nat \<times> LValuePath list) \<Rightarrow> (InterpError + nat \<times> LValuePath list) \<Rightarrow> bool" where
   "res_alias r1 r2 = (case (r1, r2) of (Inr l1, Inr l2) \<Rightarrow> lvalues_alias l1 l2 | _ \<Rightarrow> False)"
 
@@ -1267,9 +1271,12 @@ lemma res_alias_iff:
   "res_alias r1 r2 \<longleftrightarrow> (\<exists>l1 l2. r1 = Inr l1 \<and> r2 = Inr l2 \<and> lvalues_alias l1 l2)"
   unfolding res_alias_def by (cases r1; cases r2) auto
 
-(* Arguments i and j, at least one of them bound by ref, resolve to aliasing
-   lvalues (a non-lvalue argument, Inl, aliases nothing). *)
-definition pair_alias :: "(string \<times> VarOrRef) list \<Rightarrow> (InterpError + nat \<times> LValuePath list) list \<Rightarrow> nat \<Rightarrow> nat \<Rightarrow> bool" where
+(* Given the formal arguments of a function, and the interp_lvalue results for each actual
+   argument, and a pair (i,j), returns true if args i and j violate the aliasing rules.
+   (In other words: i and j are different, at least one is a Ref arg, and both alias
+   according to res_alias.) *)
+definition pair_alias :: "(string \<times> VarOrRef) list \<Rightarrow> (InterpError + nat \<times> LValuePath list) list
+                            \<Rightarrow> nat \<Rightarrow> nat \<Rightarrow> bool" where
   "pair_alias args lvs i j =
     (i \<noteq> j \<and> (snd (args ! i) = Ref \<or> snd (args ! j) = Ref) \<and> res_alias (lvs ! i) (lvs ! j))"
 
@@ -1279,7 +1286,7 @@ lemma pair_alias_iff:
     \<and> (\<exists>l1 l2. lvs ! i = Inr l1 \<and> lvs ! j = Inr l2 \<and> lvalues_alias l1 l2))"
   unfolding pair_alias_def res_alias_iff ..
 
-(* Some pair of arguments aliases. *)
+(* True if any pair of args (i,j) alias (according to pair_alias). *)
 definition args_alias :: "(string \<times> VarOrRef) list \<Rightarrow> (InterpError + nat \<times> LValuePath list) list \<Rightarrow> bool" where
   "args_alias args lvs = list_ex (\<lambda>i. list_ex (pair_alias args lvs i) [0..<length args]) [0..<length args]"
 
@@ -1287,11 +1294,13 @@ lemma args_alias_iff:
   "args_alias args lvs \<longleftrightarrow> (\<exists>i j. i < length args \<and> j < length args \<and> pair_alias args lvs i j)"
   unfolding args_alias_def list_ex_iff set_upt Bex_def atLeastLessThan_iff by blast
 
-(* The check a call performs on its arguments, given their resolutions as
-   lvalues (interp_function_call passes map (interp_lvalue d fuel False state)
-   argTms): if any resolution ran out of fuel the call does (so that the
-   result is monotone in the fuel); otherwise RuntimeError if two arguments
-   alias. *)
+(* Given the formal arguments of a function, and the interp_lvalue results for each actual
+   argument, returns:
+    - Some InsufficientFuel if any interp_lvalue result was out of fuel;
+    - Some RuntimeError if an aliasing error is present (according to args_alias);
+    - None, otherwise.
+   This is the main aliasing check invoked by interp_function_call.
+*)
 definition call_args_alias :: "(string \<times> VarOrRef) list \<Rightarrow> (InterpError + nat \<times> LValuePath list) list
                                \<Rightarrow> InterpError option" where
   "call_args_alias args lvs =
@@ -1578,17 +1587,21 @@ where
 | "interp_term _ (Suc fuel) state (CoreTm_Default ty) =
     default_value fuel state (apply_subst (IS_TyArgs state) ty)"
 
-  (* Evaluate an lvalue into (addr, path).
-     With writable = True (interp_writable_lvalue, the abbreviation after the
-     definition) a read-only base variable (in IS_ConstLocals) is a TypeError.
-     With writable = False it is accepted: the aliasing check of a call
-     (call_args_alias) resolves every argument this way, since a by-value
-     argument may be a const local that a ref argument aliases. In either mode
-     a global is not an lvalue (it has no store address, and a ref can never
-     target one).
-     Note: this doesn't check for "bad paths" (e.g. incorrect field name); that happens
-     later when the path is used. It does, however, check whether the base variable name
-     exists and whether any array indices can be successfully evaluated. *)
+  (* Evaluate an lvalue to an (addr, path) pair.
+
+     When writable = True, only writable lvalues can be evaluated (TypeError otherwise).
+
+     When writable = False, non-writable lvalues can also be evaluated, but be aware of
+     one gap: a non-writable lvalue pointing to a global constant (such as "c" or "c.1[2]",
+     where "c" is in IS_Globals) will fail to evaluate, and return TypeError. This is
+     because global constants don't have a store address. Fortunately, for the call_args_alias
+     check, this does not matter (global constants can't, by their nature, alias anything
+     writable), but it is something to keep in mind.
+
+     This function also doesn't check for "bad paths" (e.g. an incorrect field name, or an
+     array index out of range); that happens later, when the path is used. It does, however,
+     check whether the base variable name exists (in IS_Locals or IS_Refs) and whether any
+     array indices can be successfully evaluated. *)
 | "interp_lvalue _ 0 _ _ _ = Inl InsufficientFuel"
 | "interp_lvalue d (Suc fuel) writable state tm =
     (case tm of
@@ -1684,7 +1697,8 @@ where
             Inl err \<Rightarrow> Inl err
           | Inr val \<Rightarrow> Inr (Continue (bind_const_local varName val state)))
         else
-          \<comment> \<open>Base variable is writable: alias via writable lvalue. \<close>
+          \<comment> \<open>Base variable is writable: use interp_lvalue (in writable mode) to
+             get the address and path, and store those in IS_Refs. \<close>
           (case interp_lvalue d fuel True state lvalueTm of
             Inr addrAndPath \<Rightarrow> Inr (Continue (bind_ref varName addrAndPath state))
           | Inl err \<Rightarrow> Inl err)
@@ -1879,10 +1893,11 @@ where
               (case fold process_one_arg argTuples (Inr clearedState) of
                 Inl err \<Rightarrow> Inl err
               | Inr preCallState \<Rightarrow>
-                  \<comment> \<open>The arguments must not alias (minic/DESIGN.md section 3.4): a
-                      RuntimeError if two of them, at least one bound by ref, denote
-                      overlapping lvalues. For this every argument is resolved as an
-                      lvalue once more, now accepting a read-only base.\<close>
+                  \<comment> \<open>Aliasing check: The language does not allow two arguments, one (or both)
+                      of which is a 'ref', to overlap. The interpreter checks this rule,
+                      returning RuntimeError if a violation is found. (This check requires
+                      another call to interp_lvalue, this time with writable = False, for each
+                      argument.)\<close>
                   (case call_args_alias (IF_Args f) (map (interp_lvalue d fuel False state) argTms) of
                     Some err \<Rightarrow> Inl err
                   | None \<Rightarrow>
@@ -1908,19 +1923,17 @@ termination by (relation "inv_image (less_than <*lex*> less_than) (\<lambda>x. c
   | Inr (Inr (Inr (d, fuel, _))) \<Rightarrow> (d, fuel)
 )", auto)
 
-(* A writable lvalue: interp_lvalue rejecting a read-only base. This is what
-   the statements (ref declarations, assignments, swaps) and the ref
-   arguments of a call use. Being an abbreviation, the equations of the
-   interpreter and every lemma about them read in terms of it. *)
+
+(* An abbreviation for interp_lvalue in writable mode. *)
 abbreviation interp_writable_lvalue :: "nat \<Rightarrow> nat \<Rightarrow> 'w InterpState \<Rightarrow> CoreTerm \<Rightarrow> InterpError + nat \<times> LValuePath list" where
   "interp_writable_lvalue d fuel \<equiv> interp_lvalue d fuel True"
 
-(* Only the terms of lvalue_shape resolve. *)
+(* Only terms of lvalue_shape succeed under interp_lvalue (others are TypeError). *)
 lemma interp_lvalue_not_shape:
   "\<not> lvalue_shape tm \<Longrightarrow> interp_lvalue d (Suc fuel) writable state tm = Inl TypeError"
   by (cases tm) simp_all
 
-(* The writable mode never resolves more than the other. *)
+(* The writable mode of interp_lvalue resolves at least as much as the non-writable. *)
 lemma interp_lvalue_writable_Inr:
   "interp_writable_lvalue d fuel state tm = Inr r \<Longrightarrow> interp_lvalue d fuel False state tm = Inr r"
 proof (induction fuel arbitrary: tm r)

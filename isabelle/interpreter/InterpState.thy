@@ -51,7 +51,10 @@ record 'world InterpState =
   (* Local variables: map to address in the store *)
   IS_Locals :: "(string, nat) fmap"
 
-  (* Ref variables: map to address and path in the store *)
+  (* Writable "ref" variables: map to address and path in the store *)
+  (* Note: read-only "refs" are not stored here; instead they are copied and stored directly
+     in IS_Locals. A compiler would likely create a read-only pointer, rather than copying,
+     but copying is semantically equivalent for immutable values. *)
   IS_Refs :: "(string, nat \<times> LValuePath list) fmap"
 
   (* Store: maps address to value *)
