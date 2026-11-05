@@ -1,17 +1,18 @@
 theory MiniCMemoryLemmas
-  imports "../minic/MiniCMemory"
+  imports MiniCMemory
 begin
 
 (* ========================================================================== *)
 (* Byte slices, and sub-ranges of memory regions                              *)
 (* ========================================================================== *)
 
-(* The lemmas about mem_read / mem_write / mem_load / mem_store on
-   sub-ranges that the representation relation (RepVal.thy) needs. Nothing
-   here changes the memory model. *)
+(* Various lemmas about mem_read / mem_write / mem_load / mem_store on sub-ranges. *)
 
 
 section \<open>Slices of lists\<close>
+
+(* Note: this section could potentially be moved to util/ListExtras, or another
+   theory in util/. *)
 
 (* The n elements from position off. *)
 definition slice :: "nat \<Rightarrow> nat \<Rightarrow> 'a list \<Rightarrow> 'a list" where

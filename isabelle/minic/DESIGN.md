@@ -16,6 +16,7 @@ The theories in this directory:
 | --- | --- |
 | `MiniCSyntax.thy` | C types, expressions, statements, functions, programs; syntactic well-formedness |
 | `MiniCMemory.thy` | bytes, block/offset pointers, the abstract integer encoding and its laws, the little-endian instance, load/store/copy/alloc/free |
+| `MiniCMemoryLemmas.thy` | slices and splices of byte lists, `ptr_off`, `mem_read`/`mem_write`/`mem_load`/`mem_store` on sub-ranges |
 | `MiniCSemantics.thy` | states, extern models, pure expression evaluation, the fuelled statement interpreter, `run_program` |
 | `MiniCFuelMono.thy` | fuel monotonicity |
 | `MiniCTyping.thy` | the typing judgement `program_well_typed`, and `expr_type_sound` |
@@ -31,7 +32,6 @@ The theories of the code generator proper live in `isabelle/codegen/`
 | `codegen/DatatypeAcyclic.thy` | the datatype dependency graph, `datatypes_acyclic` (SCCs by `KosarajuMain`) and its soundness: the datatype equation of `type_size` |
 | `codegen/SizeExpr.thy` | `size_expr`, `field_offset_expr`, `elem_offset_expr`, `size_fits`, and the evaluation lemmas (`size_expr_eval`, ...); `field_offset` |
 | `codegen/SizeBound.thy` | the call graph and its order, the per-function bounds, `core_module_sizeable P m` and its static soundness |
-| `codegen/MiniCMemoryLemmas.thy` | slices and splices of byte lists, `ptr_off`, `mem_read`/`mem_write`/`mem_load`/`mem_store` on sub-ranges |
 | `codegen/RepVal.thy` | `scalar_ty`/`scalar_val`, `rep_val`, the length, scalar, reachable-block and frame lemmas, variant junk |
 | `codegen/RepValPath.thy` | `PathLoc`, `path_step`/`path_loc`, `val_owned`, the projection and update lemmas |
 | `codegen/RepValDefault.thy` | `default_value_rep_zero` |

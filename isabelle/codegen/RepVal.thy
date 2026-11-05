@@ -1,5 +1,5 @@
 theory RepVal
-  imports SizeExpr MiniCMemoryLemmas Babylon.CoreInterp
+  imports SizeExpr "../minic/MiniCMemoryLemmas" "../interpreter/CoreInterp"
 begin
 
 (* ========================================================================== *)
