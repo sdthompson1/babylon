@@ -1,5 +1,5 @@
 theory SizeExpr
-  imports DatatypeAcyclic Babylon.MiniCSemantics
+  imports DatatypeAcyclic "../minic/MiniCSemantics"
 begin
 
 (* ========================================================================== *)

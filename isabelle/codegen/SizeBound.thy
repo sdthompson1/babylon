@@ -1,5 +1,5 @@
 theory SizeBound
-  imports SizeExpr Babylon.CoreModuleTypecheck Babylon.Dependency
+  imports SizeExpr "../core/CoreModuleTypecheck" "../graph/Dependency"
 begin
 
 (* ========================================================================== *)
@@ -35,7 +35,13 @@ begin
      (d) sizeable_acyclic: the datatypes are acyclic.
    The dynamic part ("IS_TyArgs of the running function is bounded by B_f")
    is an induction over the interpreter that the simulation proof of stage 6
-   carries as part of its invariant, discharging the call case with (a). *)
+   carries as part of its invariant, discharging the call case with (a).
+
+   Note: No realistic program is ever expected to fail the sizeable_check; but the
+   check is still needed, to rule out pathological cases where the proofs would fail.
+   (If the check does fail, compilation is aborted with an error, rather than allowing
+   faulty code to be generated.)
+*)
 
 
 section \<open>Call sites\<close>
@@ -107,11 +113,11 @@ lemma fun_calls_nonempty_dom: "fun_calls m g \<noteq> [] \<Longrightarrow> fmloo
 
 section \<open>The call order\<close>
 
-(* The functions in an order with callers before callees, from the SCCs of
-   the call graph (which analyze_dependencies_generic lists callees first). *)
+(* The SCCs of the call graph, which analyze_dependencies_generic lists callees-first. *)
 definition call_sccs :: "CoreModule \<Rightarrow> (DependencyError, string list list) sum" where
   "call_sccs m = analyze_dependencies_generic (module_fun_names m) id (fun_callees m)"
 
+(* The functions of a module, in an order with callers before callees. *)
 definition call_order :: "CoreModule \<Rightarrow> string list" where
   "call_order m = (case call_sccs m of Inl _ \<Rightarrow> [] | Inr sccs \<Rightarrow> rev (concat sccs))"
 
@@ -612,7 +618,7 @@ datatype SizeError =
     SE_DatatypeCycle "string list"       \<comment> \<open>datatypes that depend on each other\<close>
   | SE_TooManyCtors string               \<comment> \<open>a datatype with more than 2^32 constructors\<close>
   | SE_CallCycle "string list"           \<comment> \<open>functions that call each other (empty: a callee is unknown)\<close>
-  | SE_BodyNotTyped string               \<comment> \<open>a function whose body does not typecheck (internal error)\<close>
+  | SE_BodyNotTyped string               \<comment> \<open>a function whose body does not typecheck\<close>
   | SE_SizeTooLarge string CoreType "(string \<times> nat) list"
       \<comment> \<open>function, type, and the bounds of the type parameters at which its size exceeds 2^64 - 1\<close>
   | SE_GlobalTooLarge string CoreType   \<comment> \<open>global and its type, whose size exceeds 2^64 - 1\<close>

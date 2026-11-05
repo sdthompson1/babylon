@@ -1,5 +1,5 @@
 theory DatatypeAcyclic
-  imports CoreLayout Babylon.Dependency
+  imports CoreLayout "../graph/Dependency"
 begin
 
 (* ========================================================================== *)

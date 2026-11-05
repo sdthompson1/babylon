@@ -1,5 +1,5 @@
 theory CoreLayout
-  imports Babylon.CoreValue Babylon.MiniCMemory
+  imports "../core/CoreValue" "../minic/MiniCMemory"
     "HOL-Library.Char_ord" "HOL-Library.List_Lexorder"
 begin
 
@@ -8,8 +8,7 @@ begin
 (* ========================================================================== *)
 
 (* This theory gives, for a Core type, the number of bytes of its C
-   representation and the offsets of its components, exactly as
-   docs/c-interface.md prescribes:
+   representation and the offsets of its components:
 
      bool                      1 byte (uint8_t)
      iN / uN                   N/8 bytes
@@ -17,22 +16,22 @@ begin
      record {f1: T1, ...}      |T1| + ... (packed, declaration order)
      datatype D<args>          tag + max over the constructors of the payload size
      fixed array T[n1, .., nd] |T| * n1 * ... * nd, Fortran order
-     allocatable / incomplete  P + 8d (a descriptor: data pointer, then one
-                               uint64_t per dimension)
+     other array               P + 8d (a descriptor: data pointer, then one
+                                 uint64_t per dimension)
      type variable T           the size assigned to T (a run-time parameter)
      int / real                0 (ghost-only types; they never reach the
-                               code generator)
+                                 code generator)
 
-   The functions are parametrised by the datatype tables of a CoreTyEnv
-   (only TE_DataCtors and TE_DataCtorsByType are read: tsz_cong_env), the
-   pointer size P, and an assignment sz of sizes to type variables.
+   The functions are parametrised by a CoreTyEnv (only TE_DataCtors and TE_DataCtorsByType
+   are read, see tsz_cong_env), the pointer size P, and an assignment sz of sizes to type
+   variables.
 
    Recursion through datatype payloads is not structural, so the size
    function is fuelled: tsz spends one unit of fuel on each datatype
-   unfolding and none elsewhere. The payload of a constructor is measured
+   unfolding (and none elsewhere). The payload of a constructor is measured
    *uninstantiated*, with the sizes of the type arguments as the assignment
-   of its type variables (tsz_subst shows this equals measuring the
-   substituted payload). type_size fixes the fuel at one more than the number
+   of its type variables; tsz_subst shows this equals measuring the
+   substituted payload. type_size fixes the fuel at one more than the number
    of datatypes; DatatypeAcyclic.thy shows that this is enough whenever the
    datatypes are acyclic, and derives the unfolding equation for datatypes
    (type_size_Datatype). All other equations hold unconditionally. *)
@@ -119,9 +118,8 @@ section \<open>Datatype tables\<close>
 definition dt_ctors :: "CoreTyEnv \<Rightarrow> string \<Rightarrow> string list" where
   "dt_ctors env dtName = (case fmlookup (TE_DataCtorsByType env) dtName of Some cs \<Rightarrow> cs | None \<Rightarrow> [])"
 
-(* The tag width for a datatype with k constructors (get_tag_size in
-   src/codegen.c): uint8_t up to 256 constructors, uint16_t up to 65536,
-   uint32_t beyond. *)
+(* The tag width for a datatype with k constructors: uint8_t up to 256 constructors,
+   uint16_t up to 65536, uint32_t beyond. *)
 definition tag_bits_of :: "nat \<Rightarrow> IntBits" where
   "tag_bits_of k = (if k \<le> 256 then IntBits_8 else if k \<le> 65536 then IntBits_16 else IntBits_32)"
 
@@ -161,8 +159,7 @@ lemma ctor_tag_nth:
   unfolding ctor_tag_def using nth_length_takeWhile[OF length_takeWhile_neq_lt[OF assms]] by simp
 
 (* A datatype's tags fit its tag type when it has at most 2^32 constructors
-   (codegen.c aborts with "too many variants" beyond that; the static checker
-   of SizeBound.thy checks this for every datatype). *)
+   (the static checker of SizeBound.thy enforces this for every datatype). *)
 definition dt_tags_fit :: "CoreTyEnv \<Rightarrow> string \<Rightarrow> bool" where
   "dt_tags_fit env dtName = (length (dt_ctors env dtName) \<le> 2 ^ 32)"
 
@@ -288,7 +285,7 @@ next
       and is_ok: "index_in_bounds ns is"
       by (auto simp: index_in_bounds_Cons)
     have "i \<in> set (map int [0..<nat n])"
-      using bnds by (auto simp: image_iff zless_nat_conj intro!: bexI[where x = "nat i"])
+      using bnds by (auto simp: image_iff intro!: bexI[where x = "nat i"])
     with idx is_ok Cons.IH show "idx \<in> set (all_indices (n # ns))"
       by (auto simp: Let_def)
   qed
@@ -676,7 +673,7 @@ proof -
         by (simp add: type_subst_sizes_def tyvar_sizes_def fmlookup_of_list)
     next
       case False
-      hence "map_of (zip tyvars tys) v = None" by (simp add: map_of_zip_is_None assms(2))
+      hence "map_of (zip tyvars tys) v = None" by (simp add: assms(2))
       with False show ?thesis by (simp add: type_subst_sizes_def fmlookup_of_list)
     qed
   qed
