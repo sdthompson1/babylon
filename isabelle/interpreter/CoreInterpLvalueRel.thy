@@ -2,10 +2,10 @@ theory CoreInterpLvalueRel
   imports CoreInterpFuelMono
 begin
 
-(* The resolution of an lvalue (interp_lvalue) across a transformation of the
+(* Lemmas concerning the behaviour of interp_lvalue across a transformation of the
    state and the term. This is the shared core of the argument aliasing case
-   of the ghost erasure and match compilation simulations; it uses the fuel
-   monotonicity of CoreInterpFuelMono.thy but is not part of it. *)
+   of the ghost erasure and match compilation simulations. *)
+
 
 (* ========================================================================== *)
 (* The lvalue of an argument across a transformation of state and term         *)
