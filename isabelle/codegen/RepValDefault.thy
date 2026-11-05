@@ -1,5 +1,5 @@
 theory RepValDefault
-  imports RepVal DatatypeAcyclic Babylon.CoreTyEnvWellFormed
+  imports RepVal DatatypeAcyclic "../core/CoreTyEnvWellFormed"
 begin
 
 (* ========================================================================== *)
@@ -315,7 +315,7 @@ next
         have "(n, args ! i) \<in> set (zip tyvars args)"
           using i len ni by (metis nth_zip nth_mem length_zip min_less_iff_conj)
         hence "fmlookup (fmap_of_list (zip tyvars args)) n = Some (args ! i)"
-          using dist len by (simp add: fmlookup_of_list map_of_eq_Some_iff)
+          using dist len by (simp add: fmlookup_of_list)
         thus "case fmlookup (fmap_of_list (zip tyvars args)) n of
                 Some ty' \<Rightarrow> is_well_kinded env ty' | None \<Rightarrow> n |\<in>| TE_TypeVars env"
           using args_wk i len by (simp add: list_all_length)
