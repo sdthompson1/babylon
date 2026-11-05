@@ -76,19 +76,13 @@ definition desc_dims_ok :: "MEncoding \<Rightarrow> int list \<Rightarrow> MByte
 definition allocatable_dims :: "CoreDimension list \<Rightarrow> bool" where
   "allocatable_dims dims = list_ex (\<lambda>d. d = CoreDim_Allocatable) dims"
 
-(* The data of a descriptor with elements: n readable bytes at p, a whole
-   block if owned. *)
+(* The data of a descriptor with a nonzero number of elements: n readable bytes at p,
+   a whole block if owned. (A descriptor with zero elements always has a null data
+   pointer.) *)
 definition data_region_ok :: "MMem \<Rightarrow> bool \<Rightarrow> MPtr \<Rightarrow> nat \<Rightarrow> MByte list \<Rightarrow> bool" where
   "data_region_ok mem owned p n data =
     (mem_read mem p n = Some data
      \<and> (owned \<longrightarrow> (\<exists>blk. p = MP_Addr blk 0 \<and> fmlookup (MM_Blocks mem) blk = Some data)))"
-
-(* The data pointer of a descriptor without elements: null, or a valid
-   pointer (the start of a block, if owned: Array.c may return a non-null
-   pointer for an empty allocation, which free_array must be able to free). *)
-definition empty_data_ok :: "MMem \<Rightarrow> bool \<Rightarrow> MPtr \<Rightarrow> bool" where
-  "empty_data_ok mem owned p =
-    (p = MP_Null \<or> (ptr_range_ok mem p 0 \<and> (owned \<longrightarrow> (\<exists>blk. p = MP_Addr blk 0))))"
 
 
 section \<open>The relation\<close>
@@ -138,7 +132,7 @@ function rep_val :: "CoreTyEnv \<Rightarrow> MEncoding \<Rightarrow> (nat \<Righ
               \<and> length bs = desc_size (enc_ptr_size enc) (length dims)
               \<and> desc_dims_ok enc sizes bs
               \<and> (\<exists>p. take (enc_ptr_size enc) bs = encode_ptr enc p
-                   \<and> (if sizes_count sizes = 0 then empty_data_ok mem (allocatable_dims dims) p
+                   \<and> (if sizes_count sizes = 0 then p = MP_Null
                       else (\<exists>data. data_region_ok mem (allocatable_dims dims) p
                                       (gsz env enc elemTy * sizes_count sizes) data
                               \<and> (\<forall>idx v. fmlookup elems idx = Some v \<longrightarrow>
@@ -226,7 +220,7 @@ lemma rep_val_Desc_E:
     and "length bs = desc_size (enc_ptr_size enc) (length dims)"
     and "desc_dims_ok enc sizes bs"
     and "take (enc_ptr_size enc) bs = encode_ptr enc p"
-    and "sizes_count sizes = 0 \<Longrightarrow> empty_data_ok mem (allocatable_dims dims) p"
+    and "sizes_count sizes = 0 \<Longrightarrow> p = MP_Null"
     and "sizes_count sizes \<noteq> 0 \<Longrightarrow> \<exists>data. data_region_ok mem (allocatable_dims dims) p
                                       (gsz env enc elemTy * sizes_count sizes) data
                               \<and> (\<forall>idx v. fmlookup elems idx = Some v \<longrightarrow>
@@ -235,7 +229,7 @@ lemma rep_val_Desc_E:
 proof -
   note R = assms(1)[simplified assms(2) if_False rep_val.simps CoreType.case]
   from R have ex: "\<exists>p. take (enc_ptr_size enc) bs = encode_ptr enc p
-                   \<and> (if sizes_count sizes = 0 then empty_data_ok mem (allocatable_dims dims) p
+                   \<and> (if sizes_count sizes = 0 then p = MP_Null
                       else (\<exists>data. data_region_ok mem (allocatable_dims dims) p
                                       (gsz env enc elemTy * sizes_count sizes) data
                               \<and> (\<forall>idx v. fmlookup elems idx = Some v \<longrightarrow>
@@ -243,7 +237,7 @@ proof -
                                      (slice (elem_offset (gsz env enc elemTy) sizes idx) (gsz env enc elemTy) data))))"
     by blast
   then obtain p where P: "take (enc_ptr_size enc) bs = encode_ptr enc p"
-    and C: "if sizes_count sizes = 0 then empty_data_ok mem (allocatable_dims dims) p
+    and C: "if sizes_count sizes = 0 then p = MP_Null
             else (\<exists>data. data_region_ok mem (allocatable_dims dims) p (gsz env enc elemTy * sizes_count sizes) data
                     \<and> (\<forall>idx v. fmlookup elems idx = Some v \<longrightarrow>
                          rep_val env enc hmap mem elemTy v
@@ -258,7 +252,7 @@ proof -
     show "gsz env enc elemTy * sizes_count sizes < u64_max" using R by blast
     show "length bs = desc_size (enc_ptr_size enc) (length dims)" using R by blast
     show "desc_dims_ok enc sizes bs" using R by blast
-    show "sizes_count sizes = 0 \<Longrightarrow> empty_data_ok mem (allocatable_dims dims) p" using C by simp
+    show "sizes_count sizes = 0 \<Longrightarrow> p = MP_Null" using C by simp
     show "sizes_count sizes \<noteq> 0 \<Longrightarrow> \<exists>data. data_region_ok mem (allocatable_dims dims) p
                                       (gsz env enc elemTy * sizes_count sizes) data
                               \<and> (\<forall>idx v. fmlookup elems idx = Some v \<longrightarrow>
@@ -442,13 +436,12 @@ function reach_blocks :: "CoreTyEnv \<Rightarrow> MEncoding \<Rightarrow> MMem \
             (case decode_ptr enc (take (enc_ptr_size enc) bs) of
                Some (MP_Addr blk off) \<Rightarrow>
                  insert blk
-                   (if sizes_count sizes = 0 then {}
-                    else (case mem_read mem (MP_Addr blk off) (gsz env enc elemTy * sizes_count sizes) of
-                            Some data \<Rightarrow>
-                              \<Union> {reach_blocks env enc mem elemTy v
-                                    (slice (elem_offset (gsz env enc elemTy) sizes idx) (gsz env enc elemTy) data)
-                                  | idx v. fmlookup elems idx = Some v}
-                          | None \<Rightarrow> {}))
+                   (case mem_read mem (MP_Addr blk off) (gsz env enc elemTy * sizes_count sizes) of
+                      Some data \<Rightarrow>
+                        \<Union> {reach_blocks env enc mem elemTy v
+                              (slice (elem_offset (gsz env enc elemTy) sizes idx) (gsz env enc elemTy) data)
+                            | idx v. fmlookup elems idx = Some v}
+                    | None \<Rightarrow> {})
              | _ \<Rightarrow> {}))
      | _ \<Rightarrow> {})"
 | "reach_blocks env enc mem ty (CV_Bool _) bs = {}"
@@ -509,7 +502,7 @@ proof -
 qed
 
 lemma reach_blocks_Desc_elem:
-  assumes "valid_encoding enc" and "\<not> dims_all_fixed dims" and "sizes_count sizes \<noteq> 0"
+  assumes "valid_encoding enc" and "\<not> dims_all_fixed dims"
     and "take (enc_ptr_size enc) bs = encode_ptr enc (MP_Addr blk off)"
     and "mem_read mem (MP_Addr blk off) (gsz env enc elemTy * sizes_count sizes) = Some data"
     and "fmlookup elems idx = Some v"
@@ -517,8 +510,8 @@ lemma reach_blocks_Desc_elem:
          \<subseteq> reach_blocks env enc mem (CoreTy_Array elemTy dims) (CV_Array sizes elems) bs"
 proof -
   have "decode_ptr enc (take (enc_ptr_size enc) bs) = Some (MP_Addr blk off)"
-    unfolding assms(4) by (rule decode_ptr_encode_ptr[OF assms(1)])
-  thus ?thesis using assms(2,3,5,6) by auto
+    unfolding assms(3) by (rule decode_ptr_encode_ptr[OF assms(1)])
+  thus ?thesis using assms(2,4,5) by auto
 qed
 
 (* Two memories agree on a set of blocks. *)
@@ -620,34 +613,27 @@ next
           have rd: "mem_read mem' (MP_Addr blk off) n = mem_read mem (MP_Addr blk off) n" for n
             by (rule blocks_agree_read[OF CV_Array.prems blk_in])
           show ?thesis
-          proof (cases "sizes_count sizes = 0")
-            case True
-            then show ?thesis unfolding CoreTy_Array using False Some MP_Addr by simp
+          proof (cases "mem_read mem (MP_Addr blk off) (gsz env enc elemTy * sizes_count sizes)")
+            case None
+            then show ?thesis unfolding CoreTy_Array using False Some MP_Addr rd by simp
           next
-            case cnt: False
-            show ?thesis
-            proof (cases "mem_read mem (MP_Addr blk off) (gsz env enc elemTy * sizes_count sizes)")
-              case None
-              then show ?thesis unfolding CoreTy_Array using False Some MP_Addr cnt rd by simp
-            next
-              case (Some data)
-              have "\<And>idx v. fmlookup elems idx = Some v \<Longrightarrow>
-                      reach_blocks env enc mem' elemTy v (slice (elem_offset (gsz env enc elemTy) sizes idx) (gsz env enc elemTy) data)
-                      = reach_blocks env enc mem elemTy v (slice (elem_offset (gsz env enc elemTy) sizes idx) (gsz env enc elemTy) data)"
-              proof -
-                fix idx v assume lk: "fmlookup elems idx = Some v"
-                have sub: "reach_blocks env enc mem elemTy v (slice (elem_offset (gsz env enc elemTy) sizes idx) (gsz env enc elemTy) data)
-                           \<subseteq> reach_blocks env enc mem ty (CV_Array sizes elems) bs"
-                  unfolding CoreTy_Array using False \<open>decode_ptr enc (take (enc_ptr_size enc) bs) = Some p\<close> MP_Addr cnt Some lk
-                  by auto
-                show "?thesis idx v"
-                  using CV_Array.IH[of v elemTy] lk blocks_agree_subset[OF CV_Array.prems sub]
-                  by (simp add: fmran'I)
-              qed
-              thus ?thesis unfolding CoreTy_Array
-                using False \<open>decode_ptr enc (take (enc_ptr_size enc) bs) = Some p\<close> MP_Addr cnt Some rd
-                by simp blast
+            case (Some data)
+            have "\<And>idx v. fmlookup elems idx = Some v \<Longrightarrow>
+                    reach_blocks env enc mem' elemTy v (slice (elem_offset (gsz env enc elemTy) sizes idx) (gsz env enc elemTy) data)
+                    = reach_blocks env enc mem elemTy v (slice (elem_offset (gsz env enc elemTy) sizes idx) (gsz env enc elemTy) data)"
+            proof -
+              fix idx v assume lk: "fmlookup elems idx = Some v"
+              have sub: "reach_blocks env enc mem elemTy v (slice (elem_offset (gsz env enc elemTy) sizes idx) (gsz env enc elemTy) data)
+                         \<subseteq> reach_blocks env enc mem ty (CV_Array sizes elems) bs"
+                unfolding CoreTy_Array using False \<open>decode_ptr enc (take (enc_ptr_size enc) bs) = Some p\<close> MP_Addr Some lk
+                by auto
+              show "?thesis idx v"
+                using CV_Array.IH[of v elemTy] lk blocks_agree_subset[OF CV_Array.prems sub]
+                by (simp add: fmran'I)
             qed
+            thus ?thesis unfolding CoreTy_Array
+              using False \<open>decode_ptr enc (take (enc_ptr_size enc) bs) = Some p\<close> MP_Addr Some rd
+              by simp blast
           qed
         qed
       qed
@@ -733,7 +719,7 @@ next
          "sizes_valid sizes" "sizes_count sizes < u64_max" "?esz * sizes_count sizes < u64_max"
          "length bs = desc_size (enc_ptr_size enc) (length dims)" "desc_dims_ok enc sizes bs"
          "take (enc_ptr_size enc) bs = encode_ptr enc p"
-      and empty: "sizes_count sizes = 0 \<Longrightarrow> empty_data_ok mem (allocatable_dims dims) p"
+      and empty: "sizes_count sizes = 0 \<Longrightarrow> p = MP_Null"
       and nonempty: "sizes_count sizes \<noteq> 0 \<Longrightarrow> \<exists>data. data_region_ok mem (allocatable_dims dims) p (?esz * sizes_count sizes) data
                        \<and> (\<forall>idx v. fmlookup elems idx = Some v \<longrightarrow>
                             rep_val env enc hmap mem elemTy v (slice (elem_offset ?esz sizes idx) ?esz data))"
@@ -750,7 +736,7 @@ next
         thus False using MP_Null by (simp add: mem_read_def)
       qed
       with D MP_Null show ?thesis unfolding ty using False
-        by (simp add: empty_data_ok_def) (rule exI[where x = MP_Null], simp)
+        by simp
     next
       case (MP_Addr blk off)
       have blk_in: "blk \<in> reach_blocks env enc mem ty (CV_Array sizes elems) bs"
@@ -759,9 +745,8 @@ next
       show ?thesis
       proof (cases "sizes_count sizes = 0")
         case True
-        from empty[OF True] have "empty_data_ok mem' (allocatable_dims dims) p"
-          unfolding empty_data_ok_def MP_Addr using agree_blk by (simp add: ptr_range_ok_def)
-        with D True show ?thesis unfolding ty using False by (auto simp: empty_data_ok_def)
+        \<comment> \<open>An empty descriptor has a null pointer.\<close>
+        from empty[OF True] MP_Addr show ?thesis by simp
       next
         case cnt: False
         from nonempty[OF cnt] obtain data where
@@ -779,7 +764,7 @@ next
           fix idx v assume lk: "fmlookup elems idx = Some v"
           have sub: "reach_blocks env enc mem elemTy v (slice (elem_offset ?esz sizes idx) ?esz data)
                      \<subseteq> reach_blocks env enc mem ty (CV_Array sizes elems) bs"
-            unfolding ty by (rule reach_blocks_Desc_elem[OF assms False cnt D(8)[unfolded MP_Addr] rd lk])
+            unfolding ty by (rule reach_blocks_Desc_elem[OF assms False D(8)[unfolded MP_Addr] rd lk])
           show "rep_val env enc hmap mem' elemTy v (slice (elem_offset ?esz sizes idx) ?esz data)"
             by (rule CV_Array.IH[OF fmran'I[OF lk] elems_r[OF lk] blocks_agree_subset[OF CV_Array.prems(2) sub]])
         qed

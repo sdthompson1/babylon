@@ -253,15 +253,14 @@ next
   have len: "length dims' = length dims"
     using sizes_match_dims_length[OF assms(2)] sizes_match_dims_length[of sizes dims] assms(1) by simp
   have weak: "\<And>p n data. data_region_ok mem (allocatable_dims dims) p n data \<Longrightarrow> data_region_ok mem (allocatable_dims dims') p n data"
-    "\<And>p. empty_data_ok mem (allocatable_dims dims) p \<Longrightarrow> empty_data_ok mem (allocatable_dims dims') p"
-    using assms(4) by (auto simp: data_region_ok_def empty_data_ok_def)
+    using assms(4) by (auto simp: data_region_ok_def)
   have nf': "\<not> dims_all_fixed dims'" using assms(3) False by simp
   from rep_val_Desc_E[OF assms(1) False] obtain p where
     D: "sizes_match_dims sizes dims" "fmdom elems = fset_of_list (all_indices sizes)"
        "sizes_valid sizes" "sizes_count sizes < u64_max" "gsz env enc elemTy * sizes_count sizes < u64_max"
        "length bs = desc_size (enc_ptr_size enc) (length dims)" "desc_dims_ok enc sizes bs"
        "take (enc_ptr_size enc) bs = encode_ptr enc p"
-    and empty: "sizes_count sizes = 0 \<Longrightarrow> empty_data_ok mem (allocatable_dims dims) p"
+    and empty: "sizes_count sizes = 0 \<Longrightarrow> p = MP_Null"
     and nonempty: "sizes_count sizes \<noteq> 0 \<Longrightarrow> \<exists>data. data_region_ok mem (allocatable_dims dims) p
                        (gsz env enc elemTy * sizes_count sizes) data
                        \<and> (\<forall>idx v. fmlookup elems idx = Some v \<longrightarrow>
@@ -271,8 +270,8 @@ next
   show ?thesis
   proof (cases "sizes_count sizes = 0")
     case z: True
-    from weak(2)[OF empty[OF z]] D z assms(2) nf' len show ?thesis
-      unfolding rep_val.simps CoreType.case by simp blast
+    from empty[OF z] D z assms(2) nf' len show ?thesis
+      unfolding rep_val.simps CoreType.case by simp
   next
     case nz: False
     from nonempty[OF nz] obtain data where
@@ -281,7 +280,7 @@ next
                  rep_val env enc hmap mem elemTy v
                    (slice (elem_offset (gsz env enc elemTy) sizes idx) (gsz env enc elemTy) data)"
       by blast
-    from weak(1)[OF this(1)] D nz assms(2) nf' len el show ?thesis
+    from weak[OF this(1)] D nz assms(2) nf' len el show ?thesis
       unfolding rep_val.simps CoreType.case by simp blast
   qed
 qed
@@ -292,11 +291,10 @@ lemma rep_val_Array_strengthen:
     and "sizes_match_dims sizes dims"
     and "dims_all_fixed dims' = dims_all_fixed dims"
     and "\<not> dims_all_fixed dims"
-    and "allocatable_dims dims \<Longrightarrow> \<not> allocatable_dims dims' \<Longrightarrow>
+    and "allocatable_dims dims \<Longrightarrow> \<not> allocatable_dims dims' \<Longrightarrow> sizes_count sizes \<noteq> 0 \<Longrightarrow>
          (\<forall>p. take (enc_ptr_size enc) bs = encode_ptr enc p \<longrightarrow>
-            (if sizes_count sizes = 0 then p = MP_Null \<or> (\<exists>blk. p = MP_Addr blk 0)
-             else (\<exists>blk data. p = MP_Addr blk 0 \<and> fmlookup (MM_Blocks mem) blk = Some data
-                     \<and> length data = gsz env enc elemTy * sizes_count sizes)))"
+            (\<exists>blk data. p = MP_Addr blk 0 \<and> fmlookup (MM_Blocks mem) blk = Some data
+                     \<and> length data = gsz env enc elemTy * sizes_count sizes))"
   shows "rep_val env enc hmap mem (CoreTy_Array elemTy dims) (CV_Array sizes elems) bs"
 proof (cases "allocatable_dims dims \<and> \<not> allocatable_dims dims'")
   case False
@@ -313,7 +311,7 @@ next
        "sizes_valid sizes" "sizes_count sizes < u64_max" "gsz env enc elemTy * sizes_count sizes < u64_max"
        "length bs = desc_size (enc_ptr_size enc) (length dims')" "desc_dims_ok enc sizes bs"
        "take (enc_ptr_size enc) bs = encode_ptr enc p"
-    and empty: "sizes_count sizes = 0 \<Longrightarrow> empty_data_ok mem (allocatable_dims dims') p"
+    and empty: "sizes_count sizes = 0 \<Longrightarrow> p = MP_Null"
     and nonempty: "sizes_count sizes \<noteq> 0 \<Longrightarrow> \<exists>data. data_region_ok mem (allocatable_dims dims') p
                        (gsz env enc elemTy * sizes_count sizes) data
                        \<and> (\<forall>idx v. fmlookup elems idx = Some v \<longrightarrow>
@@ -323,10 +321,8 @@ next
   show ?thesis
   proof (cases "sizes_count sizes = 0")
     case z: True
-    have "empty_data_ok mem (allocatable_dims dims) p"
-      using empty[OF z] own[rule_format, OF D(8)] z by (auto simp: empty_data_ok_def)
-    with D z assms(2,4) len show ?thesis
-      unfolding rep_val.simps CoreType.case by simp blast
+    from empty[OF z] D z assms(2,4) len show ?thesis
+      unfolding rep_val.simps CoreType.case by simp
   next
     case nz: False
     from nonempty[OF nz] obtain data where
@@ -335,7 +331,7 @@ next
                  rep_val env enc hmap mem elemTy v
                    (slice (elem_offset (gsz env enc elemTy) sizes idx) (gsz env enc elemTy) data)"
       by blast
-    from own[rule_format, OF D(8)] nz obtain blk data0 where
+    from own[OF nz, rule_format, OF D(8)] obtain blk data0 where
       p: "p = MP_Addr blk 0" and blk: "fmlookup (MM_Blocks mem) blk = Some data0"
       and lendata0: "length data0 = gsz env enc elemTy * sizes_count sizes" by auto
     have rd: "mem_read mem p (gsz env enc elemTy * sizes_count sizes) = Some data"
@@ -461,7 +457,7 @@ next
          "sizes_valid sizes" "sizes_count sizes < u64_max" "?esz * sizes_count sizes < u64_max"
          "length bs = desc_size (enc_ptr_size enc) (length dims)" "desc_dims_ok enc sizes bs"
          "take (enc_ptr_size enc) bs = encode_ptr enc p"
-      and empty: "sizes_count sizes = 0 \<Longrightarrow> empty_data_ok mem (allocatable_dims dims) p"
+      and empty: "sizes_count sizes = 0 \<Longrightarrow> p = MP_Null"
       and nonempty: "sizes_count sizes \<noteq> 0 \<Longrightarrow> \<exists>data. data_region_ok mem (allocatable_dims dims) p
                          (?esz * sizes_count sizes) data
                          \<and> (\<forall>idx v. fmlookup elems idx = Some v \<longrightarrow>
@@ -488,7 +484,7 @@ next
     have rep1: "rep_val env enc hmap mem ty1 v1 bs1" using el lk unfolding ty1 bs1 by blast
     from rd obtain blk off where p: "p = MP_Addr blk off" by (cases p) (auto simp: mem_read_def)
     have sub: "reach_blocks env enc mem ty1 v1 bs1 \<subseteq> reach_blocks env enc mem ty v bs"
-      unfolding ty v ty1 bs1 by (rule reach_blocks_Desc_elem[OF assms(1) False cnt D(8)[unfolded p] rd[unfolded p] lk])
+      unfolding ty v ty1 bs1 by (rule reach_blocks_Desc_elem[OF assms(1) False D(8)[unfolded p] rd[unfolded p] lk])
     have blk_in: "blk \<in> reach_blocks env enc mem ty v bs"
       unfolding ty v by (rule reach_blocks_Desc[OF assms(1) False D(8)[unfolded p]])
     show ?thesis using rep1 sub blk_in l1 p by simp
@@ -936,7 +932,7 @@ next
          "sizes_valid sizes" "sizes_count sizes < u64_max" "?esz * sizes_count sizes < u64_max"
          "length bs = desc_size (enc_ptr_size enc) (length dims)" "desc_dims_ok enc sizes bs"
          "take (enc_ptr_size enc) bs = encode_ptr enc p"
-      and empty: "sizes_count sizes = 0 \<Longrightarrow> empty_data_ok mem (allocatable_dims dims) p"
+      and empty: "sizes_count sizes = 0 \<Longrightarrow> p = MP_Null"
       and nonempty: "sizes_count sizes \<noteq> 0 \<Longrightarrow> \<exists>data. data_region_ok mem (allocatable_dims dims) p
                          (?esz * sizes_count sizes) data
                          \<and> (\<forall>idx v. fmlookup elems idx = Some v \<longrightarrow>
@@ -1100,7 +1096,7 @@ proof -
        "sizes_valid sizes" "sizes_count sizes < u64_max" "gsz env enc elemTy * sizes_count sizes < u64_max"
        "length bs = desc_size (enc_ptr_size enc) (length dims)" "desc_dims_ok enc sizes bs"
        "take (enc_ptr_size enc) bs = encode_ptr enc p0"
-    and empty: "sizes_count sizes = 0 \<Longrightarrow> empty_data_ok mem (allocatable_dims dims) p0"
+    and empty: "sizes_count sizes = 0 \<Longrightarrow> p0 = MP_Null"
     and nonempty: "sizes_count sizes \<noteq> 0 \<Longrightarrow> \<exists>data. data_region_ok mem (allocatable_dims dims) p0
                        (gsz env enc elemTy * sizes_count sizes) data
                        \<and> (\<forall>idx v. fmlookup elems idx = Some v \<longrightarrow>
@@ -1116,14 +1112,14 @@ proof -
           rep_val env enc hmap mem' elemTy v (slice (elem_offset (gsz env enc elemTy) sizes idx') (gsz env enc elemTy) data')"
     using sib new by (auto split: if_splits)
   have ex: "\<exists>p. take (enc_ptr_size enc) bs = encode_ptr enc p
-             \<and> (if sizes_count sizes = 0 then empty_data_ok mem' (allocatable_dims dims) p
+             \<and> (if sizes_count sizes = 0 then p = MP_Null
                 else (\<exists>data. data_region_ok mem' (allocatable_dims dims) p (gsz env enc elemTy * sizes_count sizes) data
                         \<and> (\<forall>idx' v. fmlookup (fmupd idx w1 elems) idx' = Some v \<longrightarrow>
                              rep_val env enc hmap mem' elemTy v
                                (slice (elem_offset (gsz env enc elemTy) sizes idx') (gsz env enc elemTy) data))))"
   proof (intro exI[where x = p] conjI)
     show "take (enc_ptr_size enc) bs = encode_ptr enc p" by (rule ptr)
-    show "if sizes_count sizes = 0 then empty_data_ok mem' (allocatable_dims dims) p
+    show "if sizes_count sizes = 0 then p = MP_Null
           else (\<exists>data. data_region_ok mem' (allocatable_dims dims) p (gsz env enc elemTy * sizes_count sizes) data
                   \<and> (\<forall>idx' v. fmlookup (fmupd idx w1 elems) idx' = Some v \<longrightarrow>
                        rep_val env enc hmap mem' elemTy v
@@ -1513,7 +1509,7 @@ next
            "sizes_valid sizes" "sizes_count sizes < u64_max" "?esz * sizes_count sizes < u64_max"
            "length bs = desc_size (enc_ptr_size enc) (length dims)" "desc_dims_ok enc sizes bs"
            "take (enc_ptr_size enc) bs = encode_ptr enc pd"
-        and empty: "sizes_count sizes = 0 \<Longrightarrow> empty_data_ok mem (allocatable_dims dims) pd"
+        and empty: "sizes_count sizes = 0 \<Longrightarrow> pd = MP_Null"
         and nonempty: "sizes_count sizes \<noteq> 0 \<Longrightarrow> \<exists>data. data_region_ok mem (allocatable_dims dims) pd
                            (?esz * sizes_count sizes) data
                            \<and> (\<forall>idx v. fmlookup elems idx = Some v \<longrightarrow>
@@ -1697,7 +1693,7 @@ next
         "sizes_valid sizes" "sizes_count sizes < u64_max" "gsz env enc elemTy * sizes_count sizes < u64_max"
         "length bs = desc_size (enc_ptr_size enc) (length dims)" "desc_dims_ok enc sizes bs"
         and D8: "take (enc_ptr_size enc) bs = encode_ptr enc pd"
-        and empty: "sizes_count sizes = 0 \<Longrightarrow> empty_data_ok mem (allocatable_dims dims) pd"
+        and empty: "sizes_count sizes = 0 \<Longrightarrow> pd = MP_Null"
         and nonempty: "sizes_count sizes \<noteq> 0 \<Longrightarrow> \<exists>data. data_region_ok mem (allocatable_dims dims) pd
                            (gsz env enc elemTy * sizes_count sizes) data
                            \<and> (\<forall>idx v. fmlookup elems idx = Some v \<longrightarrow>
@@ -1705,25 +1701,19 @@ next
         by blast
       show ?thesis unfolding w w1 ty bs''
       proof (rule rep_val_Array_strengthen[OF repw[unfolded ty1 w1 bs''] match0 cat nf])
-        assume "allocatable_dims dims" "\<not> allocatable_dims dims'"
+        assume "allocatable_dims dims" "\<not> allocatable_dims dims'" and nz: "sizes_count sizes \<noteq> 0"
         show "\<forall>p. take (enc_ptr_size enc) bs = encode_ptr enc p \<longrightarrow>
-            (if sizes_count sizes = 0 then p = MP_Null \<or> (\<exists>blk. p = MP_Addr blk 0)
-             else (\<exists>blk data. p = MP_Addr blk 0 \<and> fmlookup (MM_Blocks mem') blk = Some data
-                     \<and> length data = gsz env enc elemTy * sizes_count sizes))"
+            (\<exists>blk data. p = MP_Addr blk 0 \<and> fmlookup (MM_Blocks mem') blk = Some data
+                     \<and> length data = gsz env enc elemTy * sizes_count sizes)"
         proof (intro allI impI)
           fix p assume h: "take (enc_ptr_size enc) bs = encode_ptr enc p"
           have eq: "encode_ptr enc p = encode_ptr enc pd" by (rule trans[OF h[symmetric] D8])
           have "Some p = decode_ptr enc (encode_ptr enc pd)"
             using decode_ptr_encode_ptr[OF enc, of p] unfolding eq by (rule sym)
           hence p: "p = pd" unfolding decode_ptr_encode_ptr[OF enc] by simp
-          show "if sizes_count sizes = 0 then p = MP_Null \<or> (\<exists>blk. p = MP_Addr blk 0)
-                else (\<exists>blk data. p = MP_Addr blk 0 \<and> fmlookup (MM_Blocks mem') blk = Some data
-                        \<and> length data = gsz env enc elemTy * sizes_count sizes)"
-          proof (cases "sizes_count sizes = 0")
-            case z: True
-            from empty[OF z] \<open>allocatable_dims dims\<close> show ?thesis unfolding p using z by (auto simp: empty_data_ok_def)
-          next
-            case nz: False
+          show "\<exists>blk data. p = MP_Addr blk 0 \<and> fmlookup (MM_Blocks mem') blk = Some data
+                        \<and> length data = gsz env enc elemTy * sizes_count sizes"
+          proof -
             from nonempty[OF nz] obtain data where
               reg: "data_region_ok mem (allocatable_dims dims) pd (gsz env enc elemTy * sizes_count sizes) data"
               and "\<forall>idx v. fmlookup elems idx = Some v \<longrightarrow>
@@ -1737,7 +1727,7 @@ next
               using mem_read_Some_block[OF rd] by (auto simp: length_slice_le)
             from mem_write_block_length_any[OF wr[unfolded q] blk] obtain data' where
               "fmlookup (MM_Blocks mem') blk = Some data'" "length data' = length data" by blast
-            thus ?thesis unfolding p pd0 using nz lendata by auto
+            thus ?thesis unfolding p pd0 using lendata by auto
           qed
         qed
       qed

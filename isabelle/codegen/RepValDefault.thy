@@ -383,7 +383,7 @@ next
         show ?thesis unfolding CoreTy_Array v
           using False sizes_match_dims_zero[OF nonfixed] dom sizes_valid_zero sizes_count_zero[OF d]
                 desc_dims_ok_zero[OF enc] ptr
-          by (simp add: empty_data_ok_def) (rule exI[where x = MP_Null], simp)
+          by simp
       qed
     qed
   qed
