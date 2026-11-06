@@ -604,9 +604,15 @@ argTms)` before the contract checks and the body:
   ref declarations, assignments, swaps and the `ref` arguments of a call)
   or accepted (`False`: the aliasing check, since a by-value argument may be
   a const local that a `ref` argument aliases). In either mode a global is
-  not an lvalue (a `ref` can never target a global, so nothing aliases
-  one), and any term outside `lvalue_shape` is `TypeError` and takes no
-  part in the check. The index terms are evaluated by `interp_term_list`
+  `TypeError` to this resolver: globals live in `IS_Globals`, not in the
+  store, so they have no address. This loses nothing. A `ref` *argument*
+  cannot target a global (it must be writable); a `ref` *declaration* whose
+  base is a global does not go through `interp_lvalue` at all but copies
+  the value into a const local (section 3.5), so no `IS_Refs` entry ever
+  points at a global; and a by-value argument that names a global is
+  immutable, so it cannot be aliased by anything a callee can write. Any
+  term outside `lvalue_shape` is likewise `TypeError` and takes no part in
+  the check. The index terms are evaluated by `interp_term_list`
   at the fuel of the enclosing level, as before.
 - `lvalues_alias`: same address and, with `LVPath_ArrayCast` steps removed
   (`strip_casts`), one path a prefix of the other (`path_prefix`); the
