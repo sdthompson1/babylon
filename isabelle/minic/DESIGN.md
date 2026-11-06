@@ -628,6 +628,16 @@ duplication. The only cost is that the mode is an argument of the mutually
 recursive definition, so the fuel and depth monotonicity inductions carry
 it; every other lemma reads unchanged through the abbreviation.)
 
+What it guarantees, and all that the simulation needs for a Core-to-Core
+call, is that a `ref` argument's bytes are disjoint from those of every
+other argument: a by-value argument that is an lvalue (a const local, a
+cast of an lvalue, ...) may share bytes with another by-value argument or
+with a local of the caller, since neither side writes them during the
+call, and a by-value argument that is not an lvalue is a fresh temporary
+on both sides. The premise of the extern contract (`args_rep`, section
+6.2) is currently stronger, all argument regions pairwise disjoint; see
+there and risk 17 of section 9.
+
 The dependent proofs were repaired as stage 2 did for the copy check.
 Fuel and depth monotonicity (`CoreInterpFuelMono`): the non-writable
 resolutions of the arguments are covered by the same induction case as the
@@ -1257,6 +1267,22 @@ implementation `E :: 'w ExternFunc`, MiniC model `M :: 'w MExtern` and
 >     the pointers of extern handles throughout (so it is a fixed injection
 >     shared by all externs).
 
+`pairwise_disjoint` is stronger than what the aliasing check of section
+3.4 provides: the check only separates each `ref` argument from the other
+arguments, and lets by-value arguments share bytes with each other and
+with the caller's locals (`f(x, x)`, or `f(cast<T[n]>(a), a[0])` with `a`
+allocatable, are fine in Core and pass the check), while `arg_region`
+puts every by-value aggregate argument into the pairwise-disjoint list.
+Since the generated call site passes the *place* of a by-value aggregate
+argument (no copy, section 3.4), `f(x, x)` to an extern builds an `as` on
+which `args_rep` is false, and the contract gives nothing. For a
+Core-to-Core call the per-frame invariant of stage 6 assumes only what
+the check gives, "each `ref` region is disjoint from every other argument
+region and from the return buffer"; `args_rep` should be weakened to the
+same condition (an extern cannot write a by-value argument, so a model
+never needs more), or else the generator must copy by-value aggregate
+arguments at extern call sites. Risk 17 of section 9.
+
 Because the Core `ExternFunc` is total and deterministic in `(w, vs)`,
 whether an allocation succeeds is decided by `w`: `E` returns `false` (and
 unchanged refs) in exactly the worlds where the allocation "fails", and the
@@ -1513,6 +1539,16 @@ result. Non-termination, `TypeError`, `RuntimeError` and
     type realized by a runtime type is ghost until the substitution is
     applied, and erasing first deleted it. Fixed in `run_compiler`; the
     size checker found it because it types every erased body.
+17. **Extern argument disjointness** (found in stage 4, section 6.2). The
+    extern premise `args_rep` requires all pointer argument regions to be
+    pairwise disjoint, by-value aggregates included, but the aliasing check
+    only separates `ref` arguments from the others, and the call site
+    passes the place of a by-value aggregate without copying. An extern
+    call `f(x, x)` therefore satisfies Core but not `args_rep`. Fix in
+    stage 6: weaken `pairwise_disjoint` in `args_rep` to "each `ref`
+    region and the return region are disjoint from every other region"
+    (`mem_agrees_outside` and `results_rep` only ever mention those), so
+    that the premise is exactly what the aliasing check guarantees.
 
 
 ## 10. Proposals for changes outside this directory, and deferred items

@@ -1,5 +1,5 @@
 theory StateRep
-  imports RepValPath Babylon.ExternContract Babylon.MiniCExample
+  imports RepValPath "../interpreter/ExternContract" "../minic/MiniCExample"
 begin
 
 (* ========================================================================== *)

@@ -46,6 +46,9 @@ lemma those_map_Some_all:
   "those (map f xs) = Some ys \<Longrightarrow> \<forall>x \<in> set xs. f x \<noteq> None"
   by (induction xs arbitrary: ys) (auto split: option.splits)
 
+lemma those_map_Some: "those (map (\<lambda>k. Some (f k)) ks) = Some (map f ks)"
+  by (induction ks) simp_all
+
 (* If those succeeds on the f-images of xs, and g agrees with f wherever f
    succeeds, then those succeeds on the g-images with the same result. *)
 lemma those_map_mono:

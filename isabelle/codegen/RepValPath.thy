@@ -1,5 +1,5 @@
 theory RepValPath
-  imports RepVal
+  imports RepVal "../util/ListExtras"
 begin
 
 (* ========================================================================== *)
@@ -97,9 +97,6 @@ definition desc_sizes :: "MEncoding \<Rightarrow> nat \<Rightarrow> MByte list \
 (* The data pointer. *)
 definition desc_ptr :: "MEncoding \<Rightarrow> MByte list \<Rightarrow> MPtr option" where
   "desc_ptr enc bs = decode_ptr enc (take (enc_ptr_size enc) bs)"
-
-lemma those_map_Some: "those (map (\<lambda>k. Some (f k)) ks) = Some (map f ks)"
-  by (induction ks) simp_all
 
 lemma desc_sizes_of_dims_ok:
   assumes "valid_encoding enc" and "sizes_valid sizes" and "desc_dims_ok enc sizes bs"
@@ -702,7 +699,7 @@ next
       show "((k, v) # xs) ! i = (if fst ((x # xs) ! i) = k then (k, v) else (x # xs) ! i)"
       proof (cases i)
         case (Suc n)
-        with i have "xs ! n \<in> set xs" by (simp add: nth_mem)
+        with i have "xs ! n \<in> set xs" by simp
         hence "fst (xs ! n) \<in> fst ` set xs" by simp
         hence ne: "fst (xs ! n) \<noteq> k" using notin True by blast
         show ?thesis using Suc ne by simp
@@ -1209,7 +1206,8 @@ proof (cases l')
     unfolding PL_Here by simp_all
   have in2: "o2 + n' \<le> n1" by (rule inside[OF PL_Here])
   have rng: "o1 + o2 + length bs' \<le> length bs" using in2 comp lenbs' by simp
-  have c1: "blocks_agree mem mem' (Rc - Rold)" using blocks_agree_subset[OF agree] sub_c by blast
+  have c1: "blocks_agree mem mem' (Rc - Rold)"
+    by (rule blocks_agree_subset[OF agree Diff_mono[OF sub_c subset_refl]])
   have c2: "\<And>S. S \<subseteq> Rv \<Longrightarrow> S \<inter> Rc = {} \<Longrightarrow> blocks_agree mem mem' S"
   proof -
     fix S assume "S \<subseteq> Rv" "S \<inter> Rc = {}"
@@ -1393,7 +1391,7 @@ next
     have "fst (ftys ! i) = f" using names[of i] i lens fvi by simp
     hence ftyi: "ftys ! i = (f, fty)" using map_of_nth_distinct[OF dist, of i] i lens fty by simp
     have Rc: "fld_reach env enc mem ftys bs (zip fvs ftys ! i) = ?Rc"
-      unfolding fld_reach_def using i lens fvi ftyi ty1 bs1 by (simp add: nth_zip)
+      unfolding fld_reach_def using i lens fvi ftyi ty1 bs1 by simp
     show ?thesis unfolding w ty
     proof (rule rep_val_Record_update[OF enc Cons.prems(1)[unfolded ty v] fty])
       show "length bs'' = length bs" using I by blast
@@ -1421,7 +1419,7 @@ next
       have repj: "rep_val env enc hmap mem gty vj (slice (?fo nj) (gsz env enc gty) bs)"
         using list_all2_nthD[OF flds, of j] j lens fvj ftyj by simp
       have Rj: "fld_reach env enc mem ftys bs (zip fvs ftys ! j) = reach_blocks env enc mem gty vj (slice (?fo nj) (gsz env enc gty) bs)"
-        unfolding fld_reach_def using j lens fvj ftyj by (simp add: nth_zip)
+        unfolding fld_reach_def using j lens fvj ftyj by simp
       have sub: "reach_blocks env enc mem gty vj (slice (?fo nj) (gsz env enc gty) bs) \<subseteq> ?Rv"
         unfolding ty v by (rule reach_blocks_Record_fld_nth[OF _ j fvj ftyj]) (use j lens in simp)
       have disjR0: "fld_reach env enc mem ftys bs (zip fvs ftys ! j) \<inter> fld_reach env enc mem ftys bs (zip fvs ftys ! i) = {}"
