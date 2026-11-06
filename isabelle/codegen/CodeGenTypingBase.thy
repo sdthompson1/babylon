@@ -167,6 +167,15 @@ lemma expr_type_zero_lit [simp]:
   "expr_type E (ME_Int s b 0) = Some (CTy_Int s b)" "expr_wf (ME_Int s b 0)"
   by (cases s; cases b; simp add: int_fits_signed int_fits_unsigned)+
 
+lemma int_in_range_zero [simp]: "int_in_range (int_range s b) 0"
+  by (cases s; cases b; simp add: int_in_range.simps int_range.simps)
+
+lemma int_fits_zero [simp]: "int_fits s b 0"
+  by (simp add: int_fits.simps)
+
+lemma int_fits_u8_small [simp]: "int_fits Unsigned IntBits_8 1"
+  by (simp add: int_fits_unsigned)
+
 lemma expr_type_i32_zero [simp]:
   "expr_type E (ME_Int Signed IntBits_32 0) = Some CTy_I32"
   by (simp add: int_fits_signed)
@@ -209,6 +218,9 @@ lemma u64_ok_zero [simp]: "u64_ok E (ME_Int Unsigned IntBits_64 0)"
   by (simp add: u64_ok_def)
 
 lemma u64_ok_one [simp]: "u64_ok E (ME_Int Unsigned IntBits_64 1)"
+  by (simp add: u64_ok_def)
+
+lemma u64_ok_lit8 [simp]: "u64_ok E (ME_Int Unsigned IntBits_64 (8 * int k)) \<longleftrightarrow> 8 * k < u64_max"
   by (simp add: u64_ok_def)
 
 lemma byte_width_lt_u64_max [simp]: "byte_width b < u64_max"
