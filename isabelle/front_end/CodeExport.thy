@@ -74,26 +74,17 @@ fun size_error_to_strings :: "SizeError \<Rightarrow> string list" where
    This runs the front end (lexer, parser, loader, renamer), and then, if that
    succeeds, elaborates all the modules to Core (which includes typechecking
    them), runs the whole-program link, normalizes the linked module
-   (normalize_module: the link leaves the abstract types to be substituted
-   later; the erasure and match compilation theorems, the interpreter and
-   the code generator all take a normalized module, and erasing first would
-   erase a datatype whose payload is an abstract type realized by a runtime
-   type, since such a datatype is ghost until the substitution is applied),
-   erases ghost code, compiles the pattern matches to flat ones
+   (normalize_module), erases ghost code, compiles the pattern matches to flat ones
    (match_compile_module), and runs the static checks of the code generator on it
-   (sizeable_check: datatypes and functions are non-recursive, and every
-   size the generated code would compute fits a uint64_t at pointer size
-   codegen_ptr_size_bound; see minic/DESIGN.md, section 3.2).
+   (sizeable_check).
 
    The link should always succeed on elaborator output, and the hypothesis of the
    match compilation pass (every non-flat match has a variable scrutinee) should
    also always be true, but neither of these facts is proved yet. Therefore, they
    are checked at runtime below, and an internal compiler error is reported if
    a check fails. The acyclicity parts of sizeable_check cannot fail on
-   elaborator output either (check_sccs in ElabModule.thy rejects recursion),
-   but that is not proved yet, so they are run too; the size bound is a
-   property of the program, not of elaboration, and genuinely has to be
-   checked. *)
+   elaborator output either, but the size bound computed by sizeable_check is a
+   property of the program and does genuinely have to be checked. *)
 fun run_compiler :: "(string \<times> string) list \<Rightarrow> CompileResult"
   where
 "run_compiler [] = CR_Errors [''no input modules'']"
