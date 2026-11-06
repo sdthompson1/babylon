@@ -1258,7 +1258,8 @@ implementation `E :: 'w ExternFunc`, MiniC model `M :: 'w MExtern` and
 > by-value argument is its `scalar_val`, an aggregate by-value or `ref`
 > argument is a pointer to a region holding its bytes by `rep_val`
 > (`arg_rep`); the return buffer, if any, is a readable region of `|rty|`
-> bytes; all these regions are pairwise disjoint, `pairwise_disjoint`):
+> bytes; each `ref` region and the return region is disjoint from every
+> other region, `protected_disjoint`):
 > if `E w vs = (w', refUpds, ret)` then `M w mem as = Some (w', mem', r)`
 > for some `mem'` and `r` such that
 >   - `mem_agrees_outside mem mem' R X`: every block live in `mem` and not
@@ -1269,43 +1270,62 @@ implementation `E :: 'w ExternFunc`, MiniC model `M :: 'w MExtern` and
 >   - `results_rep`: the `ref` regions in `mem'` represent `refUpds` (one
 >     per `Ref` parameter, in parameter order, `ref_args`), each update owns
 >     its blocks (`val_owned`) and reaches only blocks that were not live in
->     `mem` (allocations) or that the argument reached before; the result is
+>     `mem` (allocations) or that the argument reached before; for a `ref`
+>     parameter whose type has a `CoreDim_Unknown` dimension
+>     (`has_unknown_dim`) the bytes of the `ref` region are the same in
+>     `mem'` as in `mem`; the result is
 >     represented in the return buffer (`r = None`), or `r` is its
 >     `scalar_val`, or (unit type) `r = None` and `ret = {}`; `hmap` gives
 >     the pointers of extern handles throughout (so it is a fixed injection
 >     shared by all externs).
 
-`pairwise_disjoint` is stronger than what the aliasing check of section
-3.4 provides: the check only separates each `ref` argument from the other
-arguments, and lets by-value arguments share bytes with each other and
-with the caller's locals (`f(x, x)`, or `f(cast<T[n]>(a), a[0])` with `a`
-allocatable, are fine in Core and pass the check), while `arg_region`
-puts every by-value aggregate argument into the pairwise-disjoint list.
-Since the generated call site passes the *place* of a by-value aggregate
-argument (no copy, section 3.4), `f(x, x)` to an extern builds an `as` on
-which `args_rep` is false, and the contract gives nothing. For a
-Core-to-Core call the per-frame invariant of stage 6 assumes only what
-the check gives, "each `ref` region is disjoint from every other argument
-region and from the return buffer"; `args_rep` should be weakened to the
-same condition (an extern cannot write a by-value argument, so a model
-never needs more), or else the generator must copy by-value aggregate
-arguments at extern call sites. Risk 17 of section 9.
+*Stage 5 changed two things here (decided 2026-11-06; risks 17 and 18 of
+section 9).* The first version of `args_rep` required all pointer argument
+regions to be pairwise disjoint, which is stronger than what the aliasing
+check of section 3.4 provides: the check only separates each `ref`
+argument from the other arguments, and lets by-value arguments share bytes
+with each other and with the caller's locals (`f(x, x)`, or
+`f(cast<T[n]>(a), a[0])` with `a` allocatable, are fine in Core and pass
+the check). Since the generated call site passes the *place* of a by-value
+aggregate argument (no copy, section 3.4), `f(x, x)` to an extern would
+have built an `as` on which `args_rep` was false, and the contract would
+have given nothing. `args_rep` now requires `protected_disjoint`: the
+regions are listed with a flag (the return region and the `ref` regions
+are protected, by-value aggregates are not), and a protected region must
+be disjoint from every other region in the list. This is exactly what the
+aliasing check guarantees, `mem_agrees_outside` and `results_rep` only
+ever mention the protected regions, and an extern cannot write a by-value
+argument, so no model needs more.
 
-`results_rep` is, conversely, too weak for a `ref` parameter of
-incomplete array type. For `ext(ref x: T[])` called with a `T[*]` cell the
-`ref` region is the cell's own descriptor (the cast keeps the location,
-section 4), and Core writes the extern's new value back through the cast
-(`apply_ref_updates`), keeping the sizes. `results_rep` only asks that the
-region represent that value, own its blocks and reach nothing but fresh or
-previously reached blocks, so a model could leave a descriptor pointing at
-a fresh block or at an interior offset of the old data block, and the
-`T[*]` cell would no longer own a block it can free: this is the whole
-write through an ownership-dropping cast that `path_casts_ok` excludes,
-and the only one executable Core can perform (risk 15). The clause to add
-is that for a `ref` parameter whose type has `CoreDim_Unknown` dimensions
-the bytes of the `ref` region are the same in `mem'` as in `mem`; the
-extern may change only the contents of the data block. Risk 18 of
-section 9.
+The first version of `results_rep` was, conversely, too weak for a `ref`
+parameter of incomplete array type. For `ext(ref x: T[])` called with a
+`T[*]` cell the `ref` region is the cell's own descriptor (the cast keeps
+the location, section 4), and Core writes the extern's new value back
+through the cast (`apply_ref_updates`), keeping the sizes. `results_rep`
+only asked that the region represent that value, own its blocks and reach
+nothing but fresh or previously reached blocks, so a model could have left
+a descriptor pointing at a fresh block or at an interior offset of the old
+data block, and the `T[*]` cell would no longer have owned a block it can
+free: this is the whole write through an ownership-dropping cast that
+`path_casts_ok` excludes, and the only one executable Core can perform
+(risk 15). The clause added says that for a `ref` parameter whose type has
+a `CoreDim_Unknown` dimension the bytes of the `ref` region are the same
+in `mem'` as in `mem`; the extern may change only the contents of the
+data block. (Only the top-level dimensions matter: a record with a `T[]`
+field cannot be the type of an executable cell, since array casts apply
+only at the top of a type.)
+
+*A gap found in stage 5, left for stage 6 (risk 19):* `arg_rep` and
+`ret_by_buffer` decide "scalar or pointer" by the *instantiated* type,
+whereas the C prototype of a generic extern (and the generated call site,
+section 3.4) decides by the *declared* type: `ext<T>(x: T)` called at
+`i32` passes a `char *` to the bytes of the `i32`, and a declared return
+type `T` always goes through the return buffer. `extern_rep` is therefore
+stated wrongly for an extern with a by-value parameter or return of
+type-variable type instantiated at a scalar; no extern in the test suite
+has one (`alloc_array<T>` takes `ref array: T[*]`). The fix is to compute
+the kinds from `FI_TmArgs`/`FI_ReturnType` before substitution, as the
+generator does (`param_by_ptr`, `ret_kind` in `CodeGenEnv.thy`).
 
 Because the Core `ExternFunc` is total and deterministic in `(w, vs)`,
 whether an allocation succeeds is decided by `w`: `E` returns `false` (and
@@ -1582,30 +1602,38 @@ result. Non-termination, `TypeError`, `RuntimeError` and
     applied, and erasing first deleted it. Fixed in `run_compiler`; the
     size checker found it because it types every erased body.
 17. **Extern argument disjointness** (found in stage 4, section 6.2). The
-    extern premise `args_rep` requires all pointer argument regions to be
+    extern premise `args_rep` required all pointer argument regions to be
     pairwise disjoint, by-value aggregates included, but the aliasing check
     only separates `ref` arguments from the others, and the call site
     passes the place of a by-value aggregate without copying. An extern
-    call `f(x, x)` therefore satisfies Core but not `args_rep`. Fix in
-    stage 6: weaken `pairwise_disjoint` in `args_rep` to "each `ref`
-    region and the return region are disjoint from every other region"
-    (`mem_agrees_outside` and `results_rep` only ever mention those), so
-    that the premise is exactly what the aliasing check guarantees.
+    call `f(x, x)` therefore satisfied Core but not `args_rep`.
+    *Discharged in stage 5:* `args_rep` now requires `protected_disjoint`,
+    "each `ref` region and the return region is disjoint from every other
+    region" (`mem_agrees_outside` and `results_rep` only ever mention
+    those), which is exactly what the aliasing check guarantees;
+    `print_i32_extern_rep` is re-proved.
 18. **Extern write-back through an ownership-dropping cast** (found in
     stage 4 while resolving risk 15; section 6.2). For `ext(ref x: T[])`
     called with a `T[*]` cell, Core writes the extern's new value for `x`
     back through a path ending in the cast (`apply_ref_updates`, sizes
     preserved by `update_value_at_path`), and MiniC passes the cell's own
-    descriptor as the `ref` region. `results_rep` lets the model put any
+    descriptor as the `ref` region. `results_rep` let the model put any
     descriptor there that represents the new value and reaches only
     fresh or previously reached blocks, e.g. a fresh block or an interior
     offset of the old one; the `T[*]` cell would then no longer own a
-    freeable block, which is the case `path_casts_ok` excludes. Fix in
-    stage 6: add to `results_rep` that for a `ref` parameter whose type
-    has `CoreDim_Unknown` dimensions the bytes of the `ref` region are
-    unchanged (the extern writes elements, not the descriptor). A C extern
-    cannot do otherwise anyway, since it does not know whether the
-    descriptor it was handed is resizable.
+    freeable block, which is the case `path_casts_ok` excludes.
+    *Discharged in stage 5:* `results_rep` now says that for a `ref`
+    parameter whose type has a `CoreDim_Unknown` dimension
+    (`has_unknown_dim`) the bytes of the `ref` region are unchanged (the
+    extern writes elements, not the descriptor). A C extern cannot do
+    otherwise anyway, since it does not know whether the descriptor it was
+    handed is resizable.
+19. **Scalar-instantiated generic extern parameters** (found in stage 5,
+    section 6.2). `arg_rep`/`ret_by_buffer` classify an argument by its
+    instantiated type, the C prototype by the declared one; `extern_rep`
+    is wrong for `ext<T>(x: T)` at `T = i32`. No test has such an extern.
+    To fix in stage 6 by classifying with the declared types, as the
+    generator does.
 
 
 ## 10. Proposals for changes outside this directory, and deferred items

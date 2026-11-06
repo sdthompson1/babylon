@@ -152,8 +152,16 @@ definition ptr_regions_disjoint :: "MPtr \<times> nat \<Rightarrow> MPtr \<times
        (MP_Addr b1 o1, MP_Addr b2 o2) \<Rightarrow> b1 \<noteq> b2 \<or> o1 + snd r1 \<le> o2 \<or> o2 + snd r2 \<le> o1
      | _ \<Rightarrow> True)"
 
-definition pairwise_disjoint :: "(MPtr \<times> nat) list \<Rightarrow> bool" where
-  "pairwise_disjoint rs = (\<forall>i j. i < length rs \<longrightarrow> j < length rs \<longrightarrow> i \<noteq> j \<longrightarrow> ptr_regions_disjoint (rs ! i) (rs ! j))"
+(* The pointer regions of a call, each flagged as protected (a ref region or
+   the return region) or not (a by-value aggregate). The ref regions and the
+   return region must be disjoint from every other region; two by-value
+   regions may overlap (the aliasing check of section 3.4 allows f(x, x),
+   and the generated call site passes the place of a by-value aggregate
+   without a copy; risk 17). *)
+definition protected_disjoint :: "(bool \<times> MPtr \<times> nat) list \<Rightarrow> bool" where
+  "protected_disjoint rs =
+    (\<forall>i j. i < length rs \<longrightarrow> j < length rs \<longrightarrow> i \<noteq> j \<longrightarrow> fst (rs ! i)
+       \<longrightarrow> ptr_regions_disjoint (snd (rs ! i)) (snd (rs ! j)))"
 
 (* Whether the return value is passed through a buffer: a non-unit aggregate. *)
 definition ret_by_buffer :: "CoreType \<Rightarrow> bool" where
@@ -181,9 +189,11 @@ definition args_rep :: "CoreTyEnv \<Rightarrow> MEncoding \<Rightarrow> (nat \<R
              \<and> (if ret_by_buffer rty
                 then (\<exists>p. retArgs = [MV_Ptr p] \<and> ptr_range_ok mem p (gsz env enc rty))
                 else retArgs = [])
-             \<and> pairwise_disjoint
-                 ((case retArgs of [MV_Ptr p] \<Rightarrow> [(p, gsz env enc rty)] | _ \<Rightarrow> [])
-                  @ List.map_filter (\<lambda>(pt, a). arg_region env enc (fst pt) (snd pt) a) (zip ptys argVals))))"
+             \<and> protected_disjoint
+                 ((case retArgs of [MV_Ptr p] \<Rightarrow> [(True, p, gsz env enc rty)] | _ \<Rightarrow> [])
+                  @ List.map_filter (\<lambda>(pt, a). map_option (\<lambda>r. (snd pt = Ref, r))
+                                                  (arg_region env enc (fst pt) (snd pt) a))
+                                    (zip ptys argVals))))"
 
 (* The memory after the call agrees with the memory before it on every byte
    outside the regions R (the ref regions and the return region), and keeps
@@ -204,12 +214,20 @@ definition ref_args :: "CoreTyEnv \<Rightarrow> MEncoding \<Rightarrow> (CoreTyp
     List.map_filter (\<lambda>(pt, a). if snd pt = Ref then (case a of MV_Ptr p \<Rightarrow> Some (fst pt, p) | _ \<Rightarrow> None) else None)
                     (zip ptys argVals)"
 
+(* A type with an incomplete (CoreDim_Unknown) dimension: the descriptor of
+   such a ref argument is read-only for the extern (risk 18). *)
+definition has_unknown_dim :: "CoreType \<Rightarrow> bool" where
+  "has_unknown_dim ty = (case ty of CoreTy_Array _ dims \<Rightarrow> CoreDim_Unknown \<in> set dims | _ \<Rightarrow> False)"
+
 (* The results: the ref updates are represented in the ref regions, the
    return value in the return region or as the returned scalar (None for
    the unit type); the results own their blocks (val_owned, pairwise
    disjoint reachable blocks), and every block they reach is either one the
    corresponding argument reached before the call or a block that was not
-   live before (an allocation). *)
+   live before (an allocation). For a ref parameter of incomplete array
+   type the bytes of the ref region (the descriptor) are unchanged: the
+   extern may write the elements but not the descriptor, which the caller
+   may own as a T[*] cell (risk 18). *)
 definition results_rep :: "CoreTyEnv \<Rightarrow> MEncoding \<Rightarrow> (nat \<Rightarrow> MPtr) \<Rightarrow> MMem \<Rightarrow> MMem \<Rightarrow> CoreType
                            \<Rightarrow> (CoreType \<times> MPtr) list \<Rightarrow> CoreValue list \<Rightarrow> MVal list \<Rightarrow> CoreValue \<Rightarrow> MVal option \<Rightarrow> bool" where
   "results_rep env enc hmap mem mem' rty refs refUpds retArgs ret r =
@@ -221,6 +239,9 @@ definition results_rep :: "CoreTyEnv \<Rightarrow> MEncoding \<Rightarrow> (nat 
                fmlookup (MM_Blocks mem) b = None
                \<or> (\<exists>bs0. mem_read mem (snd (refs ! i)) (gsz env enc (fst (refs ! i))) = Some bs0
                        \<and> b \<in> (\<Union>v. reach_blocks env enc mem (fst (refs ! i)) v bs0))))
+     \<and> (\<forall>i < length refs. has_unknown_dim (fst (refs ! i)) \<longrightarrow>
+          mem_read mem' (snd (refs ! i)) (gsz env enc (fst (refs ! i)))
+          = mem_read mem (snd (refs ! i)) (gsz env enc (fst (refs ! i))))
      \<and> (if ret_by_buffer rty
         then (\<exists>p bs. retArgs = [MV_Ptr p] \<and> r = None \<and> mem_read mem' p (gsz env enc rty) = Some bs
                 \<and> rep_val env enc hmap mem' rty ret bs \<and> val_owned env enc mem' rty ret bs
@@ -230,7 +251,8 @@ definition results_rep :: "CoreTyEnv \<Rightarrow> MEncoding \<Rightarrow> (nat 
 
 (* extern_rep (section 6.2): for every world, instantiation, Core arguments
    of the instantiated parameter types, memory and MiniC arguments that
-   represent them (with pairwise disjoint regions), the MiniC model returns
+   represent them (with the ref and return regions disjoint from every other
+   region), the MiniC model returns
    the world the Core function returns, a memory that agrees with the old
    one outside the ref and return regions and the blocks reachable from the
    ref arguments, and results that represent the Core results. *)
