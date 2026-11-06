@@ -453,15 +453,30 @@ lemma compile_match_term_flat:
       and "core_term_flat scrut"
       and "\<And>p body. (p, body) \<in> set arms \<Longrightarrow> core_term_flat body"
   shows "core_term_flat (compile_match_term scrut arms)"
-  unfolding compile_match_term_def
-proof (rule match_tree_to_term_flat)
-  show "flat_match_tree (compile_match_tree scrut arms)"
-    by (rule compile_match_tree_flat[OF assms(1)])
-  show "match_tree_tests_ok core_term_flat (compile_match_tree scrut arms)"
-    by (rule compile_match_tree_tests_ok[where P = core_term_flat]) (simp_all add: assms(1,2))
-  fix body assume "body \<in> match_tree_bodies (compile_match_tree scrut arms)"
-  with compile_match_tree_bodies_subset[OF assms(1)] have "body \<in> set (map snd arms)" by blast
-  thus "core_term_flat body" using assms(3) by auto
+proof -
+  have bodies: "core_term_flat body"
+    if "body \<in> match_tree_bodies (compile_match_tree scrut arms)" for body
+  proof -
+    from that compile_match_tree_bodies_subset[OF assms(1)] have "body \<in> set (map snd arms)" by blast
+    thus "core_term_flat body" using assms(3) by auto
+  qed
+  show ?thesis
+  proof (cases "compile_match_tree scrut arms")
+    case (MT_Leaf body)
+    have "body \<in> match_tree_bodies (compile_match_tree scrut arms)" unfolding MT_Leaf by simp
+    from bodies[OF this] assms(2) show ?thesis
+      unfolding compile_match_term_def MT_Leaf by simp
+  next
+    case (MT_Test sc tarms)
+    have "core_term_flat (match_tree_to_term (compile_match_tree scrut arms))"
+    proof (rule match_tree_to_term_flat)
+      show "flat_match_tree (compile_match_tree scrut arms)"
+        by (rule compile_match_tree_flat[OF assms(1)])
+      show "match_tree_tests_ok core_term_flat (compile_match_tree scrut arms)"
+        by (rule compile_match_tree_tests_ok[where P = core_term_flat]) (simp_all add: assms(1,2))
+    qed (rule bodies)
+    thus ?thesis unfolding compile_match_term_def MT_Test by simp
+  qed
 qed
 
 lemma compile_match_statement_flat:

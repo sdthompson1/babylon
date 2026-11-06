@@ -136,7 +136,8 @@ qed
 section \<open>Function calls\<close>
 
 lemma sim_call:
-  assumes IH_tm: "\<And>tm. term_sim fuel tm" and IH_lv: "\<And>tm. lvalue_sim fuel tm"
+  assumes IH_tm: "\<And>tm. term_sim fuel tm" and IH_tms: "\<And>tms. terms_sim fuel tms"
+      and IH_lv: "\<And>tm. lvalue_sim fuel tm"
       and IH_stmts: "\<And>stmts. stmts_sim fuel stmts"
   shows "call_sim (Suc fuel) fnName tyArgs argTms"
 proof (rule call_simI)
@@ -287,6 +288,116 @@ proof (rule call_simI)
     thus ?thesis by simp
   qed
 
+  \<comment> \<open>The aliasing check of the compiled call passes, since the original's
+      did: the compiled arguments denote the same lvalues in the compiled state
+      (interp_lvalue_rel, with the compiled index lists evaluating to the
+      same values by the term list simulation, and a compiled match never an
+      lvalue, compile_match_term_is_Match).\<close>
+  have aliasF: "call_args_alias (IF_Args f) (map (interp_lvalue d fuel False full) argTms) = None"
+    by (rule interp_function_call_Inr_no_alias[OF ev f_lookup])
+  have allInr: "\<exists>v. interp_term d fuel full tm = Inr v" if "tm \<in> set argTms" for tm
+  proof -
+    have l1: "length (IF_Args f) = length ?refsF" using len_args by simp
+    have l2: "length ?refsF = length ?valsF" by simp
+    have "interp_term d fuel full tm \<in> set ?valsF" using that by simp
+    from fold_process_one_arg_all_ok[OF foldF l1 l2 this] show ?thesis by blast
+  qed
+  have compiled_alias:
+    "call_args_alias (IF_Args (mc_interp_fun f))
+       (map (interp_lvalue d G False (mc_state full)) (map match_compile_term argTms)) = None"
+    if agree: "\<forall>tm \<in> set argTms. args_agree fuel full G tm" for G
+  proof -
+    let ?Q = "\<lambda>tm. (\<exists>ty. core_term_type env NotGhost tm = Some ty) \<and> core_term_match_scrutinees_ok tm"
+    have idx: "vs = vs'"
+      if "list_all ?Q tms" and "interp_term_list d fuel full tms = Inr vs"
+        and "interp_term_list d G (mc_state full) (map match_compile_term tms) = Inr vs'"
+      for tms vs vs'
+    proof -
+      have typed: "\<forall>tm \<in> set tms. \<exists>ty. core_term_type env NotGhost tm = Some ty"
+        and ok1: "list_all core_term_match_scrutinees_ok tms"
+        using that(1) by (auto simp: list_all_iff)
+      from terms_simD[OF IH_tms fe fs sme wf typed ok1 that(2)] obtain n where
+        n: "interp_term_list d n (mc_state full) (map match_compile_term tms) = Inr vs" by blast
+      have "interp_term_list d (max n G) (mc_state full) (map match_compile_term tms) = Inr vs"
+        by (rule interp_term_list_Inr_more_fuel[OF n]) simp
+      moreover have "interp_term_list d (max n G) (mc_state full) (map match_compile_term tms) = Inr vs'"
+        by (rule interp_term_list_Inr_more_fuel[OF that(3)]) simp
+      ultimately show "vs = vs'" by simp
+    qed
+    have Qsub1: "\<And>t fld. ?Q (CoreTm_RecordProj t fld) \<Longrightarrow> ?Q t"
+      by (auto split: option.splits CoreType.splits)
+    have Qsub2: "\<And>t c. ?Q (CoreTm_VariantProj t c) \<Longrightarrow> ?Q t"
+      by (auto split: option.splits CoreType.splits)
+    have Qsub3: "\<And>t idx. ?Q (CoreTm_ArrayProj t idx) \<Longrightarrow> ?Q t \<and> list_all ?Q idx"
+      by (auto split: option.splits CoreType.splits if_splits simp: list_all_iff)
+    have Qsub4: "\<And>ty t. ?Q (CoreTm_Cast ty t) \<Longrightarrow> ?Q t"
+      by (auto split: option.splits if_splits)
+    have locs: "\<And>x. ?Q (CoreTm_Var x) \<Longrightarrow>
+                  rel_option (=) (fmlookup (IS_Locals full) x) (fmlookup (IS_Locals (mc_state full)) x)"
+      by (simp add: option.rel_eq)
+    have refs: "\<And>x. ?Q (CoreTm_Var x) \<Longrightarrow>
+                  rel_option (\<lambda>(a, p) (a', p'). a = a' \<and> p = p')
+                    (fmlookup (IS_Refs full) x) (fmlookup (IS_Refs (mc_state full)) x)"
+    proof -
+      fix x
+      show "rel_option (\<lambda>(a, p) (a', p'). a = a' \<and> p = p')
+              (fmlookup (IS_Refs full) x) (fmlookup (IS_Refs (mc_state full)) x)"
+        by (cases "fmlookup (IS_Refs full) x") auto
+    qed
+    have tr_other: "\<And>t. \<not> lvalue_shape t \<Longrightarrow> \<not> lvalue_shape (match_compile_term t)"
+    proof -
+      fix t :: CoreTerm
+      assume "\<not> lvalue_shape t"
+      thus "\<not> lvalue_shape (match_compile_term t)"
+      proof (cases t)
+        case (CoreTm_Match scrut arms)
+        obtain sc a where "compile_match_term (match_compile_term scrut)
+                             (map (\<lambda>(p, b). (p, match_compile_term b)) arms) = CoreTm_Match sc a"
+          using compile_match_term_is_Match by blast
+        thus ?thesis unfolding CoreTm_Match by (simp add: Let_def)
+      qed simp_all
+    qed
+    have lvrel: "(interp_lvalue d fuel False full (argTms ! k) = Inl TypeError
+                  \<and> interp_lvalue d G False (mc_state full) (match_compile_term (argTms ! k)) = Inl TypeError)
+                 \<or> (\<exists>a p a'. interp_lvalue d fuel False full (argTms ! k) = Inr (a, p)
+                          \<and> interp_lvalue d G False (mc_state full) (match_compile_term (argTms ! k)) = Inr (a', p)
+                          \<and> a = a')"
+      if k: "k < length argTms" for k
+    proof -
+      from allInr[OF nth_mem[OF k]] obtain v where
+        evF: "interp_term d fuel full (argTms ! k) = Inr v" by blast
+      have evG: "interp_term d G (mc_state full) (match_compile_term (argTms ! k)) = Inr v"
+        by (rule args_agree_term[OF bspec[OF agree nth_mem[OF k]] evF])
+      have Qk: "?Q (argTms ! k)" using arg_ty[OF k] ok k by (auto simp: list_all_length)
+      show ?thesis
+        by (rule interp_lvalue_rel[where Q = ?Q and R = "(=)" and tr = match_compile_term,
+                 OF Qsub1 Qsub2 Qsub3 Qsub4 locs refs match_compile_term.simps(4,13,14,15,5)
+                    tr_other idx evF le_refl le_refl evG le_refl le_refl Qk])
+    qed
+    show ?thesis
+      unfolding mc_interp_fun_simps(2)
+    proof (rule call_args_alias_None_map[OF aliasF])
+      show "length (map (interp_lvalue d G False (mc_state full)) (map match_compile_term argTms))
+              = length (IF_Args f)" using len_args by simp
+    next
+      fix k assume "k < length (IF_Args f)"
+      hence k: "k < length argTms" using len_args by simp
+      from lvrel[OF k]
+      show "map (interp_lvalue d G False (mc_state full)) (map match_compile_term argTms) ! k
+              \<noteq> Inl InsufficientFuel"
+        using k by auto
+    next
+      fix k k' assume "k < length (IF_Args f)" "k' < length (IF_Args f)"
+        and ra: "res_alias (map (interp_lvalue d G False (mc_state full)) (map match_compile_term argTms) ! k)
+                           (map (interp_lvalue d G False (mc_state full)) (map match_compile_term argTms) ! k')"
+      hence k: "k < length argTms" and k': "k' < length argTms" using len_args by simp_all
+      from lvrel[OF k] lvrel[OF k'] ra
+      show "res_alias (map (interp_lvalue d fuel False full) argTms ! k)
+                      (map (interp_lvalue d fuel False full) argTms ! k')"
+        using k k' by (auto simp: res_alias_iff)
+    qed
+  qed
+
   \<comment> \<open>The remaining ingredients of the compiled call.\<close>
   have lk: "fmlookup (IS_Functions (mc_state full)) fnName = Some (mc_interp_fun f)"
     by (simp add: f_lookup)
@@ -328,7 +439,7 @@ proof (rule call_simI)
       unfolding call_body_def mc_interp_fun_simps using Inl F1' cc newFull_eq by simp
     have "interp_function_call d (Suc ?G) (mc_state full) fnName tyArgs (map match_compile_term argTms)
             = Inr (mc_state newFull, retVal)"
-      by (rule interp_function_call_I[OF lk lenA lenT compiled_fold[OF agreeG] req' ens' cb])
+      by (rule interp_function_call_I[OF lk lenA lenT compiled_fold[OF agreeG] compiled_alias[OF agreeG] req' ens' cb])
     thus ?thesis by blast
   next
     case (Inr ext)
@@ -387,7 +498,7 @@ proof (rule call_simI)
       using Inr ext_eq aru' nf rv by (simp add: Let_def)
     have "interp_function_call d (Suc F0) (mc_state full) fnName tyArgs (map match_compile_term argTms)
             = Inr (mc_state newFull, retVal)"
-      by (rule interp_function_call_I[OF lk lenA lenT compiled_fold[OF F0] req' ens' cb])
+      by (rule interp_function_call_I[OF lk lenA lenT compiled_fold[OF F0] compiled_alias[OF F0] req' ens' cb])
     thus ?thesis by blast
   qed
 qed

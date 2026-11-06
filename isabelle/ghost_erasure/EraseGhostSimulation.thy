@@ -1,5 +1,5 @@
 theory EraseGhostSimulation
-  imports ErasedSteps "../interpreter/CoreInterpFuelMono"
+  imports ErasedSteps "../interpreter/CoreInterpLvalueRel"
 begin
 
 (* The simulation theorem for ghost erasure.
@@ -1580,6 +1580,99 @@ next
                    = Inr preE"
         by (simp only: refsE_eq valsE_eq foldE0)
 
+      \<comment> \<open>The aliasing check of the erased call passes: its argument pairs are
+          those of the full call at the non-ghost positions, and a non-ghost
+          argument denotes, in the erased state, the embedded image of the
+          lvalue it denotes in the full state, or no lvalue in both
+          (interp_lvalue_rel). \<close>
+      have aliasF: "call_args_alias (IF_Args f) (map (interp_lvalue d fuel False full) argTms) = None"
+        by (rule interp_function_call_Inr_no_alias[OF H0 f_lookup])
+      have allInr0: "\<exists>v. interp_term d fuel full tm = Inr v" if "tm \<in> set argTms" for tm
+      proof -
+        have l1: "length (IF_Args f) = length ?refsF" using len_eq by simp
+        have l2: "length ?refsF = length ?valsF" by simp
+        have "interp_term d fuel full tm \<in> set ?valsF" using that by simp
+        from fold_process_one_arg_all_ok[OF foldF l1 l2 this] show ?thesis by blast
+      qed
+      let ?sel = "notghost_positions ?flagsF"
+      have lenTF: "length argTms = length ?flagsF" using len_eq lenFlags by simp
+      have paramsE_sel: "?paramsE = map (\<lambda>i. IF_Args f ! i) ?sel"
+        by (rule drop_ghost_positions[OF lenFlags])
+      have argsE_sel: "?argsE = map (\<lambda>i. ?er (argTms ! i)) ?sel"
+        unfolding argsE_eq drop_ghost_positions[OF lenTF] by simp
+      have lvrel: "(interp_lvalue d fuel False full (argTms ! (?sel ! k)) = Inl TypeError
+                    \<and> interp_lvalue d fuel False erased (?er (argTms ! (?sel ! k))) = Inl TypeError)
+                   \<or> (\<exists>a p i. interp_lvalue d fuel False full (argTms ! (?sel ! k)) = Inr (a, p)
+                            \<and> interp_lvalue d fuel False erased (?er (argTms ! (?sel ! k))) = Inr (i, p)
+                            \<and> i < length emb \<and> emb ! i = a)"
+        if k: "k < length ?sel" for k
+      proof -
+        let ?i = "?sel ! k"
+        have i_lt: "?i < length ?flagsF" by (rule notghost_positions_lt[OF k])
+        have ng: "?flagsF ! ?i = NotGhost" by (rule notghost_positions_NotGhost[OF k])
+        have i_lt': "?i < length argTms" using i_lt lenTF by simp
+        have mem: "(argTms ! ?i, ((fst (IF_Args f ! ?i), snd (IF_Args f ! ?i)), NotGhost))
+                     \<in> set (zip argTms (zip (IF_Args f) ?flagsF))"
+          using i_lt' len_eq lenFlags ng by (auto simp: in_set_zip intro!: exI[where x = ?i])
+        have W: "notghost_typed env (argTms ! ?i)"
+          by (rule call_args_notghostD(1)[OF cargs flags mem refl])
+        from allInr0[OF nth_mem[OF i_lt']] obtain x where
+          evF: "interp_term d fuel full (argTms ! ?i) = Inr x" by blast
+        have evE: "interp_term d fuel erased (?er (argTms ! ?i)) = Inr x"
+          by (rule IH_term[OF fn_eq funs_eq rel W evF])
+        have Qsub3: "\<And>t idx. notghost_typed env (CoreTm_ArrayProj t idx)
+                      \<Longrightarrow> notghost_typed env t \<and> list_all (notghost_typed env) idx"
+          using notghost_typed_ArrayProj by blast
+        have locs: "\<And>x. notghost_typed env (CoreTm_Var x) \<Longrightarrow>
+                      rel_option (\<lambda>a i. i < length emb \<and> emb ! i = a)
+                        (fmlookup (IS_Locals full) x) (fmlookup (IS_Locals erased) x)"
+          by (rule locals_erased_rel_option(1)[OF D(7) notghost_typed_Var])
+        have refs': "\<And>x. notghost_typed env (CoreTm_Var x) \<Longrightarrow>
+                      rel_option (\<lambda>(a, p) (i, p'). (i < length emb \<and> emb ! i = a) \<and> p = p')
+                        (fmlookup (IS_Refs full) x) (fmlookup (IS_Refs erased) x)"
+          by (rule locals_erased_rel_option(2)[OF D(7) notghost_typed_Var])
+        have idx: "vs = vs'"
+          if "list_all (notghost_typed env) tms" and "interp_term_list d fuel full tms = Inr vs"
+            and "interp_term_list d fuel erased (map ?er tms) = Inr vs'" for tms vs vs'
+          using IH_list[OF fn_eq funs_eq rel that(1,2)] that(3) by simp
+        show ?thesis
+          by (rule interp_lvalue_rel[where Q = "notghost_typed env"
+                      and R = "\<lambda>a i. i < length emb \<and> emb ! i = a" and tr = ?er,
+                    OF notghost_typed_RecordProj notghost_typed_VariantProj Qsub3 notghost_typed_Cast
+                       locs refs' erase_ghost_term.simps(4,13,15,14,5) lvalue_shape_erase
+                       idx evF le_refl le_refl evE le_refl le_refl W])
+      qed
+      have aliasE: "call_args_alias ?paramsE (map (interp_lvalue d fuel False erased) ?argsE) = None"
+      proof (rule call_args_alias_None_rel[where sel = ?sel, OF aliasF _ notghost_positions_distinct])
+        fix k assume "k < length ?sel"
+        thus "?sel ! k < length (IF_Args f)" using notghost_positions_lt[of k ?flagsF] lenFlags by simp
+      next
+        show "length ?paramsE = length ?sel" unfolding paramsE_sel by simp
+      next
+        show "length (map (interp_lvalue d fuel False erased) ?argsE) = length ?sel" unfolding argsE_sel by simp
+      next
+        fix k assume "k < length ?sel"
+        thus "snd (?paramsE ! k) = snd (IF_Args f ! (?sel ! k))" unfolding paramsE_sel by simp
+      next
+        fix k assume k: "k < length ?sel"
+        from lvrel[OF k]
+        show "map (interp_lvalue d fuel False erased) ?argsE ! k \<noteq> Inl InsufficientFuel"
+          unfolding argsE_sel using k by auto
+      next
+        fix k k' assume k: "k < length ?sel" and k': "k' < length ?sel"
+          and ra: "res_alias (map (interp_lvalue d fuel False erased) ?argsE ! k)
+                             (map (interp_lvalue d fuel False erased) ?argsE ! k')"
+        have ra': "res_alias (interp_lvalue d fuel False erased (?er (argTms ! (?sel ! k))))
+                             (interp_lvalue d fuel False erased (?er (argTms ! (?sel ! k'))))"
+          using ra k k' by (simp add: argsE_sel)
+        have lt: "?sel ! k < length argTms" "?sel ! k' < length argTms"
+          using notghost_positions_lt[OF k] notghost_positions_lt[OF k'] lenTF by simp_all
+        from lvrel[OF k] lvrel[OF k'] ra'
+        show "res_alias (map (interp_lvalue d fuel False full) argTms ! (?sel ! k))
+                        (map (interp_lvalue d fuel False full) argTms ! (?sel ! k'))"
+          using lt by (auto simp: res_alias_iff lvalues_alias_def)
+      qed
+
       show "\<exists>newErased. interp_function_call d (Suc fuel) erased fnName argTys ?argsE
                           = Inr (newErased, retVal)
                         \<and> state_erased env emb newFull newErased"
@@ -1658,7 +1751,7 @@ next
             unfolding newFull_eq by (rule relN)
           have callE: "interp_function_call d (Suc fuel) erased fnName argTys ?argsE
                          = Inr (restore_scope erased postE, retVal)"
-            using lookE lenE tyLen_eq foldE Inl bodyE bE_eq ret_eq ccE
+            using lookE lenE tyLen_eq foldE aliasE Inl bodyE bE_eq ret_eq ccE
             by (simp add: checked_call_no_contract call_body_def Let_def paramsE_eq' D(6))
           from callE relN' show ?thesis by blast
         qed
@@ -1802,7 +1895,7 @@ next
           unfolding newFull_eq by (rule relN)
         have callE: "interp_function_call d (Suc fuel) erased fnName argTys ?argsE
                        = Inr (newErased, retVal)"
-          using lookE lenE tyLen_eq foldE Inr valsE_drop extE finalE ret_eq
+          using lookE lenE tyLen_eq foldE aliasE Inr valsE_drop extE finalE ret_eq
           by (simp add: checked_call_no_contract call_body_def Let_def paramsE_eq' D(3) D(6))
         from callE relN' show ?thesis by blast
       qed

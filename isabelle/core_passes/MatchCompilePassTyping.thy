@@ -169,15 +169,30 @@ theorem compile_match_term_type:
       and wf: "tyenv_well_formed env"
       and bodies: "\<And>p body. (p, body) \<in> set arms \<Longrightarrow> core_term_type env ghost body = Some ty"
   shows "core_term_type env ghost (compile_match_term scrut arms) = Some ty"
-  unfolding compile_match_term_def
-proof (rule match_tree_to_term_type)
-  show "arm_patterns_compatible env ghost (compile_match_tree scrut arms)"
-    by (rule compile_match_tree_arm_patterns_compatible[OF scrut ne pats wf])
-  show "match_tree_tests_ok (\<lambda>_. True) (compile_match_tree scrut arms)"
-    by (rule compile_match_tree_tests_ok[OF _ _ ne]) simp_all
-  fix body assume "body \<in> match_tree_bodies (compile_match_tree scrut arms)"
-  with compile_match_tree_bodies_subset[OF ne] have "body \<in> set (map snd arms)" by blast
-  thus "core_term_type env ghost body = Some ty" using bodies by auto
+proof -
+  have bodies': "core_term_type env ghost body = Some ty"
+    if "body \<in> match_tree_bodies (compile_match_tree scrut arms)" for body
+  proof -
+    from that compile_match_tree_bodies_subset[OF ne] have "body \<in> set (map snd arms)" by blast
+    thus "core_term_type env ghost body = Some ty" using bodies by auto
+  qed
+  show ?thesis
+  proof (cases "compile_match_tree scrut arms")
+    case (MT_Leaf body)
+    have "body \<in> match_tree_bodies (compile_match_tree scrut arms)" unfolding MT_Leaf by simp
+    from bodies'[OF this] scrut show ?thesis
+      unfolding compile_match_term_def MT_Leaf by (simp add: Let_def)
+  next
+    case (MT_Test sc tarms)
+    have "core_term_type env ghost (match_tree_to_term (compile_match_tree scrut arms)) = Some ty"
+    proof (rule match_tree_to_term_type)
+      show "arm_patterns_compatible env ghost (compile_match_tree scrut arms)"
+        by (rule compile_match_tree_arm_patterns_compatible[OF scrut ne pats wf])
+      show "match_tree_tests_ok (\<lambda>_. True) (compile_match_tree scrut arms)"
+        by (rule compile_match_tree_tests_ok[OF _ _ ne]) simp_all
+    qed (rule bodies')
+    thus ?thesis unfolding compile_match_term_def MT_Test by simp
+  qed
 qed
 
 theorem compile_match_statement_type:

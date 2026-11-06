@@ -16,11 +16,26 @@ The theories in this directory:
 | --- | --- |
 | `MiniCSyntax.thy` | C types, expressions, statements, functions, programs; syntactic well-formedness |
 | `MiniCMemory.thy` | bytes, block/offset pointers, the abstract integer encoding and its laws, the little-endian instance, load/store/copy/alloc/free |
+| `MiniCMemoryLemmas.thy` | slices and splices of byte lists, `ptr_off`, `mem_read`/`mem_write`/`mem_load`/`mem_store` on sub-ranges |
 | `MiniCSemantics.thy` | states, extern models, pure expression evaluation, the fuelled statement interpreter, `run_program` |
 | `MiniCFuelMono.thy` | fuel monotonicity |
 | `MiniCTyping.thy` | the typing judgement `program_well_typed`, and `expr_type_sound` |
 | `MiniCPrint.thy` | the (unverified) printer to C, `print_program`; the extern C name clash check `extern_clashes` (section 3.9) |
 | `MiniCExample.thy` | the hand-written example programs, their extern models, their evaluation and typing by `eval`, and the list `minic_examples` the driver exports |
+
+The theories of the code generator proper live in `isabelle/codegen/`
+(stages 4 to 6); those of stage 4:
+
+| Theory | Contents |
+| --- | --- |
+| `codegen/CoreLayout.thy` | tag sizes and constructor tags, dimensions and Fortran-order element offsets, the descriptor layout, `type_size` (fuelled `tsz`) with its congruence, substitution and monotonicity lemmas |
+| `codegen/DatatypeAcyclic.thy` | the datatype dependency graph, `datatypes_acyclic` (SCCs by `KosarajuMain`) and its soundness: the datatype equation of `type_size` |
+| `codegen/SizeExpr.thy` | `size_expr`, `field_offset_expr`, `elem_offset_expr`, `size_fits`, and the evaluation lemmas (`size_expr_eval`, ...); `field_offset` |
+| `codegen/SizeBound.thy` | the call graph and its order, the per-function bounds, `core_module_sizeable P m` and its static soundness |
+| `codegen/RepVal.thy` | `scalar_ty`/`scalar_val`, `rep_val`, the length, scalar, reachable-block and frame lemmas, variant junk |
+| `codegen/RepValPath.thy` | `PathLoc`, `path_step`/`path_loc`, `val_owned`, the projection and update lemmas |
+| `codegen/RepValDefault.thy` | `default_value_rep_zero` |
+| `codegen/StateRep.thy` | the store-level relation, the ownership invariant, `extern_rep` and the `print_i32` instance |
 
 They are part of the main `Babylon` session (`isabelle/ROOT`); the separate
 `Babylon_MiniC` session of stage 3a is gone. To iterate on one theory
@@ -209,6 +224,35 @@ Exactly as `docs/c-interface.md`:
 Variant tags, descriptor sizes and the index arithmetic are all encoded
 integers, so the generated code never observes byte order.
 
+*As definitions (stage 4, `codegen/CoreLayout.thy`, `codegen/SizeExpr.thy`).*
+`type_size env P sz ty` is the byte size of a Core type, parametrised by
+the datatype tables of a `CoreTyEnv` (`TE_DataCtors`, `TE_DataCtorsByType`;
+the interpreter's `IS_DataCtors` tables are the same values), the pointer
+size `P` and an assignment `sz` of sizes to type variables; `gsize env P ty`
+is the size of a ground type (`sz` is irrelevant: `type_size_ground`). The
+recursion through datatype payloads is fuelled (`tsz`), with the fuel fixed
+at one more than the number of datatypes (`dt_fuel`); under
+`datatypes_acyclic env` this is enough fuel and the datatype equation
+`type_size_Datatype` (tag plus maximum payload) holds. A fuelled definition
+was preferred to a well-founded one because it is executable as is and
+every lemma downstream only needs the datatype equation. `CoreTy_MathInt`
+and `CoreTy_MathReal` have size 0 (ghost-free input never has them). The
+other functions: `tag_bits`/`tag_size`/`tag_ty` from the number of
+constructors (`get_tag_size` of `codegen.c`), `ctor_tag` (the index in the
+`TE_DataCtorsByType` list), `field_offset` (sum of the sizes of the
+preceding fields), `elem_offset esz sizes idx` (= `esz * flat_index`,
+Fortran order: `flat_index [n1, n2, ..] [i1, i2, ..] = i1 + n1 (i2 + n2 ..)`;
+note that `all_indices` of `CoreValue.thy` enumerates with the *last* index
+fastest, so `elem_offset` is not a position in that list), `desc_size P d`
+and `desc_dim_offset P k` for descriptors, and the payload offset of a
+variant, which is `tag_size`. Monotonicity: `type_size_mono` (in `sz` and
+`P`); bounds: `field_offset_bound`, `elem_offset_bound`,
+`field_offset_disjoint`, `elem_offset_disjoint`, `desc_dim_offset_bound`.
+The MiniC expressions `size_expr`, `field_offset_expr`, `elem_offset_expr`
+(section 3.2) build the `uint64_t` arithmetic from a caller-supplied map
+from type-variable names to expressions and fold ground types to literals
+(`ME_PtrSize` stays symbolic).
+
 ### 2.4 Stack, heap, globals
 
 All three live in the one `MMem`:
@@ -369,18 +413,58 @@ and it is linear in the size of the program; the exact alternative,
 enumerating every instantiation reachable from `main`, can be exponential
 in the call depth, like monomorphisation.
 
-The soundness lemma, to be proved in stage 4 on the Core side: in every
-state of a Core run from `main`, the current instantiation (`IS_TyArgs` in
-`CoreInterp`) maps each type parameter of the current function `f` to a
-closed type of size at most `B_f(T)`. It is an induction over the
-interpreter whose only interesting case is the call: the callee's
+**The pointer size bound `P`.** `type_size` depends on the pointer size,
+which is a parameter of the memory model (`enc_ptr_size enc`), so the
+checker evaluates every size at a pointer size `P` and the theorems take
+`enc_ptr_size enc ≤ P` as a hypothesis: sizes are monotone in the pointer
+size (`type_size_mono`), so `P` bounds every smaller pointer size. The
+checker, the lemmas and the theorems take `P` as a variable; the literal
+`8` appears in exactly one place, the constant `codegen_ptr_size_bound`
+next to the call of the checker in `run_compiler` (`CodeExport.thy`). This
+is a hypothesis of the theorems about the target, not an assumption about
+the C implementation (section 5.2).
+
+**As definitions (stage 4, `codegen/SizeBound.thy`).** `core_module_sizeable
+P m` is the executable checker: `call_order` (Kosaraju SCCs of the call
+graph, `fun_calls`; a cycle is the error `SE_CallCycle`), `compute_bounds`
+(the bounds `B_f`, computed by `process_fun` in call order from the type
+arguments of every call site, `term_calls`/`stmt_calls`), and
+`check_fun_sizes`/`check_global_sizes`, which test `size_fits` (every
+intermediate value of the size expression fits a `uint64_t`, including the
+element count and the element size of a fixed array) for every type of a
+function's body (`fun_types`: parameter and return types, the types of all
+subterms, declared types, cast types, the type arguments and instantiated
+return types of calls, `term_types`/`stmt_types`) at the bounds, and for
+every global's type. `datatypes_acyclic` (`codegen/DatatypeAcyclic.thy`:
+SCCs of the datatype dependency graph, self-loops included) is checked
+first by `sizeable_check`, with `SE_DatatypeCycle`; `SE_TooManyCtors`
+rejects a datatype with more than `2^32` constructors (so that
+`dt_tags_fit` holds and the tag is one of the three C types).
+
+**Soundness, static part (stage 4):** if the checker accepts, then (a) for
+every function `g`, every call site in `g` of `f` with type arguments
+`tys`, and every assignment bounded by `B_g`, `type_size` of each `tyi` is
+at most `B_f(Ti)` (`sizeable_call_bound`, by monotonicity); (b) every type
+of `g`'s body has size below `2^64` under any assignment bounded by `B_g`
+(`sizeable_fun_type_fits`); (c) every closed type of the program has size below
+`2^64` (`sizeable_global_fits`); (d) `datatypes_acyclic` holds
+(`sizeable_acyclic`), and every datatype has at most `2^32` constructors (`sizeable_tags_fit`). **Dynamic part (stage 6):** "in every state of a
+Core run from `main`, `IS_TyArgs` of the running function `f` is bounded by
+`B_f`" is an induction over the interpreter whose only interesting case is
+the call (`calleeTyArgs` in `interp_function_call`): the callee's
 instantiation is the call site's syntactic type arguments under the
-caller's instantiation (`calleeTyArgs`), so monotonicity of `size` gives
-the bound. Consequently every size expression the generated code evaluates
-has a mathematical value below `2^64`, and since every intermediate value
-of a monotone non-negative expression is at most its final value, the
-`uint64_t` arithmetic computes it exactly. The theorem of section 8 thus
-has a single conclusion, "corresponds", with no trap or abort anywhere.
+caller's instantiation, so (a) gives the bound. The simulation proof of
+stage 6 performs that induction anyway and carries the bound as part of its
+invariant (there is no "current function" in `InterpState`, so the lemma
+cannot be stated without an invariant of that shape). Consequently every
+size expression the generated code evaluates has a mathematical value
+below `2^64`, and since every intermediate value of a monotone non-negative
+expression is at most its final value, the `uint64_t` arithmetic computes
+it exactly (`size_expr_eval` in `SizeExpr.thy`: if the type-variable
+expressions evaluate to the assignment and `size_fits` holds, `size_expr`
+evaluates to `type_size`, with no undefined step). The theorem of section 8
+thus has a single conclusion, "corresponds", with no trap or abort
+anywhere.
 
 *Rejected alternative:* run-time overflow guards on every size
 computation, with `abort()` on overflow and a theorem concluding
@@ -506,6 +590,96 @@ is:
 
 The alternative, a hypothesis stated over an instrumented or trace-producing
 Core interpreter, is heavier and is not recommended.
+
+*Status (end of stage 4): implemented.* `interp_function_call`
+(`CoreInterp.thy`) binds the arguments (`fold process_one_arg`) and then
+runs `call_args_alias (IF_Args f) (map (interp_lvalue d fuel False state)
+argTms)` before the contract checks and the body:
+
+- `interp_lvalue d fuel writable state tm` is the interpreter's lvalue
+  resolver (one of the mutually recursive functions; it was
+  `interp_writable_lvalue`, which is now the abbreviation
+  `interp_lvalue d fuel True`). The mode `writable` decides whether a
+  read-only base variable (in `IS_ConstLocals`) is a `TypeError` (`True`:
+  ref declarations, assignments, swaps and the `ref` arguments of a call)
+  or accepted (`False`: the aliasing check, since a by-value argument may be
+  a const local that a `ref` argument aliases). In either mode a global is
+  `TypeError` to this resolver: globals live in `IS_Globals`, not in the
+  store, so they have no address. This loses nothing. A `ref` *argument*
+  cannot target a global (it must be writable); a `ref` *declaration* whose
+  base is a global does not go through `interp_lvalue` at all but copies
+  the value into a const local (section 3.5), so no `IS_Refs` entry ever
+  points at a global; and a by-value argument that names a global is
+  immutable, so it cannot be aliased by anything a callee can write. Any
+  term outside `lvalue_shape` is likewise `TypeError` and takes no part in
+  the check. The index terms are evaluated by `interp_term_list`
+  at the fuel of the enclosing level, as before.
+- `lvalues_alias`: same address and, with `LVPath_ArrayCast` steps removed
+  (`strip_casts`), one path a prefix of the other (`path_prefix`); the
+  index lists of `LVPath_ArrayProj` steps are compared as values.
+- `args_alias args lvs`: some pair `i ≠ j` of arguments with at least one
+  bound `Ref` has aliasing resolutions (`pair_alias`, `res_alias`).
+- `call_args_alias args lvs`, on the list of resolutions: `Some
+  InsufficientFuel` if any resolution ran out of fuel (keeps the result
+  monotone in the fuel), `Some RuntimeError` if `args_alias`, else `None`;
+  the call returns `Inl err` on `Some err`.
+
+It applies to every call (extern functions included) and every pair of
+arguments, ghost calls and ghost arguments included, as the verifier does.
+Differences from the proposal: none in substance; the "readable lvalue"
+variant is the non-writable mode of the one resolver rather than a copy of
+it. (A first version had a separate copy, `lvalue_of_term`, parametrised by
+the index evaluator; it was folded into `interp_lvalue` to remove the
+duplication. The only cost is that the mode is an argument of the mutually
+recursive definition, so the fuel and depth monotonicity inductions carry
+it; every other lemma reads unchanged through the abbreviation.)
+
+What it guarantees, and all that the simulation needs for a Core-to-Core
+call, is that a `ref` argument's bytes are disjoint from those of every
+other argument: a by-value argument that is an lvalue (a const local, a
+cast of an lvalue, ...) may share bytes with another by-value argument or
+with a local of the caller, since neither side writes them during the
+call, and a by-value argument that is not an lvalue is a fresh temporary
+on both sides. The premise of the extern contract (`args_rep`, section
+6.2) is currently stronger, all argument regions pairwise disjoint; see
+there and risk 17 of section 9.
+
+The dependent proofs were repaired as stage 2 did for the copy check.
+Fuel and depth monotonicity (`CoreInterpFuelMono`): the non-writable
+resolutions of the arguments are covered by the same induction case as the
+writable ones, and agree with more fuel or depth unless one ran out of fuel
+(`call_args_alias_not_fuelD`); frame, world, preservation and type
+soundness need nothing new (`interp_function_call_InrE` keeps its five
+facts; a call that succeeds passed the check,
+`interp_function_call_Inr_no_alias`; the check fails only with
+`InsufficientFuel` or `RuntimeError`, `call_args_alias_Some_sound`). The
+two simulations carry the check across by `interp_lvalue_rel`
+(`CoreInterpLvalueRel`): for a transformation of state and term that keeps
+the shape of lvalues, turns non-lvalues into non-lvalues and relates the
+addresses of locals, an argument that evaluates as an rvalue in both states
+resolves to no lvalue in both, or to lvalues with the same path and related
+addresses. Ghost erasure then uses that the erased call's argument pairs
+are the full call's pairs at the non-ghost positions
+(`args_alias_sublist_rel`, `call_args_alias_None_rel`,
+`notghost_positions` in `CoreTyEnv`); match compilation uses the same with
+the identity selection (`call_args_alias_None_map`).
+
+**One change to the match compiler was necessary** (`MatchCompilePass.thy`,
+`compile_match_term`): a non-flat match whose first arm is a wildcard
+compiled to the bare arm body, so `f(ref a, match x { case _ => a; ... })`
+(accepted: the match term is not an lvalue) compiled to `f(ref a, a)`,
+which the check rejects, and the match-compilation simulation would have
+been false. A single-leaf tree is now wrapped in a match with one wildcard
+arm, as `compile_match_statement` already did for statements; a compiled
+match is always a match (`compile_match_term_is_Match`), so the pass never
+turns a non-lvalue into an lvalue. (`lvalue_base_name_match_compile_term`
+is unchanged.) The generated C is unaffected: the extra flat match is a
+test-free match that stage 5 lowers as any flat match.
+
+With the check in place, the simulation theorem of section 8 needs no
+aliasing hypothesis over the run, and `extern_rep`'s disjointness of the
+`ref` regions (section 6.2) follows from the Core run reaching a normal
+result.
 
 ### 3.5 Variables, `ref` locals, lazy references
 
@@ -723,61 +897,200 @@ judgement. Now the judgement is only about the MiniC namespace and
 mangling stays in `MiniCPrint.thy`.
 
 
-## 4. The representation relation (stage 4 preview)
+## 4. The representation relation (stage 4)
 
-This stage only fixes the shape; stage 4 defines and proves it. The relation
-is parametrised by the type environment (datatype tables), a valid encoding,
-and a *handle map* `hmap :: nat ⇒ MPtr` with `hmap 0 = MP_Null`, injective,
-giving the MiniC pointer value of each Core extern handle (section 6).
+Defined in `codegen/RepVal.thy` (the relation, scalars, reachable blocks,
+the frame lemma), `codegen/RepValPath.thy` (paths and updates) and
+`codegen/RepValDefault.thy` (default values); the store-level part is in
+`codegen/StateRep.thy`. The relation is parametrised by the type
+environment (datatype tables), an encoding, and a *handle map*
+`hmap :: nat ⇒ MPtr` giving the MiniC pointer value of each Core extern
+handle (section 6); `hmap 0 = MP_Null` and injectivity are hypotheses of
+the theorems that need them, not of the relation. Sizes are measured at the
+encoding's pointer size and the zero assignment (`gsz env enc ty`, the
+types are closed).
 
-`rep_val env enc hmap mem ty v bs` ("`bs` are the `|ty|` bytes of `v` at type
-`ty`, with heap blocks in `mem`"):
+`rep_val env enc hmap mem ty v bs` ("`bs` are the `|ty|` bytes of `v` at
+type `ty`, with heap blocks in `mem`") is defined by recursion on the value,
+in a *slice* formulation: each component of an aggregate is represented by
+the slice of `bs` at its offset (`slice off n bs = take n (drop off bs)`,
+`MiniCMemoryLemmas.thy`), and the length of `bs` is the size of the type:
 
-- `CV_Bool b`: `bs = encode u8 (if b then 1 else 0)`;
-- `CV_FiniteInt s b i`: `bs = encode s b i`;
-- `CV_Record fs` at a record type: the concatenation of the fields' byte
-  lists;
-- `CV_Variant C p` at `D<args>`: `encode tagty (index of C) @ payload bytes @
-  junk`, where `junk` is any bytes (undefined included) padding to `|D<args>|`;
-- `CV_Array sizes elems` at fixed dims: the elements' byte lists in Fortran
-  order;
-- `CV_Array sizes elems` at allocatable/incomplete dims: `encode_ptr p @
-  encode u64 sizes`; if the element count is zero `p` is null or the start
-  of a live heap block; otherwise `p = MP_Addr blk 0` with `blk` a live block
-  of exactly `count · |elem|` bytes whose contents represent the elements;
+- `CV_Bool b` at `bool`: `bs = encode_val (MV_U8 (if b then 1 else 0))`;
+- `CV_FiniteInt s b i` at `iN`/`uN`: `int_fits s b i` and
+  `bs = encode_val (MV_Int s b i)`;
+- `CV_Record fvs` at a record type with distinct field names: `|bs|` is the
+  record's size and, field by field (`list_all2`), the names agree and the
+  field's value is represented by the slice at `field_offset`;
+- `CV_Variant C p` at `D<args>`: `C`'s entry in `TE_DataCtors` names `D`
+  and has as many type variables as there are arguments, `C` is one of
+  `D`'s constructors, `|bs| = |D<args>|`, the first `tag_size` bytes encode
+  `ctor_tag C` at the tag type, and the payload is represented by the slice
+  of `|payload[args]|` bytes after the tag (the bytes after that are
+  unconstrained: `rep_val_variant_junk`);
+- `CV_Array sizes elems` at fixed dims: `sizes` match the dims, the element
+  map's domain is `all_indices sizes`, `|bs| = |T| · count`, and element
+  `idx` is represented by the slice at `elem_offset`;
+- `CV_Array sizes elems` at allocatable/incomplete dims: `sizes` match the
+  dims and are valid (each fits `uint64_t`), `count < 2^64` and
+  `|T| · count < 2^64`, `|bs| = desc_size`, dimension `k` is the `uint64_t`
+  `sizes ! k` at `desc_dim_offset k` (`desc_dims_ok`), and the first
+  `ptr_size` bytes encode a pointer `p` such that: if the count is zero, `p`
+  is null or a valid pointer, the start of a block if a dimension is
+  allocatable (`empty_data_ok`: `Array.c` may return a non-null pointer for
+  an empty allocation, which `free_array` must be able to free); otherwise
+  `|T| · count` bytes are readable at `p`, the whole of a live block when a
+  dimension is allocatable (`data_region_ok`: an allocatable array owns its
+  data; an incomplete array `T[]` may be a view of a region inside a block,
+  a cast of a fixed array), and element `idx` is represented by the slice
+  of those bytes at `elem_offset`;
 - `CV_Extern n l h` at `CoreTy_Extern n l`: `bs = encode_ptr (hmap h)`;
-- in all cases `|ty| < 2^64` (so that every size, offset and index
-  computation of section 3 fits `uint64_t`; `core_module_sizeable` of
-  section 3.2 guarantees this for every type a Core run instantiates, and
-  the extern hypothesis delivers it for arrays an extern allocates).
+- `CV_Int`, `CV_Real`: never represented.
 
-`state_rep` relates a Core `InterpState` to a MiniC state (memory, globals,
-locals, world): the worlds are equal; every global is represented in its
-block; every cell of `IS_Store` has a *region* (block, offset) whose bytes
-represent its value; `IS_Locals`/`IS_Refs`/`IS_TyArgs` of the current frame
-map to MiniC variables as in section 3.5 (a `ref` to a pointer variable
-whose value is the region of the cell at the path, or to a lazy term; a type
-parameter to a size variable holding `|T|`); MiniC may have any number of
-extra blocks (temporaries, dead frames' leftovers do not exist, since scopes
-free them).
+The byte size bound `|ty| < 2^64` is *not* a clause: the static checker of
+section 3.2 establishes it for every type a run instantiates, and only the
+descriptor clause needs bounds of its own (so that the generated index
+arithmetic is defined), which the extern hypothesis delivers for the arrays
+an extern allocates.
+
+*Lemmas.* `rep_val_length` (`|bs| = |ty|`, for a valid encoding);
+`scalar_ty`/`scalar_val` (the C scalar type of a scalar Core type and the
+MiniC value of a scalar Core value: `bool` is `uint8_t`, integers are
+themselves, extern handles are `void *` through `hmap`) with
+`rep_val_scalar` (the bytes of a scalar are the encoding of its MiniC
+value), `rep_val_scalar_decode`, `rep_val_scalar_load` (`mem_load` from a
+region holding the bytes returns the value), `rep_val_scalar_store`
+(storing the value gives representing bytes) and `rep_val_scalar_mem` (no
+memory dependence); the elimination lemmas `rep_val_Record_E`,
+`rep_val_Variant_E`, `rep_val_FixedArray_E`, `rep_val_Desc_E`;
+`rep_val_Array_weaken`/`rep_val_Array_strengthen` (retyping an array at
+dims of the same category, dropping or, given the block facts, adding
+ownership).
+
+*Reachable blocks and the frame lemma.* `reach_blocks env enc mem ty v bs`
+is the set of heap blocks the representation refers to: the block a
+descriptor's pointer points into, and recursively the blocks of the
+elements, fields and payload. It is computed from the bytes,
+because the pointers are in the bytes, not in the Core
+value. `rep_val_frame`: if `mem'` agrees with `mem` on `reach_blocks`
+(`blocks_agree`: same `fmlookup` in `MM_Blocks`), `rep_val` transfers to
+`mem'`; `rep_val_frame_write` is the instance for a write to an unreachable
+block; `reach_blocks_agree` says the set itself only depends on those
+blocks. Stage 6's ownership invariant is phrased with `reach_blocks`.
+
+*Paths* (`RepValPath.thy`). `step_get`/`step_put` take one `LValuePath`
+step of `get_value_at_path`/`update_value_at_path`
+(`get_value_at_path_Cons`, `update_value_at_path_Cons`). A location
+`PathLoc` is `PL_Here off` (an offset within the bytes of the enclosing
+value) or `PL_Mem p` (a pointer into the heap, after a descriptor step);
+`loc_compose` composes them and `loc_ptr p l` is the absolute pointer when
+the enclosing value is in memory at `p`. `path_step env enc mem ty bs s`
+gives, for one step, the type, the bytes and the location of the
+sub-value: a field at `field_offset`, a payload at `tag_size`, an element
+of a fixed array at `elem_offset` (index in bounds), an element of a
+descriptor by decoding the pointer and the sizes from the bytes
+(`desc_ptr`, `desc_sizes`) and reading `|T|` bytes at `elem_offset` in the
+data (`PL_Mem`), and an array cast as the same bytes retyped, provided the
+cast keeps the category (fixed vs descriptor), does not add ownership
+(`allocatable_dims dims' ⟶ allocatable_dims dims`, which every Core cast
+satisfies: `dim_cast_ok`) and has well-kinded dims (as `type_at_path`
+requires). A fixed-to-descriptor or descriptor-to-fixed cast has no
+location: there the generator creates a temporary descriptor or loads the
+data pointer (section 3.3), which stage 6 handles with
+`rep_val_Array_weaken` and the descriptor clause. `path_loc` iterates
+`path_step`; the type it computes is `type_at_path` (`path_loc_type`).
+
+The projection lemma `path_loc_sound_conj` (parts `path_loc_rep`,
+`path_loc_reach`, `path_loc_Mem_reach`, `path_loc_Here`,
+`path_loc_Mem_read`): if `rep_val ty v bs`, `path_loc` gives `(ty', bs',
+l)` and `get_value_at_path v path = Inr v'`, then `rep_val ty' v' bs'`, the
+blocks reachable from `v'` are among those of `v`, a memory location is in
+a block reachable from `v` and its bytes read back from the memory, and an
+in-place location is the slice at its offset, inside the bytes.
+
+The update lemma `path_update_sound`: if moreover `val_owned ty v bs`, the
+path's casts are admissible for an update (`path_casts_ok`),
+`update_value_at_path v path v' = Inr w`, the new value is represented in
+the new memory (`rep_val mem' ty' v' bs'`), and the update is at the
+location (`update_at`): for `PL_Here off` the new bytes are `splice off bs'
+bs` and `mem'` agrees with `mem` on the blocks reachable from `v` minus
+those reachable from the old target; for `PL_Mem q` the new memory is
+`mem_write mem q bs'` and the bytes are unchanged; then `rep_val mem' ty w`
+of the new bytes. Per clause the reassembly lemmas are
+`rep_val_Record_update`, `rep_val_Variant_update`,
+`rep_val_FixedArray_update`, `rep_val_Desc_update`, and the byte-level
+reasoning of an in-place step is `inplace_step_bytes`. `val_owned`
+(ownership within a value) says the reachable blocks of distinct
+components are disjoint and a descriptor's data block is reachable from
+none of its elements: it is what makes a write through the path leave every
+other component's blocks untouched. `path_casts_ok` excludes one case: an
+ownership-dropping cast (`T[*]` to `T[]`) followed by an in-place update of
+the whole cast array (the new `T[]` value does not promise to own its
+data, so the `T[*]` cell could not); an update that goes on into the heap
+data through such a cast is fine. No Core statement reaches the excluded
+case: a non-ghost `Assign`, `AssignCall` or `Swap` must be at a complete
+type, and the lvalue at such a cast has type `T[]` (section 9, risk 15).
+The one whole write that does go through it is the write-back of a `ref`
+parameter after an extern call, which `results_rep` must pin down
+(section 6.2).
+
+*Default values* (`RepValDefault.thy`): `default_value_rep_zero`: if
+`default_value fuel st ty = Inr v` with the interpreter's tables equal to
+`env`'s, `valid_encoding enc`, `datatypes_acyclic env`, `dt_tables_ok env`
+(payloads well-kinded in their type variables, distinct type variables,
+`TE_DataCtorsByType` consistent with `TE_DataCtors`, no abstract types:
+`tyenv_well_formed` of a normalized module gives it, `dt_tables_ok_of_wf`),
+`tables_math_free env` and `math_free ty` (no `CoreTy_MathInt`/`MathReal`,
+which have no representation; after ghost erasure every remaining payload
+is math-free), `is_well_kinded env ty` (uniform array dims) and
+`hmap 0 = MP_Null`, then `v` is represented by `|ty|` zero bytes, in every
+memory. No size bound is needed.
+
+*The store-level relation* (`StateRep.thy`). A *region* is a pair (block,
+offset); `cell_rep env enc hmap mem ty v r` says the `|ty|` bytes at the
+region are readable and represent `v`; `cell_reach` is `reach_blocks` of
+those bytes and `cell_owned` is `val_owned` of them plus "the region's own
+block is not among the reachable heap blocks". `store_rep env enc hmap mem
+store storeTyping regions`: one region per cell of `IS_Store`, typed by
+`storeTyping` exactly as `state_matches_env`'s `store_well_typed`;
+`globals_rep ... globals gregion`: every global of `IS_Globals` is
+represented at `gregion g` with its `TE_GlobalVars` type. `state_rep_store
+env enc hmap st storeTyping ms regions gregion root` is their conjunction
+with equal worlds (`IS_World st = MS_World ms`) and the ownership
+conditions below; `regions`, `gregion` and `root` are parameters that the
+per-frame part of stage 6 supplies (the generator's environment knows which
+block each variable lives in), and so are the facts about `IS_Locals`,
+`IS_Refs` and `IS_TyArgs`: a mutable local maps to the region of its block,
+a `ref` to a pointer variable whose value is `loc_ptr` of the cell's region
+and `path_loc` of its path (or to a lazy term), a type parameter to a size
+variable holding `|T|` (section 3.5). MiniC may have any number of extra
+blocks (temporaries; dead frames' leftovers do not exist, since scopes free
+them).
 
 *Ownership.* Because stage 2 makes copying an allocated value a
 `RuntimeError`, a normal Core run never has two *mutable* cells holding the
 same allocated array; dropping one (leaving a scope) is a leak in C and
 harmless to the theorem (the block simply stays live and unreferenced).
-The relation states ownership as: regions of distinct cells are disjoint and
-heap blocks reachable from distinct cells are distinct, *except* that a
-cell created by `bind_const_local` (a by-value parameter, a `Let` variable,
-a `ref` to a read-only base) may share its region and heap blocks with the
-cell it was copied from. Sharing is sound because such a const cell and its
-origin are never written while both are live: a `Let` body is pure; a
-by-value parameter's origin belongs to a suspended caller and (aliasing
-hypothesis) is not reachable through the callee's `ref` parameters; a
-read-only base is never written. The invariant that the simulation
-maintains is therefore "every location writable from the current frame
-(its mutable cells, its `ref` targets, and the heap blocks reachable from
-them) is referenced by no other live cell", which every statement form
-preserves and every call establishes for the callee.
+`store_owned env enc mem store storeTyping regions root` states ownership
+as: every cell is `cell_owned`, and for cells `i ≠ j` with different roots
+the regions are disjoint (`regions_disjoint`, byte ranges in the same block
+do not overlap) and the reachable heap blocks are disjoint. The *root map*
+`root :: nat ⇒ nat` is the exception for sharing: a cell created by
+`bind_const_local` (a by-value parameter, a `Let` variable, a `ref` to a
+read-only base) may share its region and heap blocks with the cell it was
+copied from, and has that cell's root; every other cell is its own root.
+`globals_owned` gives the globals their own blocks (offset 0), distinct
+from each other, from every cell's region and from every reachable heap
+block. Sharing is sound because such a const cell and its origin are never
+written while both are live: a `Let` body is pure; a by-value parameter's
+origin belongs to a suspended caller and (aliasing hypothesis) is not
+reachable through the callee's `ref` parameters; a read-only base is never
+written. The invariant that the simulation maintains is therefore
+`writable_unshared root W n`: every cell in `W` (the set of locations
+writable from the current frame: its mutable cells and its `ref` targets)
+is its own root and no other cell has it as root, which every statement
+form preserves and every call establishes for the callee. Nothing is
+proved about `writable_unshared` in this stage.
 
 A by-value *scalar* parameter is a genuine copy (C passes it by value) and
 needs no exception.
@@ -930,31 +1243,69 @@ pointers it was given and may allocate and free heap blocks; this is what
 in this style (a `print_*` model appends to a world that is a list of
 printed values); supplying a model is a few lines per function.
 
-### 6.2 The hypothesis of the final theorem (sketch)
+### 6.2 The hypothesis of the final theorem: `extern_rep`
 
-Stage 4 will state, for an extern `f` with Core implementation
-`E :: 'w ExternFunc` and MiniC model `M :: 'w MExtern`, a relation
-`extern_rep env enc hmap finfo E M` of roughly this form:
+Defined in `codegen/StateRep.thy`, for an extern `f` with Core
+implementation `E :: 'w ExternFunc`, MiniC model `M :: 'w MExtern` and
+`FunInfo` `info`:
 
-> For every world `w`, type instantiation `tys` of `f`'s type parameters,
-> Core argument values `vs` with the instantiated parameter types, memory
-> `mem` and MiniC argument values `as` such that `as` represent `vs`
-> (scalars by value; aggregates and `ref`s as pointers to regions of `mem`
-> whose bytes represent the values by `rep_val`; the size arguments equal
-> `|tys|`; the return-buffer pointer, if any, points to a writable region of
-> `|rty|` bytes), with all these regions pairwise disjoint:
-> if `E w vs = (w', refUpdates, ret)` then `M w mem as = Some (w', mem', r)`
-> where
->   - `mem'` agrees with `mem` on every byte outside the `ref` regions, the
->     return region and the heap blocks owned by the descriptors among the
->     arguments (frame condition), and does not free any other block;
->   - the `ref` regions in `mem'` represent `refUpdates` and the return
->     region (or `r`) represents `ret`, using `hmap` for extern handles (so
->     `hmap` is a fixed injection, shared by all externs: a handle Core
->     creates corresponds to one MiniC pointer, and only handle 0 is null);
->   - every heap block referenced by a represented array in `mem'` is live,
->     of the right size, and owned by exactly one descriptor among the
->     results.
+> `extern_rep env enc hmap info E M`: for every world `w`, instantiation
+> `tys` of `f`'s type parameters, Core argument values `vs` of the
+> instantiated parameter types (`inst_param_types`, `value_has_type`),
+> memory `mem` and MiniC argument list `as` such that `args_rep` holds
+> (`as` is the return-buffer pointer if the return type is a non-unit
+> aggregate, then `|tys|` as `uint64_t`s, then the arguments: a scalar
+> by-value argument is its `scalar_val`, an aggregate by-value or `ref`
+> argument is a pointer to a region holding its bytes by `rep_val`
+> (`arg_rep`); the return buffer, if any, is a readable region of `|rty|`
+> bytes; all these regions are pairwise disjoint, `pairwise_disjoint`):
+> if `E w vs = (w', refUpds, ret)` then `M w mem as = Some (w', mem', r)`
+> for some `mem'` and `r` such that
+>   - `mem_agrees_outside mem mem' R X`: every block live in `mem` and not
+>     in `X` (the heap blocks reachable from the `ref` arguments, which the
+>     extern may free or reallocate) is live in `mem'` with the same length
+>     and the same bytes outside the regions `R` (the `ref` regions and the
+>     return region); new blocks may appear;
+>   - `results_rep`: the `ref` regions in `mem'` represent `refUpds` (one
+>     per `Ref` parameter, in parameter order, `ref_args`), each update owns
+>     its blocks (`val_owned`) and reaches only blocks that were not live in
+>     `mem` (allocations) or that the argument reached before; the result is
+>     represented in the return buffer (`r = None`), or `r` is its
+>     `scalar_val`, or (unit type) `r = None` and `ret = {}`; `hmap` gives
+>     the pointers of extern handles throughout (so it is a fixed injection
+>     shared by all externs).
+
+`pairwise_disjoint` is stronger than what the aliasing check of section
+3.4 provides: the check only separates each `ref` argument from the other
+arguments, and lets by-value arguments share bytes with each other and
+with the caller's locals (`f(x, x)`, or `f(cast<T[n]>(a), a[0])` with `a`
+allocatable, are fine in Core and pass the check), while `arg_region`
+puts every by-value aggregate argument into the pairwise-disjoint list.
+Since the generated call site passes the *place* of a by-value aggregate
+argument (no copy, section 3.4), `f(x, x)` to an extern builds an `as` on
+which `args_rep` is false, and the contract gives nothing. For a
+Core-to-Core call the per-frame invariant of stage 6 assumes only what
+the check gives, "each `ref` region is disjoint from every other argument
+region and from the return buffer"; `args_rep` should be weakened to the
+same condition (an extern cannot write a by-value argument, so a model
+never needs more), or else the generator must copy by-value aggregate
+arguments at extern call sites. Risk 17 of section 9.
+
+`results_rep` is, conversely, too weak for a `ref` parameter of
+incomplete array type. For `ext(ref x: T[])` called with a `T[*]` cell the
+`ref` region is the cell's own descriptor (the cast keeps the location,
+section 4), and Core writes the extern's new value back through the cast
+(`apply_ref_updates`), keeping the sizes. `results_rep` only asks that the
+region represent that value, own its blocks and reach nothing but fresh or
+previously reached blocks, so a model could leave a descriptor pointing at
+a fresh block or at an interior offset of the old data block, and the
+`T[*]` cell would no longer own a block it can free: this is the whole
+write through an ownership-dropping cast that `path_casts_ok` excludes,
+and the only one executable Core can perform (risk 15). The clause to add
+is that for a `ref` parameter whose type has `CoreDim_Unknown` dimensions
+the bytes of the `ref` region are the same in `mem'` as in `mem`; the
+extern may change only the contents of the data block. Risk 18 of
+section 9.
 
 Because the Core `ExternFunc` is total and deterministic in `(w, vs)`,
 whether an allocation succeeds is decided by `w`: `E` returns `false` (and
@@ -969,6 +1320,16 @@ Externs are called in Core with the caller's `ref` lvalues resolved and
 their updates written back by `apply_ref_updates`; on the MiniC side the
 extern writes through the pointers directly. The regions are disjoint by
 the aliasing hypothesis, so the two agree.
+
+*Sanity check.* `print_i32_extern_rep`: the model `print_int_model` of
+`MiniCExample.thy` satisfies `extern_rep` against the Core function
+`print_i32_core` (one by-value `i32`, unit result, the world extended by
+the printed line) with the obvious `FunInfo`. `alloc_array`'s model was not
+attempted in this stage: its proof needs `mem_alloc`'s fresh block, the
+descriptor stores through `mem_store`, and the zero-filled block as the
+representation of `default_value` elements (`default_value_rep_zero`),
+i.e. a page of memory-model lemmas that stage 6 will need anyway; nothing
+in the definition is known to be in its way (risk 7).
 
 
 ## 7. The example (`MiniCExample.thy`)
@@ -1024,18 +1385,20 @@ printed, compiled and run.
 ## 8. The two target theorems
 
 Written out as they are expected to be stated in stage 5 (typing) and stage
-6 (simulation). Names of not-yet-existing definitions: `codegen_module`
-(stage 5), `state_rep`, `rep_val`,
-`extern_rep`, `hmap` (stage 4), `datatypes_acyclic` (stage 4: every
-datatype is non-recursive) and `core_module_sizeable` (stage 4: the static
-size bound of section 3.2, which includes acyclicity of the call graph,
-together with the facts that every closed type of the program has a byte
-size below `2^64` and that the variant tag sizes are as in section 2.3).
-The aliasing condition is written as a `RuntimeError` of the proposed Core
-check (section 3.4), so it is covered by "normal result". The name checks
-of section 3.9 are inside `codegen_module` (it returns `None` when one
-fails) and `extern_clashes` runs on its output in the driver, so neither
-appears as a hypothesis.
+6 (simulation). `codegen_module` and `state_rep` (the per-frame part on top
+of `state_rep_store`) do not exist yet; `rep_val`, `extern_rep`, `hmap`
+(section 4, 6.2), `datatypes_acyclic` (every datatype is non-recursive) and
+`core_module_sizeable P m` (the static size bound of section 3.2 at pointer
+size `P`, which includes acyclicity of the call graph and of the datatypes,
+the tag-size bound, and the facts that every closed type of the program and
+every type of a body has a byte size below `2^64` at the bounds) are stage
+4's; `sizeable_check` in `run_compiler` establishes
+`core_module_sizeable codegen_ptr_size_bound m`, and `enc_ptr_size enc ≤ P`
+is the hypothesis that connects it to the encoding. The aliasing condition
+is written as a `RuntimeError` of the Core check (section 3.4), so it is
+covered by "normal result". The name checks of section 3.9 are inside
+`codegen_module` (it returns `None` when one fails) and `extern_clashes`
+runs on its output in the driver, so neither appears as a hypothesis.
 
     theorem codegen_well_typed:
       assumes "core_module_well_typed m"
@@ -1043,8 +1406,7 @@ appears as a hypothesis.
           and "core_module_ghost_free m"
           and "core_module_flat m"
           and "CM_TypeSubst m = fmempty"            (* normalized *)
-          and "datatypes_acyclic (CM_TyEnv m)"
-          and "core_module_sizeable m"
+          and "core_module_sizeable P m"            (* implies datatypes_acyclic (CM_TyEnv m) *)
           and "fmlookup (CM_Functions m) mainName = Some mainFn"
           and "fmlookup (TE_Functions (CM_TyEnv m)) mainName = Some mainInfo"
           and "FI_TyArgs mainInfo = []" and "FI_TmArgs mainInfo = []"
@@ -1056,7 +1418,7 @@ appears as a hypothesis.
       fixes w :: 'w and coreExterns :: "(string, 'w ExternFunc) fmap"
         and minicExterns :: "(string, 'w MExtern) fmap" and enc :: MEncoding
       assumes (the hypotheses of codegen_well_typed)
-          and "valid_encoding enc"
+          and "valid_encoding enc" and "enc_ptr_size enc ≤ P"
           and "hmap 0 = MP_Null" and "inj hmap"
           and "∀f info E. fmlookup (TE_Functions (CM_TyEnv m)) f = Some info
                  ∧ fmlookup coreExterns f = Some E
@@ -1083,23 +1445,33 @@ result. Non-termination, `TypeError`, `RuntimeError` and
 ## 9. Risks for stages 4 to 6 and how the design mitigates them
 
 1. **Aliasing between call arguments** (section 3.4). Core and C disagree on
-   aliased `ref`/value arguments. Mitigation: the proposed Core runtime
-   check, so the condition becomes part of "normal result". Without it the
-   theorem needs a hypothesis over the run, which cannot be stated with the
-   existing interpreter.
+   aliased `ref`/value arguments. Mitigation: the Core runtime check, so
+   the condition becomes part of "normal result". Status: implemented in
+   stage 4 (`call_args_alias` in `interp_function_call`), with every
+   dependent proof repaired. Discharged, with one new fact learned: the
+   check is sensitive to which arguments are lvalues, so a Core-to-Core
+   pass must not turn a non-lvalue argument into an lvalue; the match
+   compiler did, for a single-leaf match term, and was changed (section
+   3.4). Any future pass (and stage 5's own treatment of by-value
+   aggregate arguments, which passes the place of an lvalue argument
+   without a copy) must keep this property.
 2. **Size overflow in generic code** (section 3.2). The `uint64_t` size
    arithmetic of a generic function could wrap for an instantiation at a
    huge type. Mitigation: the static bound `core_module_sizeable`, checked
-   by an executable function over the module and made sound by the stage 4
-   lemma that every instantiation a Core run performs respects the bounds.
-   That lemma is new Core-side work, but it has one interesting case (the
-   call) and needs no instrumentation of the interpreter.
+   by an executable function over the module (`SizeBound.thy`); its static
+   soundness (the bounds are consistent along every call site, every type
+   fits at the bounds) is proved; the dynamic part, that every
+   instantiation a Core run performs respects the bounds, is one case (the
+   call) of stage 6's invariant (section 3.2). Reduced to that case.
 3. **Sharing between const cells and their origins** (sections 3.5, 4). The
    representation relation cannot be a plain injection from cells to
-   regions. Mitigation: the "writable locations are unshared" invariant,
-   stated above; the alternative (copy by-value aggregates and `Let` values
-   into fresh regions) removes region sharing but not heap-block sharing,
-   so it would not simplify the invariant and would cost a copy per call.
+   regions. Mitigation: `store_owned` takes a root map (cells with the same
+   root may share, others are disjoint in regions and heap blocks) and
+   `writable_unshared` states the invariant (`StateRep.thy`); the
+   alternative (copy by-value aggregates and `Let` values into fresh
+   regions) removes region sharing but not heap-block sharing, so it would
+   not simplify the invariant and would cost a copy per call. Defined, not
+   yet used.
 4. **Undefined payload bytes of variants.** A model that made every read of
    an undefined byte UB would break at the first variant copy. Mitigation:
    `MB_Undef` is copyable; only decoding is UB; the relation's `junk`.
@@ -1111,7 +1483,9 @@ result. Non-termination, `TypeError`, `RuntimeError` and
 5. **Lazy references** (section 3.5). The generator's environment, not
    MiniC, carries them; the proof must relate a Core `(addr, path)` to a
    recomputed address. Mitigation: freeze indices as Core does; the path
-   resolution lemma is the same one `Assign` needs.
+   resolution lemmas (`path_loc_sound_conj`, `path_update_sound`, section
+   4) are proved, in-place and through descriptors, for reads and updates.
+   Discharged as far as stage 4 can.
 6. **Fuel.** Core and MiniC fuel are unrelated. Mitigation: the theorem is
    existential in MiniC fuel; `MiniCFuelMono.thy` gives monotonicity, and
    the simulation lemmas are stated as "for some fuel", combined with
@@ -1124,23 +1498,27 @@ result. Non-termination, `TypeError`, `RuntimeError` and
    representation of the results; the comparison of section 11.4 against
    the real `Array.c`/`Test.c` is the sanity check (both allocation
    conventions, `Test.c`'s `void` one and `Array.c`'s `bool` one, run
-   correctly against the models of `MiniCExample.thy`).
+   correctly against the models of `MiniCExample.thy`). `extern_rep` is
+   defined and `print_i32`'s model satisfies it; `alloc_array`'s model is
+   not yet shown to (section 6.2), so the risk is reduced, not discharged.
 8. **Integer promotion and `int` width.** Mitigation: MiniC arithmetic is
    mathematical with a fits check, Core guarantees the fit, and the only
    promotion-sensitive operations (shifts) go through the helpers of
    section 5.3 under A2/A5.
 9. **Default values are all-zero bytes.** The `Default` lowering relies on
    it. Mitigation: `valid_encoding` has the zero law, `encode_ptr` null is
-   zero bytes, and stage 4 proves `default_value_rep_zero` by induction over
-   the type (fuelled as `default_value` is).
+   zero bytes, and `default_value_rep_zero` (`RepValDefault.thy`) is
+   proved by induction over the fuel. Discharged (under the hypotheses
+   listed in section 4, all of which stage 6 has).
 10. **Datatype and call-graph acyclicity / sizes.** `size` of a recursive
     datatype would not terminate, and the size bound of section 3.2 needs
     a topological order of the functions. Mitigation: `datatypes_acyclic`
     hypothesis, and the `core_module_sizeable` checker computes the
-    function order itself and fails on a cycle. The elaborator already
-    rejects recursive functions (`check_sccs`) and should reject recursive
-    datatypes too (to be confirmed in stage 4); either way the pipeline
-    runs the checks, so no elaborator proof is needed.
+    function order itself and fails on a cycle. The elaborator rejects
+    recursive functions and recursive datatypes (`check_sccs` covers
+    datatype declarations through `bab_declaration_names`;
+    `test/cases/typechecker/Datatype.b`); the pipeline runs the checks
+    anyway (section 3.9), so no elaborator proof is needed. Discharged.
 11. **The printer** is unverified; precedence, integer literal syntax
     (`INT64_MIN`), integer promotion, the shift helpers and the aliasing
     obligation P1 of section 5.2 are all places for silent errors (the
@@ -1170,17 +1548,94 @@ result. Non-termination, `TypeError`, `RuntimeError` and
     so an extern cannot "return the same handle as a different pointer".
     Mitigation: `hmap` is a parameter of the theorem, shared by all
     `extern_rep` instances.
+15. **Whole-array assignment through an ownership-dropping cast** (new,
+    stage 4; section 4; resolved for Babylon code, open for externs). A
+    `ref r: T[]` bound to a cast of a `T[*]` cell keeps the cell's location
+    (same-category cast); `r = x` with `x` a `T[]` value would make Core
+    copy `x`'s elements into the `T[*]` cell while C copies `x`'s
+    descriptor, so the cell would no longer own its data.
+    `path_update_sound` excludes exactly this case (`path_casts_ok`).
+    *Resolution.* Core cannot express the write in executable code: a
+    non-ghost `CoreStmt_Assign`, `AssignCall` or `Swap` requires the
+    lvalue's type to be complete (`core_statement_type`,
+    `is_complete_type`: no `CoreDim_Unknown`), and the lvalue at an
+    ownership-dropping cast (`T[*]` to `T[]`, the only such cast under
+    `dim_cast_ok`) has type `T[]`. Any further step either indexes into
+    the elements (an update in the heap data, which `path_casts_ok`
+    admits) or is a `T[]`-to-`T[n]` cast, which changes category and so
+    is the descriptor-to-fixed case of section 3.3, not this one. Ghost
+    code may assign at `T[]` (the interpreter then keeps the runtime
+    sizes, `update_value_at_path`), but ghost code is erased before
+    generation. The elaborator cannot produce the case either: it puts an
+    array cast in lvalue position only as the `ref` argument of an impure
+    call (`apply_call_coercions`, `check_ref_args`); `BabTm_Cast` admits
+    numeric targets only, a `ref` declaration takes no coercion, and
+    `elab_assign_pure`, `elab_assign_impure` and `elab_swap` reject an
+    incomplete lhs in executable code, as does the C compiler. *What
+    remains.* The write-back of a `ref` parameter after an extern call
+    (`apply_ref_updates`) is a whole write through the cast in executable
+    Core, so `results_rep` must say that an extern leaves the descriptor
+    of a `T[]` `ref` unchanged (section 6.2, risk 18).
+16. **Pipeline order** (found in stage 4, section 10). Ghost erasure must
+    run on the normalized module: a datatype whose payload is an abstract
+    type realized by a runtime type is ghost until the substitution is
+    applied, and erasing first deleted it. Fixed in `run_compiler`; the
+    size checker found it because it types every erased body.
+17. **Extern argument disjointness** (found in stage 4, section 6.2). The
+    extern premise `args_rep` requires all pointer argument regions to be
+    pairwise disjoint, by-value aggregates included, but the aliasing check
+    only separates `ref` arguments from the others, and the call site
+    passes the place of a by-value aggregate without copying. An extern
+    call `f(x, x)` therefore satisfies Core but not `args_rep`. Fix in
+    stage 6: weaken `pairwise_disjoint` in `args_rep` to "each `ref`
+    region and the return region are disjoint from every other region"
+    (`mem_agrees_outside` and `results_rep` only ever mention those), so
+    that the premise is exactly what the aliasing check guarantees.
+18. **Extern write-back through an ownership-dropping cast** (found in
+    stage 4 while resolving risk 15; section 6.2). For `ext(ref x: T[])`
+    called with a `T[*]` cell, Core writes the extern's new value for `x`
+    back through a path ending in the cast (`apply_ref_updates`, sizes
+    preserved by `update_value_at_path`), and MiniC passes the cell's own
+    descriptor as the `ref` region. `results_rep` lets the model put any
+    descriptor there that represents the new value and reaches only
+    fresh or previously reached blocks, e.g. a fresh block or an interior
+    offset of the old one; the `T[*]` cell would then no longer own a
+    freeable block, which is the case `path_casts_ok` excludes. Fix in
+    stage 6: add to `results_rep` that for a `ref` parameter whose type
+    has `CoreDim_Unknown` dimensions the bytes of the `ref` region are
+    unchanged (the extern writes elements, not the descriptor). A C extern
+    cannot do otherwise anyway, since it does not know whether the
+    descriptor it was handed is resizable.
 
 
-## 10. Proposals for changes outside this directory (for stage 4 or 5)
+## 10. Proposals for changes outside this directory, and deferred items
 
-- `CoreInterp`: the argument aliasing check (section 3.4).
-- `elab_program`/driver: return the extern C-name map (section 3.9).
-- `CodeExport`/the driver: run the `core_module_sizeable` checker of
-  section 3.2 (and `datatypes_acyclic`, if it is not a consequence of
-  elaboration) on the module before code generation. The size bound is a
-  property of the program's instantiations, not of elaboration, so it has
-  to be checked; it cannot fail on realistic programs.
+Implemented in stage 4: the argument aliasing check in `CoreInterp`
+(section 3.4), with the match compiler's single-leaf term matches wrapped
+in a one-arm match so that the pass keeps non-lvalues non-lvalues (section
+3.4); the `core_module_sizeable`/`datatypes_acyclic`
+checks run in `run_compiler` (`CodeExport.thy`, after match compilation,
+with user-level messages), and the pipeline now normalizes the linked
+module (`normalize_module`) *before* ghost erasure: erasing first deleted
+every datatype whose payload is an abstract type realized by a runtime type
+(such a datatype counts as ghost until the substitution is applied), which
+broke six test programs once the size checker typed the erased bodies; the
+erasure and match-compilation theorems assume a normalized module anyway.
+
+Still proposed / deferred:
+
+- `elab_program`/driver: return the extern C-name map (section 3.9), stage 5.
+- Proving that elaboration output has acyclic datatypes (`check_sccs` in
+  `ElabModule.thy` rejects recursive datatypes) would let the theorems be
+  stated without the `datatypes_acyclic` check; deferred, the check stays in
+  the pipeline by the principle of section 3.9.
+- The dynamic size bound ("`IS_TyArgs` of the running function is bounded by
+  `B_f` in every state of a run") is part of stage 6's invariant (section
+  3.2); it is not a separate lemma because `InterpState` has no notion of
+  the current function.
+- `val_owned` preservation (the ownership tree is maintained by updates
+  whose new value's blocks are fresh) is stated only as a definition
+  (section 4); stage 6 proves what it needs of it.
 - If stage 5 wants to run generated MiniC programs in the Haskell driver
   (as an oracle next to the C output), the interpreter needs code equations
   without `Suc` on the left-hand side: `CodeExport.thy` uses
@@ -1190,6 +1645,8 @@ result. Non-termination, `TypeError`, `RuntimeError` and
   `exec_stmt fuel ctx st s = (if fuel = 0 then Inl MErr_Fuel else ...)`,
   proved by `cases fuel`, would do it; nothing in stage 3b needs it, so the
   driver exports the documented expected output instead (section 11.4).
+  (`type_size`'s `tsz` is fuelled too, but its fuel equations are already
+  of the `if fuel = 0` form.)
 
 
 ## 11. The printer and the C-level validation (stage 3b)
