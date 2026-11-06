@@ -969,10 +969,9 @@ ownership).
 
 *Reachable blocks and the frame lemma.* `reach_blocks env enc mem ty v bs`
 is the set of heap blocks the representation refers to: the block a
-descriptor's pointer points into (for an empty descriptor, the block its
-non-null pointer is valid in, since `free_array` needs it live), and
-recursively the blocks of the elements, fields and payload. It is computed
-from the bytes, because the pointers are in the bytes, not in the Core
+descriptor's pointer points into, and recursively the blocks of the
+elements, fields and payload. It is computed from the bytes,
+because the pointers are in the bytes, not in the Core
 value. `rep_val_frame`: if `mem'` agrees with `mem` on `reach_blocks`
 (`blocks_agree`: same `fmlookup` in `MM_Blocks`), `rep_val` transfers to
 `mem'`; `rep_val_frame_write` is the instance for a write to an unreachable
@@ -1028,9 +1027,12 @@ other component's blocks untouched. `path_casts_ok` excludes one case: an
 ownership-dropping cast (`T[*]` to `T[]`) followed by an in-place update of
 the whole cast array (the new `T[]` value does not promise to own its
 data, so the `T[*]` cell could not); an update that goes on into the heap
-data through such a cast is fine. Whether Babylon admits a whole-array
-assignment through such a cast is an open question for stage 6 (section
-9, risk 15).
+data through such a cast is fine. No Core statement reaches the excluded
+case: a non-ghost `Assign`, `AssignCall` or `Swap` must be at a complete
+type, and the lvalue at such a cast has type `T[]` (section 9, risk 15).
+The one whole write that does go through it is the write-back of a `ref`
+parameter after an extern call, which `results_rep` must pin down
+(section 6.2).
 
 *Default values* (`RepValDefault.thy`): `default_value_rep_zero`: if
 `default_value fuel st ty = Inr v` with the interpreter's tables equal to
@@ -1289,6 +1291,22 @@ same condition (an extern cannot write a by-value argument, so a model
 never needs more), or else the generator must copy by-value aggregate
 arguments at extern call sites. Risk 17 of section 9.
 
+`results_rep` is, conversely, too weak for a `ref` parameter of
+incomplete array type. For `ext(ref x: T[])` called with a `T[*]` cell the
+`ref` region is the cell's own descriptor (the cast keeps the location,
+section 4), and Core writes the extern's new value back through the cast
+(`apply_ref_updates`), keeping the sizes. `results_rep` only asks that the
+region represent that value, own its blocks and reach nothing but fresh or
+previously reached blocks, so a model could leave a descriptor pointing at
+a fresh block or at an interior offset of the old data block, and the
+`T[*]` cell would no longer own a block it can free: this is the whole
+write through an ownership-dropping cast that `path_casts_ok` excludes,
+and the only one executable Core can perform (risk 15). The clause to add
+is that for a `ref` parameter whose type has `CoreDim_Unknown` dimensions
+the bytes of the `ref` region are the same in `mem'` as in `mem`; the
+extern may change only the contents of the data block. Risk 18 of
+section 9.
+
 Because the Core `ExternFunc` is total and deterministic in `(w, vs)`,
 whether an allocation succeeds is decided by `w`: `E` returns `false` (and
 unchanged refs) in exactly the worlds where the allocation "fails", and the
@@ -1531,15 +1549,33 @@ result. Non-termination, `TypeError`, `RuntimeError` and
     Mitigation: `hmap` is a parameter of the theorem, shared by all
     `extern_rep` instances.
 15. **Whole-array assignment through an ownership-dropping cast** (new,
-    stage 4; section 4). A `ref r: T[]` bound to a cast of a `T[*]` cell
-    keeps the cell's location (same-category cast); `r = x` with `x` a
-    `T[]` value would make Core copy `x`'s elements into the `T[*]` cell
-    while C copies `x`'s descriptor, so the cell would no longer own its
-    data. `path_update_sound` excludes exactly this case
-    (`path_casts_ok`). Whether Babylon's typechecker or verifier admits
-    such an assignment (incomplete array types are not usually assignable)
-    is to be settled in stage 6; if it does, the generator must copy the
-    elements instead of the descriptor for it.
+    stage 4; section 4; resolved for Babylon code, open for externs). A
+    `ref r: T[]` bound to a cast of a `T[*]` cell keeps the cell's location
+    (same-category cast); `r = x` with `x` a `T[]` value would make Core
+    copy `x`'s elements into the `T[*]` cell while C copies `x`'s
+    descriptor, so the cell would no longer own its data.
+    `path_update_sound` excludes exactly this case (`path_casts_ok`).
+    *Resolution.* Core cannot express the write in executable code: a
+    non-ghost `CoreStmt_Assign`, `AssignCall` or `Swap` requires the
+    lvalue's type to be complete (`core_statement_type`,
+    `is_complete_type`: no `CoreDim_Unknown`), and the lvalue at an
+    ownership-dropping cast (`T[*]` to `T[]`, the only such cast under
+    `dim_cast_ok`) has type `T[]`. Any further step either indexes into
+    the elements (an update in the heap data, which `path_casts_ok`
+    admits) or is a `T[]`-to-`T[n]` cast, which changes category and so
+    is the descriptor-to-fixed case of section 3.3, not this one. Ghost
+    code may assign at `T[]` (the interpreter then keeps the runtime
+    sizes, `update_value_at_path`), but ghost code is erased before
+    generation. The elaborator cannot produce the case either: it puts an
+    array cast in lvalue position only as the `ref` argument of an impure
+    call (`apply_call_coercions`, `check_ref_args`); `BabTm_Cast` admits
+    numeric targets only, a `ref` declaration takes no coercion, and
+    `elab_assign_pure`, `elab_assign_impure` and `elab_swap` reject an
+    incomplete lhs in executable code, as does the C compiler. *What
+    remains.* The write-back of a `ref` parameter after an extern call
+    (`apply_ref_updates`) is a whole write through the cast in executable
+    Core, so `results_rep` must say that an extern leaves the descriptor
+    of a `T[]` `ref` unchanged (section 6.2, risk 18).
 16. **Pipeline order** (found in stage 4, section 10). Ghost erasure must
     run on the normalized module: a datatype whose payload is an abstract
     type realized by a runtime type is ghost until the substitution is
@@ -1555,6 +1591,21 @@ result. Non-termination, `TypeError`, `RuntimeError` and
     region and the return region are disjoint from every other region"
     (`mem_agrees_outside` and `results_rep` only ever mention those), so
     that the premise is exactly what the aliasing check guarantees.
+18. **Extern write-back through an ownership-dropping cast** (found in
+    stage 4 while resolving risk 15; section 6.2). For `ext(ref x: T[])`
+    called with a `T[*]` cell, Core writes the extern's new value for `x`
+    back through a path ending in the cast (`apply_ref_updates`, sizes
+    preserved by `update_value_at_path`), and MiniC passes the cell's own
+    descriptor as the `ref` region. `results_rep` lets the model put any
+    descriptor there that represents the new value and reaches only
+    fresh or previously reached blocks, e.g. a fresh block or an interior
+    offset of the old one; the `T[*]` cell would then no longer own a
+    freeable block, which is the case `path_casts_ok` excludes. Fix in
+    stage 6: add to `results_rep` that for a `ref` parameter whose type
+    has `CoreDim_Unknown` dimensions the bytes of the `ref` region are
+    unchanged (the extern writes elements, not the descriptor). A C extern
+    cannot do otherwise anyway, since it does not know whether the
+    descriptor it was handed is resizable.
 
 
 ## 10. Proposals for changes outside this directory, and deferred items
