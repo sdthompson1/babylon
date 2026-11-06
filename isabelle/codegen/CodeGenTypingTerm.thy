@@ -1810,4 +1810,429 @@ proof (intro allI impI)
   show "\<exists>E' ds'. lowered_ok prog rt (E, ds) st S st' (E', ds') \<and> res_ok E' info res" using lo ro2 by blast
 qed
 
+
+section \<open>Addresses\<close>
+
+(* The address of a term whose address lowering is its value lowering
+   (an aggregate: its value is already a place). *)
+lemma la_from_lt:
+  assumes "lt_ok prog rt cg tm" and "lower_addr cg tm = lower_term cg tm"
+    and "\<And>ty. core_term_type (CG_TyEnv cg) NotGhost tm = Some ty \<Longrightarrow> scalar_ty ty = None"
+  shows "la_ok prog rt cg tm"
+  unfolding la_ok_def
+proof (intro allI impI)
+  fix E ds st S a st'
+  assume l: "lower_addr cg tm st = Inr ((S, a), st')" and ok: "cg_ok prog E cg" and sc: "scope_ok prog (E, ds) st"
+    and tf: "term_fits (CG_TyEnv cg) tm"
+  obtain E' ds' ty where "core_term_type (CG_TyEnv cg) NotGhost tm = Some ty"
+    and "lowered_ok prog rt (E, ds) st S st' (E', ds')" and "expr_ok E' a (res_cty ty)"
+    by (rule lt_okD[OF assms(1) l[unfolded assms(2)] ok sc tf])
+  then show "\<exists>E' ds'. lowered_ok prog rt (E, ds) st S st' (E', ds') \<and> expr_ok E' a CTy_CharPtr"
+    using assms(3) by (auto simp: res_cty_def)
+qed
+
+(* The address of a scalar value: the value in a temporary. *)
+lemma la_temp:
+  assumes lt: "lt_ok prog rt cg tm"
+    and l: "cg_bind (lower_term cg tm)
+              (\<lambda>(S, e). cg_bind (temp_for cg ''tmp'' ty) (\<lambda>(tmp, decl). cg_return (S @ [decl, MS_Assign tmp e], ME_AddrOf tmp))) st
+            = Inr ((S, a), st')"
+    and ok: "cg_ok prog E cg" and sc: "scope_ok prog (E, ds) st" and tf: "term_fits (CG_TyEnv cg) tm"
+    and tyt: "core_term_type (CG_TyEnv cg) NotGhost tm = Some ty" and sty: "scalar_ty ty = Some cty"
+  shows "\<exists>E' ds'. lowered_ok prog rt (E, ds) st S st' (E', ds') \<and> expr_ok E' a CTy_CharPtr"
+proof -
+  from l obtain r1 st1 where l1': "lower_term cg tm st = Inr (r1, st1)"
+    and k1: "(\<lambda>(S, e). cg_bind (temp_for cg ''tmp'' ty) (\<lambda>(tmp, decl). cg_return (S @ [decl, MS_Assign tmp e], ME_AddrOf tmp))) r1 st1
+             = Inr ((S, a), st')"
+    by (rule cg_bind_InrE)
+  obtain S1 e1 where r1: "r1 = (S1, e1)" by (cases r1)
+  have l1: "lower_term cg tm st = Inr ((S1, e1), st1)" using l1' r1 by simp
+  obtain E1 ds1 ty1 where ty1: "core_term_type (CG_TyEnv cg) NotGhost tm = Some ty1"
+    and lo1: "lowered_ok prog rt (E, ds) st S1 st1 (E1, ds1)" and e1: "expr_ok E1 e1 (res_cty ty1)"
+    by (rule lt_okD[OF lt l1 ok sc tf])
+  have ty1: "ty1 = ty" using ty1 tyt by simp
+  from k1[unfolded r1 case_prod_conv] obtain r2 st2 where tfr': "temp_for cg ''tmp'' ty st1 = Inr (r2, st2)"
+    and k2: "(\<lambda>(tmp, decl). cg_return (S1 @ [decl, MS_Assign tmp e1], ME_AddrOf tmp)) r2 st2 = Inr ((S, a), st')"
+    by (rule cg_bind_InrE)
+  obtain tmp decl where r2: "r2 = (tmp, decl)" by (cases r2)
+  have tfr: "temp_for cg ''tmp'' ty st1 = Inr ((tmp, decl), st2)" using tfr' r2 by simp
+  from k2 have S: "S = S1 @ [decl, MS_Assign tmp e1]" and a: "a = ME_AddrOf tmp" and st': "st' = st2"
+    unfolding r2 by (auto simp: cg_return_def)
+  show ?thesis unfolding S a st'
+    by (rule materialise_ok[OF lo1 e1[unfolded ty1] sty tfr cg_ok_mono[OF lowered_ok_env_le'[OF lo1] ok]
+                              term_type_wk(1)[OF ok tyt] term_fits_ty[OF tf tyt]])
+qed
+
+(* The address of a value of any type: in a temporary if scalar, else the
+   value itself (a place). *)
+lemma la_value:
+  assumes lt: "lt_ok prog rt cg tm"
+    and l: "cg_bind (lower_term cg tm)
+              (\<lambda>(S, e). if is_scalar ty
+                 then cg_bind (temp_for cg ''tmp'' ty) (\<lambda>(tmp, decl). cg_return (S @ [decl, MS_Assign tmp e], ME_AddrOf tmp))
+                 else cg_return (S, e)) st = Inr ((S, a), st')"
+    and ok: "cg_ok prog E cg" and sc: "scope_ok prog (E, ds) st" and tf: "term_fits (CG_TyEnv cg) tm"
+    and tyt: "core_term_type (CG_TyEnv cg) NotGhost tm = Some ty"
+  shows "\<exists>E' ds'. lowered_ok prog rt (E, ds) st S st' (E', ds') \<and> expr_ok E' a CTy_CharPtr"
+proof (cases "scalar_ty ty")
+  case (Some cty)
+  have l': "cg_bind (lower_term cg tm)
+              (\<lambda>(S, e). cg_bind (temp_for cg ''tmp'' ty) (\<lambda>(tmp, decl). cg_return (S @ [decl, MS_Assign tmp e], ME_AddrOf tmp))) st
+            = Inr ((S, a), st')"
+    using l Some by simp
+  show ?thesis by (rule la_temp[OF lt l' ok sc tf tyt Some])
+next
+  case None
+  have l': "cg_bind (lower_term cg tm) (\<lambda>(S, e). cg_return (S, e)) st = Inr ((S, a), st')" using l None by simp
+  then have l1: "lower_term cg tm st = Inr ((S, a), st')"
+    by (auto simp: cg_return_def split_beta elim!: cg_bind_InrE)
+  obtain E1 ds1 ty1 where ty1: "core_term_type (CG_TyEnv cg) NotGhost tm = Some ty1"
+    and lo1: "lowered_ok prog rt (E, ds) st S st' (E1, ds1)" and e1: "expr_ok E1 a (res_cty ty1)"
+    by (rule lt_okD[OF lt l1 ok sc tf])
+  have "ty1 = ty" using ty1 tyt by simp
+  then show ?thesis using lo1 e1 None by (auto simp: res_cty_def)
+qed
+
+lemma la_Var: "la_ok prog rt cg (CoreTm_Var x)"
+  unfolding la_ok_def
+proof (intro allI impI)
+  fix E ds st S a st'
+  assume l: "lower_addr cg (CoreTm_Var x) st = Inr ((S, a), st')" and ok: "cg_ok prog E cg" and sc: "scope_ok prog (E, ds) st"
+  from l obtain rep where rep: "fmlookup (CG_Vars cg) x = Some rep" and ar: "addr_rep cg rep st = Inr ((S, a), st')"
+    by (auto simp: lower_addr.simps lookup_var_Inr elim!: cg_bind_InrE)
+  obtain ty where "tyenv_lookup_var (CG_TyEnv cg) x = Some ty" "rep_ok E (CG_TyEnv cg) ty rep" using cg_ok_var[OF ok rep] by blast
+  then show "\<exists>E' ds'. lowered_ok prog rt (E, ds) st S st' (E', ds') \<and> expr_ok E' a CTy_CharPtr"
+    using addr_rep_ok[OF ar ok sc] by blast
+qed
+
+lemma la_RecordProj:
+  assumes IH: "\<And>x st st' x6. ty_of cg t st = Inr (x, st') \<Longrightarrow> x = CoreTy_Record x6 \<Longrightarrow> la_ok prog rt cg t"
+  shows "la_ok prog rt cg (CoreTm_RecordProj t f)"
+  unfolding la_ok_def
+proof (intro allI impI)
+  fix E ds st S a st'
+  assume l: "lower_addr cg (CoreTm_RecordProj t f) st = Inr ((S, a), st')" and ok: "cg_ok prog E cg"
+    and sc: "scope_ok prog (E, ds) st" and tf: "term_fits (CG_TyEnv cg) (CoreTm_RecordProj t f)"
+  from term_fits_type[OF tf] obtain ty where tyP: "core_term_type (CG_TyEnv cg) NotGhost (CoreTm_RecordProj t f) = Some ty" by blast
+  obtain fldTys where tt: "core_term_type (CG_TyEnv cg) NotGhost t = Some (CoreTy_Record fldTys)"
+    using record_proj_typed[OF tyP] by blast
+  from l tt obtain S1 p where la: "lower_addr cg t st = Inr ((S1, p), st')" and S: "S = S1"
+    and a: "a = ptr_add p (field_off (CG_TyEnv cg) fldTys f)"
+    by (auto simp: lower_addr.simps ty_of_Inr cg_return_def elim!: cg_bind_InrE)
+  obtain E1 ds1 where lo1: "lowered_ok prog rt (E, ds) st S1 st' (E1, ds1)" and p: "expr_ok E1 p CTy_CharPtr"
+    using la_okD[OF IH[OF ty_of_Some[OF tt] refl] la ok sc term_fits_RecordProj[OF tf]] by blast
+  have off: "u64_ok E1 (field_off (CG_TyEnv cg) fldTys f)"
+    using cg_field_off_ok[OF cg_ok_mono[OF lowered_ok_env_le'[OF lo1] ok] term_type_wk(1)[OF ok tt]
+                             term_fits_ty[OF term_fits_RecordProj[OF tf] tt]] .
+  show "\<exists>E' ds'. lowered_ok prog rt (E, ds) st S st' (E', ds') \<and> expr_ok E' a CTy_CharPtr"
+    unfolding S a using lo1 expr_ok_ptr_add[OF p _ off] by (intro exI conjI) (assumption | simp)+
+qed
+
+lemma la_VariantProj:
+  assumes IH: "\<And>x st st' x11 x12. ty_of cg t st = Inr (x, st') \<Longrightarrow> x = CoreTy_Datatype x11 x12 \<Longrightarrow> la_ok prog rt cg t"
+  shows "la_ok prog rt cg (CoreTm_VariantProj t c)"
+  unfolding la_ok_def
+proof (intro allI impI)
+  fix E ds st S a st'
+  assume l: "lower_addr cg (CoreTm_VariantProj t c) st = Inr ((S, a), st')" and ok: "cg_ok prog E cg"
+    and sc: "scope_ok prog (E, ds) st" and tf: "term_fits (CG_TyEnv cg) (CoreTm_VariantProj t c)"
+  from term_fits_type[OF tf] obtain ty where tyP: "core_term_type (CG_TyEnv cg) NotGhost (CoreTm_VariantProj t c) = Some ty" by blast
+  obtain dtName args tyvars payloadTy where tt: "core_term_type (CG_TyEnv cg) NotGhost t = Some (CoreTy_Datatype dtName args)"
+    using variant_proj_typed[OF tyP] by blast
+  from l tt obtain S1 p where la: "lower_addr cg t st = Inr ((S1, p), st')" and S: "S = S1"
+    and a: "a = ptr_add p (tag_off (CG_TyEnv cg) dtName)"
+    by (auto simp: lower_addr.simps ty_of_Inr cg_return_def elim!: cg_bind_InrE)
+  obtain E1 ds1 where lo1: "lowered_ok prog rt (E, ds) st S1 st' (E1, ds1)" and p: "expr_ok E1 p CTy_CharPtr"
+    using la_okD[OF IH[OF ty_of_Some[OF tt] refl] la ok sc term_fits_VariantProj[OF tf]] by blast
+  have off: "u64_ok E1 (tag_off (CG_TyEnv cg) dtName)" by (simp add: u64_ok_def)
+  show "\<exists>E' ds'. lowered_ok prog rt (E, ds) st S st' (E', ds') \<and> expr_ok E' a CTy_CharPtr"
+    unfolding S a using lo1 expr_ok_ptr_add[OF p _ off] by (intro exI conjI) (assumption | simp)+
+qed
+
+lemma la_ArrayProj:
+  assumes IHt: "\<And>x st st' x71 x72. ty_of cg t st = Inr (x, st') \<Longrightarrow> x = CoreTy_Array x71 x72 \<Longrightarrow> la_ok prog rt cg t"
+    and IHi: "\<And>x st st' x71 x72 xa sta st'a xb y xc. ty_of cg t st = Inr (x, st') \<Longrightarrow> x = CoreTy_Array x71 x72 \<Longrightarrow>
+        lower_addr cg t sta = Inr (xa, st'a) \<Longrightarrow> (xb, y) = xa \<Longrightarrow> xc \<in> set idxs \<Longrightarrow> lt_ok prog rt cg xc"
+  shows "la_ok prog rt cg (CoreTm_ArrayProj t idxs)"
+  unfolding la_ok_def
+proof (intro allI impI)
+  fix E ds st S a st'
+  assume l: "lower_addr cg (CoreTm_ArrayProj t idxs) st = Inr ((S, a), st')" and ok: "cg_ok prog E cg"
+    and sc: "scope_ok prog (E, ds) st" and tf: "term_fits (CG_TyEnv cg) (CoreTm_ArrayProj t idxs)"
+  from term_fits_type[OF tf] obtain elemTy where tyP: "core_term_type (CG_TyEnv cg) NotGhost (CoreTm_ArrayProj t idxs) = Some elemTy"
+    and fe: "fits (CG_TyEnv cg) elemTy" by blast
+  obtain dims where tt: "core_term_type (CG_TyEnv cg) NotGhost t = Some (CoreTy_Array elemTy dims)"
+    and idxty: "\<forall>i \<in> set idxs. core_term_type (CG_TyEnv cg) NotGhost i = Some (CoreTy_FiniteInt Unsigned IntBits_64)"
+    using array_proj_typed[OF tyP] by blast
+  let ?env = "CG_TyEnv cg"
+  from l tt obtain S1 p st1 rs where la: "lower_addr cg t st = Inr ((S1, p), st1)"
+    and lm: "cg_mapM (lower_term cg) idxs st1 = Inr (rs, st')"
+    and S: "S = S1 @ concat (map fst rs)" and a: "a = elem_addr ?env elemTy dims p (map snd rs)"
+    by (auto simp: lower_addr.simps ty_of_Inr cg_return_def elim!: cg_bind_InrE)
+  note tfs = term_fits_ArrayProj[OF tf]
+  obtain E1 ds1 where lo1: "lowered_ok prog rt (E, ds) st S1 st1 (E1, ds1)" and p: "expr_ok E1 p CTy_CharPtr"
+    using la_okD[OF IHt[OF ty_of_Some[OF tt] refl] la ok sc] tfs by blast
+  have ok1: "cg_ok prog E1 cg" using cg_ok_mono[OF lowered_ok_env_le'[OF lo1] ok] .
+  obtain E2 ds2 where lo2: "lowered_ok prog rt (E1, ds1) st1 (concat (map fst rs)) st' (E2, ds2)"
+    and idx: "\<forall>r \<in> set rs. u64_ok E2 (snd r)"
+    using lower_indices_ok[OF lm IHi[OF ty_of_Some[OF tt] refl la refl] ok1 lowered_ok_scope[OF lo1]] tfs idxty by blast
+  have p2: "expr_ok E2 p CTy_CharPtr" using expr_ok_mono[OF lowered_ok_env_le'[OF lo2] p] .
+  have addr: "expr_ok E2 (elem_addr ?env elemTy dims p (map snd rs)) CTy_CharPtr"
+    using cg_elem_addr_ok[OF cg_ok_mono[OF lowered_ok_env_le'[OF lo2] ok1] term_type_wk(1)[OF ok tt] fe
+                             term_fits_ty[OF tfs[THEN conjunct1] tt] p2] idx by auto
+  show "\<exists>E' ds'. lowered_ok prog rt (E, ds) st S st' (E', ds') \<and> expr_ok E' a CTy_CharPtr"
+    unfolding S a using lowered_ok_append[OF lo1 lo2] addr by blast
+qed
+
+lemma la_Cast:
+  assumes IHa: "\<And>x st st'. is_array_type ty \<Longrightarrow> ty_of cg t st = Inr (x, st') \<Longrightarrow> la_ok prog rt cg t"
+    and IHt: "\<And>x st st'. \<not> is_array_type ty \<Longrightarrow> ty_of cg (CoreTm_Cast ty t) st = Inr (x, st') \<Longrightarrow> lt_ok prog rt cg (CoreTm_Cast ty t)"
+  shows "la_ok prog rt cg (CoreTm_Cast ty t)"
+  unfolding la_ok_def
+proof (intro allI impI)
+  fix E ds st S a st'
+  assume l: "lower_addr cg (CoreTm_Cast ty t) st = Inr ((S, a), st')" and ok: "cg_ok prog E cg"
+    and sc: "scope_ok prog (E, ds) st" and tf: "term_fits (CG_TyEnv cg) (CoreTm_Cast ty t)"
+  let ?env = "CG_TyEnv cg"
+  from term_fits_type[OF tf] obtain ty' where tyc: "core_term_type ?env NotGhost (CoreTm_Cast ty t) = Some ty'"
+    and fc: "fits ?env ty'" by blast
+  from cast_typed[OF tyc] obtain fromTy where ty': "ty' = ty" and ft: "core_term_type ?env NotGhost t = Some fromTy"
+    and co: "cast_ok ?env fromTy ty" and rtt: "is_runtime_type ?env ty" by blast
+  show "\<exists>E' ds'. lowered_ok prog rt (E, ds) st S st' (E', ds') \<and> expr_ok E' a CTy_CharPtr"
+  proof (cases "is_array_type ty")
+    case True
+    have unf: "lower_addr cg (CoreTm_Cast ty t) st =
+        cg_bind (lower_addr cg t) (\<lambda>(S, p). cg_bind (cast_place cg fromTy ty p) (\<lambda>(S', p'). cg_return (S @ S', p'))) st"
+      unfolding lower_addr.simps using True by (simp add: cg_bind_def ty_of_Some[OF ft])
+    from l[unfolded unf] obtain S1 p st1 S2 p2 st2 where la: "lower_addr cg t st = Inr ((S1, p), st1)"
+      and cp: "cast_place cg fromTy ty p st1 = Inr ((S2, p2), st2)"
+      and S: "S = S1 @ S2" and a: "a = p2" and st': "st' = st2"
+      by (auto simp: cg_return_def elim!: cg_bind_InrE)
+    obtain E1 ds1 where lo1: "lowered_ok prog rt (E, ds) st S1 st1 (E1, ds1)" and p: "expr_ok E1 p CTy_CharPtr"
+      using la_okD[OF IHa[OF True ty_of_Some[OF ft]] la ok sc term_fits_Cast[OF tf]] by blast
+    have aco: "array_cast_ok fromTy ty" using co True by (cases ty) (auto simp: cast_ok_def)
+    obtain E2 ds2 where lo2: "lowered_ok prog rt (E1, ds1) st1 S2 st2 (E2, ds2)" and p2: "expr_ok E2 p2 CTy_CharPtr"
+      using cast_place_ok[OF cp cg_ok_mono[OF lowered_ok_env_le'[OF lo1] ok] lowered_ok_scope[OF lo1] p aco
+                             term_type_wk(1)[OF ok ft] term_type_wk(1)[OF ok tyc, unfolded ty'] fc[unfolded ty']] by blast
+    show ?thesis unfolding S a st' using lowered_ok_append[OF lo1 lo2] p2 by blast
+  next
+    case False
+    have unf: "lower_addr cg (CoreTm_Cast ty t) st =
+        cg_bind (lower_term cg (CoreTm_Cast ty t))
+          (\<lambda>(S, e). cg_bind (temp_for cg ''tmp'' ty) (\<lambda>(tmp, decl). cg_return (S @ [decl, temp_store cg ty tmp e], ME_AddrOf tmp))) st"
+      unfolding lower_addr.simps using False by (simp add: cg_bind_def ty_of_Some[OF tyc] ty')
+    from l[unfolded unf] obtain r1 st1 where l1': "lower_term cg (CoreTm_Cast ty t) st = Inr (r1, st1)"
+      and k1: "(\<lambda>(S, e). cg_bind (temp_for cg ''tmp'' ty) (\<lambda>(tmp, decl). cg_return (S @ [decl, temp_store cg ty tmp e], ME_AddrOf tmp))) r1 st1
+               = Inr ((S, a), st')"
+      by (rule cg_bind_InrE)
+    obtain S1 e1 where r1: "r1 = (S1, e1)" by (cases r1)
+    have l1: "lower_term cg (CoreTm_Cast ty t) st = Inr ((S1, e1), st1)" using l1' r1 by simp
+    obtain E1 ds1 ty1 where ty1: "core_term_type ?env NotGhost (CoreTm_Cast ty t) = Some ty1"
+      and lo1: "lowered_ok prog rt (E, ds) st S1 st1 (E1, ds1)" and e1: "expr_ok E1 e1 (res_cty ty1)"
+      by (rule lt_okD[OF IHt[OF False ty_of_Some[OF tyc]] l1 ok sc tf])
+    have ty1: "ty1 = ty" using ty1 tyc ty' by simp
+    from k1[unfolded r1 case_prod_conv] obtain r2 st2 where tfr': "temp_for cg ''tmp'' ty st1 = Inr (r2, st2)"
+      and k2: "(\<lambda>(tmp, decl). cg_return (S1 @ [decl, temp_store cg ty tmp e1], ME_AddrOf tmp)) r2 st2 = Inr ((S, a), st')"
+      by (rule cg_bind_InrE)
+    obtain tmp decl where r2: "r2 = (tmp, decl)" by (cases r2)
+    have tfr: "temp_for cg ''tmp'' ty st1 = Inr ((tmp, decl), st2)" using tfr' r2 by simp
+    from k2 have S: "S = S1 @ [decl, temp_store cg ty tmp e1]" and a: "a = ME_AddrOf tmp" and st': "st' = st2"
+      unfolding r2 by (auto simp: cg_return_def)
+    have num: "is_numeric_type ty" using co False by (cases ty) (auto simp: cast_ok_def)
+    obtain s b where tyb: "ty = CoreTy_FiniteInt s b" by (rule runtime_numeric_finite[OF num rtt])
+    have sty: "scalar_ty ty = Some (CTy_Int s b)" by (simp add: tyb)
+    show ?thesis unfolding S a st'
+      by (rule materialise_store_ok[OF lo1 e1[unfolded ty1] sty tfr cg_ok_mono[OF lowered_ok_env_le'[OF lo1] ok]
+                                      term_type_wk(1)[OF ok tyc, unfolded ty'] fc[unfolded ty']])
+  qed
+qed
+
+lemma la_LitBool:
+  assumes IH: "lt_ok prog rt cg (CoreTm_LitBool b)"
+  shows "la_ok prog rt cg (CoreTm_LitBool b)"
+  unfolding la_ok_def
+proof (intro allI impI)
+  fix E ds st S a st'
+  assume l: "lower_addr cg (CoreTm_LitBool b) st = Inr ((S, a), st')" and ok: "cg_ok prog E cg"
+    and sc: "scope_ok prog (E, ds) st" and tf: "term_fits (CG_TyEnv cg) (CoreTm_LitBool b)"
+  have tyt: "core_term_type (CG_TyEnv cg) NotGhost (CoreTm_LitBool b) = Some CoreTy_Bool" by simp
+  show "\<exists>E' ds'. lowered_ok prog rt (E, ds) st S st' (E', ds') \<and> expr_ok E' a CTy_CharPtr"
+    by (rule la_temp[OF IH l[unfolded lower_addr.simps] ok sc tf tyt]) simp
+qed
+
+lemma la_LitInt:
+  assumes IH: "\<And>x st st'. ty_of cg (CoreTm_LitInt i) st = Inr (x, st') \<Longrightarrow> lt_ok prog rt cg (CoreTm_LitInt i)"
+  shows "la_ok prog rt cg (CoreTm_LitInt i)"
+  unfolding la_ok_def
+proof (intro allI impI)
+  fix E ds st S a st'
+  assume l: "lower_addr cg (CoreTm_LitInt i) st = Inr ((S, a), st')" and ok: "cg_ok prog E cg"
+    and sc: "scope_ok prog (E, ds) st" and tf: "term_fits (CG_TyEnv cg) (CoreTm_LitInt i)"
+  from term_fits_type[OF tf] obtain ty where tyt: "core_term_type (CG_TyEnv cg) NotGhost (CoreTm_LitInt i) = Some ty" by blast
+  obtain s b where tyb: "ty = CoreTy_FiniteInt s b" using tyt by (auto split: option.splits)
+  have unf: "lower_addr cg (CoreTm_LitInt i) st =
+      cg_bind (lower_term cg (CoreTm_LitInt i))
+        (\<lambda>(S, e). cg_bind (temp_for cg ''tmp'' ty) (\<lambda>(tmp, decl). cg_return (S @ [decl, MS_Assign tmp e], ME_AddrOf tmp))) st"
+    unfolding lower_addr.simps by (simp add: cg_bind_def ty_of_Some[OF tyt])
+  show "\<exists>E' ds'. lowered_ok prog rt (E, ds) st S st' (E', ds') \<and> expr_ok E' a CTy_CharPtr"
+    by (rule la_temp[OF IH[OF ty_of_Some[OF tyt]] l[unfolded unf] ok sc tf tyt]) (simp add: tyb)
+qed
+
+lemma la_Unop:
+  assumes IH: "\<And>x st st'. ty_of cg (CoreTm_Unop op t) st = Inr (x, st') \<Longrightarrow> lt_ok prog rt cg (CoreTm_Unop op t)"
+  shows "la_ok prog rt cg (CoreTm_Unop op t)"
+  unfolding la_ok_def
+proof (intro allI impI)
+  fix E ds st S a st'
+  assume l: "lower_addr cg (CoreTm_Unop op t) st = Inr ((S, a), st')" and ok: "cg_ok prog E cg"
+    and sc: "scope_ok prog (E, ds) st" and tf: "term_fits (CG_TyEnv cg) (CoreTm_Unop op t)"
+  from term_fits_type[OF tf] obtain ty where tyt: "core_term_type (CG_TyEnv cg) NotGhost (CoreTm_Unop op t) = Some ty" by blast
+  obtain tyt' where "ty = tyt'" and "(\<exists>s b. tyt' = CoreTy_FiniteInt s b \<and> op \<noteq> CoreUnop_Not) \<or> (tyt' = CoreTy_Bool \<and> op = CoreUnop_Not)"
+    by (rule unop_typed[OF tyt cg_ok_wf[OF ok]])
+  then obtain cty where sty: "scalar_ty ty = Some cty" by auto
+  have unf: "lower_addr cg (CoreTm_Unop op t) st =
+      cg_bind (lower_term cg (CoreTm_Unop op t))
+        (\<lambda>(S, e). cg_bind (temp_for cg ''tmp'' ty) (\<lambda>(tmp, decl). cg_return (S @ [decl, MS_Assign tmp e], ME_AddrOf tmp))) st"
+    unfolding lower_addr.simps by (simp add: cg_bind_def ty_of_Some[OF tyt])
+  show "\<exists>E' ds'. lowered_ok prog rt (E, ds) st S st' (E', ds') \<and> expr_ok E' a CTy_CharPtr"
+    by (rule la_temp[OF IH[OF ty_of_Some[OF tyt]] l[unfolded unf] ok sc tf tyt sty])
+qed
+
+lemma la_Binop:
+  assumes IH: "\<And>x st st'. ty_of cg (CoreTm_Binop op t1 t2) st = Inr (x, st') \<Longrightarrow> lt_ok prog rt cg (CoreTm_Binop op t1 t2)"
+  shows "la_ok prog rt cg (CoreTm_Binop op t1 t2)"
+  unfolding la_ok_def
+proof (intro allI impI)
+  fix E ds st S a st'
+  assume l: "lower_addr cg (CoreTm_Binop op t1 t2) st = Inr ((S, a), st')" and ok: "cg_ok prog E cg"
+    and sc: "scope_ok prog (E, ds) st" and tf: "term_fits (CG_TyEnv cg) (CoreTm_Binop op t1 t2)"
+  from term_fits_type[OF tf] obtain ty where tyt: "core_term_type (CG_TyEnv cg) NotGhost (CoreTm_Binop op t1 t2) = Some ty" by blast
+  obtain tyL where "core_term_type (CG_TyEnv cg) NotGhost t1 = Some tyL" and "core_term_type (CG_TyEnv cg) NotGhost t2 = Some tyL"
+    and "(\<exists>s b. tyL = CoreTy_FiniteInt s b) \<or> tyL = CoreTy_Bool"
+    and "binop_of op = None \<longrightarrow> tyL = CoreTy_Bool \<and> ty = CoreTy_Bool"
+    and "\<And>cop. binop_of op = Some cop \<Longrightarrow> (is_cmp cop \<longrightarrow> ty = CoreTy_Bool) \<and> (\<not> is_cmp cop \<longrightarrow> ty = tyL \<and> (\<exists>s b. tyL = CoreTy_FiniteInt s b))"
+    using binop_typed[OF tyt cg_ok_wf[OF ok]] by blast
+  then obtain cty where sty: "scalar_ty ty = Some cty" by (cases "binop_of op") auto
+  have unf: "lower_addr cg (CoreTm_Binop op t1 t2) st =
+      cg_bind (lower_term cg (CoreTm_Binop op t1 t2))
+        (\<lambda>(S, e). cg_bind (temp_for cg ''tmp'' ty) (\<lambda>(tmp, decl). cg_return (S @ [decl, MS_Assign tmp e], ME_AddrOf tmp))) st"
+    unfolding lower_addr.simps by (simp add: cg_bind_def ty_of_Some[OF tyt])
+  show "\<exists>E' ds'. lowered_ok prog rt (E, ds) st S st' (E', ds') \<and> expr_ok E' a CTy_CharPtr"
+    by (rule la_temp[OF IH[OF ty_of_Some[OF tyt]] l[unfolded unf] ok sc tf tyt sty])
+qed
+
+(* The forms whose address is the value in a temporary if scalar, else the
+   value's place: Let, FunctionCall, Match, Sizeof, Default. *)
+lemma la_Let:
+  assumes IH: "\<And>xa st st'. ty_of cg (CoreTm_Let x t1 t2) st = Inr (xa, st') \<Longrightarrow> lt_ok prog rt cg (CoreTm_Let x t1 t2)"
+  shows "la_ok prog rt cg (CoreTm_Let x t1 t2)"
+  unfolding la_ok_def
+proof (intro allI impI)
+  fix E ds st S a st'
+  assume l: "lower_addr cg (CoreTm_Let x t1 t2) st = Inr ((S, a), st')" and ok: "cg_ok prog E cg"
+    and sc: "scope_ok prog (E, ds) st" and tf: "term_fits (CG_TyEnv cg) (CoreTm_Let x t1 t2)"
+  from term_fits_type[OF tf] obtain ty where tyt: "core_term_type (CG_TyEnv cg) NotGhost (CoreTm_Let x t1 t2) = Some ty" by blast
+  have unf: "lower_addr cg (CoreTm_Let x t1 t2) st =
+      cg_bind (lower_term cg (CoreTm_Let x t1 t2))
+        (\<lambda>(S, e). if is_scalar ty
+           then cg_bind (temp_for cg ''tmp'' ty) (\<lambda>(tmp, decl). cg_return (S @ [decl, MS_Assign tmp e], ME_AddrOf tmp))
+           else cg_return (S, e)) st"
+    unfolding lower_addr.simps by (simp add: cg_bind_def ty_of_Some[OF tyt])
+  show "\<exists>E' ds'. lowered_ok prog rt (E, ds) st S st' (E', ds') \<and> expr_ok E' a CTy_CharPtr"
+    by (rule la_value[OF IH[OF ty_of_Some[OF tyt]] l[unfolded unf] ok sc tf tyt])
+qed
+
+lemma la_FunctionCall:
+  assumes IH: "\<And>x st st'. ty_of cg (CoreTm_FunctionCall f tys args) st = Inr (x, st') \<Longrightarrow> lt_ok prog rt cg (CoreTm_FunctionCall f tys args)"
+  shows "la_ok prog rt cg (CoreTm_FunctionCall f tys args)"
+  unfolding la_ok_def
+proof (intro allI impI)
+  fix E ds st S a st'
+  assume l: "lower_addr cg (CoreTm_FunctionCall f tys args) st = Inr ((S, a), st')" and ok: "cg_ok prog E cg"
+    and sc: "scope_ok prog (E, ds) st" and tf: "term_fits (CG_TyEnv cg) (CoreTm_FunctionCall f tys args)"
+  from term_fits_type[OF tf] obtain ty where tyt: "core_term_type (CG_TyEnv cg) NotGhost (CoreTm_FunctionCall f tys args) = Some ty" by blast
+  have unf: "lower_addr cg (CoreTm_FunctionCall f tys args) st =
+      cg_bind (lower_term cg (CoreTm_FunctionCall f tys args))
+        (\<lambda>(S, e). if is_scalar ty
+           then cg_bind (temp_for cg ''tmp'' ty) (\<lambda>(tmp, decl). cg_return (S @ [decl, MS_Assign tmp e], ME_AddrOf tmp))
+           else cg_return (S, e)) st"
+    unfolding lower_addr.simps by (simp add: cg_bind_def ty_of_Some[OF tyt])
+  show "\<exists>E' ds'. lowered_ok prog rt (E, ds) st S st' (E', ds') \<and> expr_ok E' a CTy_CharPtr"
+    by (rule la_value[OF IH[OF ty_of_Some[OF tyt]] l[unfolded unf] ok sc tf tyt])
+qed
+
+lemma la_Match:
+  assumes IH: "\<And>x st st'. ty_of cg (CoreTm_Match s arms) st = Inr (x, st') \<Longrightarrow> lt_ok prog rt cg (CoreTm_Match s arms)"
+  shows "la_ok prog rt cg (CoreTm_Match s arms)"
+  unfolding la_ok_def
+proof (intro allI impI)
+  fix E ds st S a st'
+  assume l: "lower_addr cg (CoreTm_Match s arms) st = Inr ((S, a), st')" and ok: "cg_ok prog E cg"
+    and sc: "scope_ok prog (E, ds) st" and tf: "term_fits (CG_TyEnv cg) (CoreTm_Match s arms)"
+  from term_fits_type[OF tf] obtain ty where tyt: "core_term_type (CG_TyEnv cg) NotGhost (CoreTm_Match s arms) = Some ty" by blast
+  have unf: "lower_addr cg (CoreTm_Match s arms) st =
+      cg_bind (lower_term cg (CoreTm_Match s arms))
+        (\<lambda>(S, e). if is_scalar ty
+           then cg_bind (temp_for cg ''tmp'' ty) (\<lambda>(tmp, decl). cg_return (S @ [decl, MS_Assign tmp e], ME_AddrOf tmp))
+           else cg_return (S, e)) st"
+    unfolding lower_addr.simps by (simp add: cg_bind_def ty_of_Some[OF tyt])
+  show "\<exists>E' ds'. lowered_ok prog rt (E, ds) st S st' (E', ds') \<and> expr_ok E' a CTy_CharPtr"
+    by (rule la_value[OF IH[OF ty_of_Some[OF tyt]] l[unfolded unf] ok sc tf tyt])
+qed
+
+lemma la_Sizeof:
+  assumes IH: "\<And>x st st'. ty_of cg (CoreTm_Sizeof t) st = Inr (x, st') \<Longrightarrow> lt_ok prog rt cg (CoreTm_Sizeof t)"
+  shows "la_ok prog rt cg (CoreTm_Sizeof t)"
+  unfolding la_ok_def
+proof (intro allI impI)
+  fix E ds st S a st'
+  assume l: "lower_addr cg (CoreTm_Sizeof t) st = Inr ((S, a), st')" and ok: "cg_ok prog E cg"
+    and sc: "scope_ok prog (E, ds) st" and tf: "term_fits (CG_TyEnv cg) (CoreTm_Sizeof t)"
+  from term_fits_type[OF tf] obtain ty where tyt: "core_term_type (CG_TyEnv cg) NotGhost (CoreTm_Sizeof t) = Some ty" by blast
+  have unf: "lower_addr cg (CoreTm_Sizeof t) st =
+      cg_bind (lower_term cg (CoreTm_Sizeof t))
+        (\<lambda>(S, e). if is_scalar ty
+           then cg_bind (temp_for cg ''tmp'' ty) (\<lambda>(tmp, decl). cg_return (S @ [decl, MS_Assign tmp e], ME_AddrOf tmp))
+           else cg_return (S, e)) st"
+    unfolding lower_addr.simps by (simp add: cg_bind_def ty_of_Some[OF tyt])
+  show "\<exists>E' ds'. lowered_ok prog rt (E, ds) st S st' (E', ds') \<and> expr_ok E' a CTy_CharPtr"
+    by (rule la_value[OF IH[OF ty_of_Some[OF tyt]] l[unfolded unf] ok sc tf tyt])
+qed
+
+lemma la_Default:
+  assumes IH: "lt_ok prog rt cg (CoreTm_Default ty)"
+  shows "la_ok prog rt cg (CoreTm_Default ty)"
+  unfolding la_ok_def
+proof (intro allI impI)
+  fix E ds st S a st'
+  assume l: "lower_addr cg (CoreTm_Default ty) st = Inr ((S, a), st')" and ok: "cg_ok prog E cg"
+    and sc: "scope_ok prog (E, ds) st" and tf: "term_fits (CG_TyEnv cg) (CoreTm_Default ty)"
+  from term_fits_type[OF tf] obtain ty' where tyt: "core_term_type (CG_TyEnv cg) NotGhost (CoreTm_Default ty) = Some ty'" by blast
+  have tyt: "core_term_type (CG_TyEnv cg) NotGhost (CoreTm_Default ty) = Some ty" using default_typed[OF tyt] tyt by simp
+  show "\<exists>E' ds'. lowered_ok prog rt (E, ds) st S st' (E', ds') \<and> expr_ok E' a CTy_CharPtr"
+    by (rule la_value[OF IH l[unfolded lower_addr.simps] ok sc tf tyt])
+qed
+
+lemma la_LitArray:
+  assumes IH: "lt_ok prog rt cg (CoreTm_LitArray ety tms)"
+  shows "la_ok prog rt cg (CoreTm_LitArray ety tms)"
+proof (rule la_from_lt[OF IH])
+  fix ty assume A: "core_term_type (CG_TyEnv cg) NotGhost (CoreTm_LitArray ety tms) = Some ty"
+  show "scalar_ty ty = None" unfolding lit_array_typed(1)[OF A] by simp
+qed (simp add: lower_addr.simps)
+
+lemma la_VariantCtor:
+  assumes IH: "lt_ok prog rt cg (CoreTm_VariantCtor c tys t)"
+  shows "la_ok prog rt cg (CoreTm_VariantCtor c tys t)"
+proof (rule la_from_lt[OF IH])
+  fix ty assume A: "core_term_type (CG_TyEnv cg) NotGhost (CoreTm_VariantCtor c tys t) = Some ty"
+  obtain dtName tyvars payloadTy where "ty = CoreTy_Datatype dtName tys" by (rule variant_ctor_typed[OF A])
+  then show "scalar_ty ty = None" by simp
+qed (simp add: lower_addr.simps)
+
+lemma la_Record:
+  assumes IH: "lt_ok prog rt cg (CoreTm_Record flds)"
+  shows "la_ok prog rt cg (CoreTm_Record flds)"
+  by (rule la_from_lt[OF IH]) (auto simp: lower_addr.simps split: option.splits if_splits)
+
 end
