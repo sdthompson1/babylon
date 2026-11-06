@@ -46,6 +46,7 @@ definition lc_ok :: "MProgram \<Rightarrow> CTy option \<Rightarrow> CGEnv \<Rig
        \<longrightarrow> fmlookup (TE_Functions (CG_TyEnv cg)) f = Some info
        \<longrightarrow> call_args_typed (CG_TyEnv cg) info tys args
        \<longrightarrow> (\<forall>t \<in> set args. term_fits (CG_TyEnv cg) t) \<longrightarrow> (\<forall>ty \<in> set tys. fits (CG_TyEnv cg) ty)
+       \<longrightarrow> is_well_kinded (CG_TyEnv cg) (apply_subst (fmap_of_list (zip (FI_TyArgs info) tys)) (FI_ReturnType info))
        \<longrightarrow> fits (CG_TyEnv cg) (apply_subst (fmap_of_list (zip (FI_TyArgs info) tys)) (FI_ReturnType info))
        \<longrightarrow> (\<exists>E' ds'. lowered_ok prog rt (E, ds) st S st' (E', ds') \<and> res_ok E' info res))"
 
@@ -61,6 +62,16 @@ lemma la_okD:
     and "scope_ok prog (E, ds) st" and "term_fits (CG_TyEnv cg) tm"
   obtains E' ds' where "lowered_ok prog rt (E, ds) st S st' (E', ds')" and "expr_ok E' a CTy_CharPtr"
   using assms unfolding la_ok_def by blast
+
+lemma lc_okD:
+  assumes "lc_ok prog rt cg f tys args" and "lower_call cg f tys args st = Inr ((S, res), st')" and "cg_ok prog E cg"
+    and "scope_ok prog (E, ds) st" and "fmlookup (TE_Functions (CG_TyEnv cg)) f = Some info"
+    and "call_args_typed (CG_TyEnv cg) info tys args"
+    and "\<forall>t \<in> set args. term_fits (CG_TyEnv cg) t" and "\<forall>ty \<in> set tys. fits (CG_TyEnv cg) ty"
+    and "is_well_kinded (CG_TyEnv cg) (apply_subst (fmap_of_list (zip (FI_TyArgs info) tys)) (FI_ReturnType info))"
+    and "fits (CG_TyEnv cg) (apply_subst (fmap_of_list (zip (FI_TyArgs info) tys)) (FI_ReturnType info))"
+  obtains E' ds' where "lowered_ok prog rt (E, ds) st S st' (E', ds')" and "res_ok E' info res"
+  using assms unfolding lc_ok_def by blast
 
 
 section \<open>Core typing facts\<close>
@@ -1226,6 +1237,577 @@ proof (intro allI impI)
       show ?thesis unfolding e using tyP lo res' by blast
     qed
   qed
+qed
+
+
+section \<open>Array literals, records, matches and calls\<close>
+
+(* The element offsets of an array literal: k * size fits for k <= n. *)
+lemma lit_array_size_ok:
+  assumes "cg_ok prog E cg" and "is_well_kinded (CG_TyEnv cg) elemTy"
+    and "fits (CG_TyEnv cg) (CoreTy_Array elemTy [CoreDim_Fixed (int n)])" and "k \<le> n"
+  shows "u64_ok E (e_mul (cg_size cg elemTy) (u64_lit k))"
+proof -
+  have fe: "fits (CG_TyEnv cg) elemTy" using fits_Array_elem_fixed[OF assms(3)] by (simp add: dims_all_fixed_def)
+  have sz: "u64_ok E (cg_size cg elemTy)" using cg_size_ok[OF assms(1,2) fe] .
+  have bound: "n < u64_max" "type_size (CG_TyEnv cg) 0 (\<lambda>_. 0) elemTy * n < u64_max"
+    using assms(3) unfolding fits_def size_fits_def type_size_def
+    by (simp_all add: dims_all_fixed_def dims_count_def)
+  have ev: "eval0 (cg_size cg elemTy) = type_size (CG_TyEnv cg) 0 (\<lambda>_. 0) elemTy"
+    unfolding cg_size_def by (rule eval0_size_of)
+  have lt: "eval0 (cg_size cg elemTy) * k < u64_max"
+    unfolding ev by (rule le_less_trans[OF mult_le_mono2[OF assms(4)] bound(2)])
+  show ?thesis using sz bound(1) assms(4) lt by (intro u64_ok_e_fold2) simp_all
+qed
+
+lemma lt_LitArray:
+  assumes IH: "\<And>x st st' xa. fresh_name (CG_Fun cg) ''arr'' st = Inr (x, st') \<Longrightarrow> xa \<in> set tms \<Longrightarrow> lt_ok prog rt cg xa"
+  shows "lt_ok prog rt cg (CoreTm_LitArray elemTy tms)"
+  unfolding lt_ok_def
+proof (intro allI impI)
+  fix E ds st S e st'
+  assume l: "lower_term cg (CoreTm_LitArray elemTy tms) st = Inr ((S, e), st')" and ok: "cg_ok prog E cg"
+    and sc: "scope_ok prog (E, ds) st" and tf: "term_fits (CG_TyEnv cg) (CoreTm_LitArray elemTy tms)"
+  let ?env = "CG_TyEnv cg"
+  let ?n = "length tms"
+  let ?sz = "\<lambda>k. e_mul (cg_size cg elemTy) (u64_lit k)"
+  let ?store = "\<lambda>tmp. \<lambda>(k, e). store_at cg elemTy (ptr_add (ME_AddrOf tmp) (?sz k)) e"
+  from term_fits_type[OF tf] obtain ty where tyP: "core_term_type ?env NotGhost (CoreTm_LitArray elemTy tms) = Some ty"
+    and fa: "fits ?env ty" by blast
+  note lat = lit_array_typed[OF tyP]
+  have unf: "lower_term cg (CoreTm_LitArray elemTy tms) st =
+      cg_bind (fresh_name (CG_Fun cg) ''arr'')
+        (\<lambda>tmp. cg_bind (cg_mapM (lower_term cg) tms)
+          (\<lambda>rs. cg_return ([MS_DeclBuf tmp (buf_size (?sz ?n))] @ concat (map fst rs)
+                             @ map (?store tmp) (zip [0..<?n] (map snd rs)), ME_AddrOf tmp))) st"
+    unfolding lower_term.simps by (simp add: cg_bind_def)
+  from l[unfolded unf] obtain tmp st1 where fr: "fresh_name (CG_Fun cg) ''arr'' st = Inr (tmp, st1)"
+    and r1: "cg_bind (cg_mapM (lower_term cg) tms)
+          (\<lambda>rs. cg_return ([MS_DeclBuf tmp (buf_size (?sz ?n))] @ concat (map fst rs)
+                             @ map (?store tmp) (zip [0..<?n] (map snd rs)), ME_AddrOf tmp)) st1 = Inr ((S, e), st')"
+    by (rule cg_bind_InrE)
+  from r1 obtain rs st2 where lm: "cg_mapM (lower_term cg) tms st1 = Inr (rs, st2)"
+    and r2: "cg_return ([MS_DeclBuf tmp (buf_size (?sz ?n))] @ concat (map fst rs)
+                             @ map (?store tmp) (zip [0..<?n] (map snd rs)), ME_AddrOf tmp) st2 = Inr ((S, e), st')"
+    by (rule cg_bind_InrE)
+  from r2 have S: "S = [MS_DeclBuf tmp (buf_size (?sz ?n))] @ concat (map fst rs) @ map (?store tmp) (zip [0..<?n] (map snd rs))"
+    and e: "e = ME_AddrOf tmp" and st': "st' = st2" by (auto simp: cg_return_def)
+  note lm = lm[folded st']
+  have ewk: "is_well_kinded ?env elemTy" using term_type_wk(1)[OF ok tyP] unfolding lat(1) by simp
+  have fe: "fits ?env elemTy" using fits_Array_elem_fixed[OF fa[unfolded lat(1)]] by (simp add: dims_all_fixed_def)
+  have szk: "\<And>E k. cg_ok prog E cg \<Longrightarrow> k \<le> ?n \<Longrightarrow> u64_ok E (?sz k)"
+    by (rule lit_array_size_ok[OF _ ewk fa[unfolded lat(1)]])
+  let ?E1 = "fmupd tmp VT_Buf E"
+  have d: "lowered_ok prog rt (E, ds) st [MS_DeclBuf tmp (buf_size (?sz ?n))] st1 (?E1, tmp # ds)"
+    by (rule fresh_buf_ok[OF sc fr buf_size_ok[OF szk[OF ok order_refl]]])
+  have le1: "env_le E ?E1" by (rule lowered_ok_env_le'[OF d])
+  have ok1: "cg_ok prog ?E1 cg" using cg_ok_mono[OF le1 ok] .
+  have sc1: "scope_ok prog (?E1, tmp # ds) st1" by (rule lowered_ok_scope[OF d])
+  have tmp1: "expr_ok ?E1 (ME_AddrOf tmp) CTy_CharPtr" by (simp add: expr_ok_def)
+  have "\<exists>E' ds'. lowered_ok prog rt (?E1, tmp # ds) st1 (concat (map fst rs)) st' (E', ds')
+          \<and> (\<forall>r \<in> set rs. expr_ok E' (snd r) (res_cty elemTy))"
+  proof (rule cg_mapM_chain[OF lm sc1])
+    fix t sta r stb Ea dsa
+    assume t: "t \<in> set tms" and lt: "lower_term cg t sta = Inr (r, stb)" and sca: "scope_ok prog (Ea, dsa) sta" and le: "env_le ?E1 Ea"
+    obtain S1 e1 where r: "r = (S1, e1)" by (cases r)
+    obtain E2 ds2 ty2 where ty2: "core_term_type ?env NotGhost t = Some ty2"
+      and lo: "lowered_ok prog rt (Ea, dsa) sta S1 stb (E2, ds2)" and e1: "expr_ok E2 e1 (res_cty ty2)"
+      by (rule lt_okD[OF IH[OF fr t] lt[unfolded r] cg_ok_mono[OF le ok1] sca term_fits_LitArray[OF tf t]])
+    have "ty2 = elemTy" using lat(2) t ty2 by simp
+    then show "\<exists>E2 ds2. lowered_ok prog rt (Ea, dsa) sta (fst r) stb (E2, ds2) \<and> expr_ok E2 (snd r) (res_cty elemTy)"
+      using lo e1 unfolding r by auto
+  next
+    fix E1 E2 r assume "env_le E1 E2" "expr_ok E1 (snd r) (res_cty elemTy)"
+    then show "expr_ok E2 (snd r) (res_cty elemTy)" by (rule expr_ok_mono)
+  qed
+  then obtain E2 ds2 where lo2: "lowered_ok prog rt (?E1, tmp # ds) st1 (concat (map fst rs)) st' (E2, ds2)"
+    and els: "\<forall>r \<in> set rs. expr_ok E2 (snd r) (res_cty elemTy)" by blast
+  have le2: "env_le ?E1 E2" by (rule lowered_ok_env_le'[OF lo2])
+  have ok2: "cg_ok prog E2 cg" using cg_ok_mono[OF le2 ok1] .
+  have tmp2: "expr_ok E2 (ME_AddrOf tmp) CTy_CharPtr" using expr_ok_mono[OF le2 tmp1] .
+  have esz: "u64_ok E2 (cg_size cg elemTy)" using cg_size_ok[OF ok2 ewk fe] .
+  have stores: "lowered_ok prog rt (E2, ds2) st' (map (?store tmp) (zip [0..<?n] (map snd rs))) st' (E2, ds2)"
+  proof (rule lowered_ok_pure_list[OF lowered_ok_scope[OF lo2]])
+    fix s assume "s \<in> set (map (?store tmp) (zip [0..<?n] (map snd rs)))"
+    then obtain p where p: "p \<in> set (zip [0..<?n] (map snd rs))" and s: "s = ?store tmp p" by auto
+    obtain k e1 where pk: "p = (k, e1)" by (cases p)
+    have k: "k < ?n" using set_zip_leftD[OF p[unfolded pk]] by simp
+    have e1: "e1 \<in> set (map snd rs)" using set_zip_rightD[OF p[unfolded pk]] .
+    have e1ok: "expr_ok E2 e1 (res_cty elemTy)" using els e1 by auto
+    have dst: "expr_ok E2 (ptr_add (ME_AddrOf tmp) (?sz k)) CTy_CharPtr"
+      using tmp2 szk[OF ok2, of k] k by (intro expr_ok_ptr_add) auto
+    show "lowered_ok prog rt (E2, ds2) st' [s] st' (E2, ds2)"
+      unfolding s pk using store_at_ok[OF lowered_ok_scope[OF lo2] dst e1ok esz] by simp
+  qed
+  have res: "expr_ok E2 (ME_AddrOf tmp) (res_cty ty)" using tmp2 unfolding lat(1) by (simp add: res_cty_def)
+  have lo: "lowered_ok prog rt (E, ds) st S st' (E2, ds2)"
+    unfolding S using lowered_ok_append[OF lowered_ok_append[OF d lo2] stores] by simp
+  show "\<exists>E' ds' ty. core_term_type ?env NotGhost (CoreTm_LitArray elemTy tms) = Some ty
+          \<and> lowered_ok prog rt (E, ds) st S st' (E', ds') \<and> expr_ok E' e (res_cty ty)"
+    unfolding e using tyP res lo by blast
+qed
+
+lemma lt_Record:
+  assumes IH: "\<And>x st st' x6 xa sta st'a xb xc y xd stb st'b.
+        ty_of cg (CoreTm_Record flds) st = Inr (x, st') \<Longrightarrow> x = CoreTy_Record x6 \<Longrightarrow>
+        fresh_name (CG_Fun cg) ''rec'' sta = Inr (xa, st'a) \<Longrightarrow> xb \<in> set flds \<Longrightarrow> (xc, y) = xb \<Longrightarrow>
+        cg_lift (CG_Fun cg) ''unknown field'' (map_of x6 xc) stb = Inr (xd, st'b) \<Longrightarrow> lt_ok prog rt cg y"
+  shows "lt_ok prog rt cg (CoreTm_Record flds)"
+  unfolding lt_ok_def
+proof (intro allI impI)
+  fix E ds st S e st'
+  assume l: "lower_term cg (CoreTm_Record flds) st = Inr ((S, e), st')" and ok: "cg_ok prog E cg"
+    and sc: "scope_ok prog (E, ds) st" and tf: "term_fits (CG_TyEnv cg) (CoreTm_Record flds)"
+  let ?env = "CG_TyEnv cg"
+  from term_fits_type[OF tf] obtain recTy where tyP: "core_term_type ?env NotGhost (CoreTm_Record flds) = Some recTy"
+    and fr: "fits ?env recTy" by blast
+  obtain fldTys where rec: "recTy = CoreTy_Record fldTys" using tyP by (auto split: option.splits if_splits)
+  let ?fld = "\<lambda>tmp. \<lambda>(f, t). cg_bind (cg_lift (CG_Fun cg) ''unknown field'' (map_of fldTys f))
+                 (\<lambda>fty. cg_bind (lower_term cg t)
+                   (\<lambda>(S, e). cg_return (S @ [store_at cg fty (ptr_add (ME_AddrOf tmp) (field_off ?env fldTys f)) e])))"
+  have unf: "lower_term cg (CoreTm_Record flds) st =
+      cg_bind (fresh_name (CG_Fun cg) ''rec'')
+        (\<lambda>tmp. cg_bind (cg_mapM (?fld tmp) flds)
+          (\<lambda>rs. cg_return ([MS_DeclBuf tmp (buf_size (cg_size cg recTy))] @ concat rs, ME_AddrOf tmp))) st"
+    unfolding lower_term.simps by (simp add: cg_bind_def ty_of_Some[OF tyP] rec)
+  from l[unfolded unf] obtain tmp st1 where fn: "fresh_name (CG_Fun cg) ''rec'' st = Inr (tmp, st1)"
+    and r1: "cg_bind (cg_mapM (?fld tmp) flds)
+          (\<lambda>rs. cg_return ([MS_DeclBuf tmp (buf_size (cg_size cg recTy))] @ concat rs, ME_AddrOf tmp)) st1 = Inr ((S, e), st')"
+    by (rule cg_bind_InrE)
+  from r1 obtain rs st2 where lm: "cg_mapM (?fld tmp) flds st1 = Inr (rs, st2)"
+    and r2: "cg_return ([MS_DeclBuf tmp (buf_size (cg_size cg recTy))] @ concat rs, ME_AddrOf tmp) st2 = Inr ((S, e), st')"
+    by (rule cg_bind_InrE)
+  from r2 have S: "S = [MS_DeclBuf tmp (buf_size (cg_size cg recTy))] @ concat rs"
+    and e: "e = ME_AddrOf tmp" and st': "st' = st2" by (auto simp: cg_return_def)
+  note lm = lm[folded st']
+  have rwk: "is_well_kinded ?env recTy" using term_type_wk(1)[OF ok tyP] .
+  have sz: "u64_ok E (buf_size (cg_size cg recTy))" using cg_buf_size_ok[OF ok rwk fr] .
+  let ?E1 = "fmupd tmp VT_Buf E"
+  have d: "lowered_ok prog rt (E, ds) st [MS_DeclBuf tmp (buf_size (cg_size cg recTy))] st1 (?E1, tmp # ds)"
+    by (rule fresh_buf_ok[OF sc fn sz])
+  have le1: "env_le E ?E1" by (rule lowered_ok_env_le'[OF d])
+  have ok1: "cg_ok prog ?E1 cg" using cg_ok_mono[OF le1 ok] .
+  have sc1: "scope_ok prog (?E1, tmp # ds) st1" by (rule lowered_ok_scope[OF d])
+  have tmp1: "expr_ok ?E1 (ME_AddrOf tmp) CTy_CharPtr" by (simp add: expr_ok_def)
+  have "\<exists>E' ds'. lowered_ok prog rt (?E1, tmp # ds) st1 (concat (map (\<lambda>y. y) rs)) st' (E', ds') \<and> (\<forall>y \<in> set rs. True)"
+  proof (rule cg_mapM_chain[OF lm sc1])
+    fix x sta y stb Ea dsa
+    assume x: "x \<in> set flds" and fx: "?fld tmp x sta = Inr (y, stb)" and sca: "scope_ok prog (Ea, dsa) sta" and le: "env_le ?E1 Ea"
+    obtain f t where xft: "x = (f, t)" by (cases x)
+    obtain fty where mo: "map_of fldTys f = Some fty" and tt: "core_term_type ?env NotGhost t = Some fty"
+      using record_field_typed[OF tyP[unfolded rec] x[unfolded xft]] by blast
+    have fx': "cg_bind (cg_lift (CG_Fun cg) ''unknown field'' (map_of fldTys f))
+                 (\<lambda>fty. cg_bind (lower_term cg t)
+                   (\<lambda>(S, e). cg_return (S @ [store_at cg fty (ptr_add (ME_AddrOf tmp) (field_off ?env fldTys f)) e]))) sta = Inr (y, stb)"
+      using fx unfolding xft by simp
+    from fx' obtain fty' sta1 where cl: "cg_lift (CG_Fun cg) ''unknown field'' (map_of fldTys f) sta = Inr (fty', sta1)"
+      and r3: "cg_bind (lower_term cg t)
+                   (\<lambda>(S, e). cg_return (S @ [store_at cg fty' (ptr_add (ME_AddrOf tmp) (field_off ?env fldTys f)) e])) sta1 = Inr (y, stb)"
+      by (rule cg_bind_InrE)
+    have fty': "fty' = fty" and sta1: "sta1 = sta" using cl mo by (simp_all add: cg_lift_Inr)
+    from r3 obtain r stb' where lt': "lower_term cg t sta1 = Inr (r, stb')"
+      and r4: "(\<lambda>(S, e). cg_return (S @ [store_at cg fty' (ptr_add (ME_AddrOf tmp) (field_off ?env fldTys f)) e])) r stb' = Inr (y, stb)"
+      by (rule cg_bind_InrE)
+    obtain S1 e1 where r: "r = (S1, e1)" by (cases r)
+    from r4 have y: "y = S1 @ [store_at cg fty (ptr_add (ME_AddrOf tmp) (field_off ?env fldTys f)) e1]" and stb: "stb = stb'"
+      unfolding r fty' by (auto simp: cg_return_def)
+    have lt: "lower_term cg t sta = Inr ((S1, e1), stb)" using lt' unfolding r sta1 stb .
+    obtain E2 ds2 ty2 where ty2: "core_term_type ?env NotGhost t = Some ty2"
+      and lo: "lowered_ok prog rt (Ea, dsa) sta S1 stb (E2, ds2)" and e1: "expr_ok E2 e1 (res_cty ty2)"
+      by (rule lt_okD[OF IH[OF ty_of_Some[OF tyP] rec fn x xft[symmetric] cl] lt cg_ok_mono[OF le ok1] sca term_fits_Record[OF tf x[unfolded xft]]])
+    have ty2: "ty2 = fty" using ty2 tt by simp
+    have le2: "env_le Ea E2" by (rule lowered_ok_env_le'[OF lo])
+    have ok2: "cg_ok prog E2 cg" using cg_ok_mono[OF le2 cg_ok_mono[OF le ok1]] .
+    have dst: "expr_ok E2 (ptr_add (ME_AddrOf tmp) (field_off ?env fldTys f)) CTy_CharPtr"
+      using expr_ok_mono[OF le2 expr_ok_mono[OF le tmp1]] cg_field_off_ok[OF ok2 rwk[unfolded rec] fr[unfolded rec]]
+      by (intro expr_ok_ptr_add) auto
+    have fsz: "u64_ok E2 (cg_size cg fty)"
+      using cg_size_ok[OF ok2 term_type_wk(1)[OF ok tt] fits_Record_fld[OF fr[unfolded rec] mo]] .
+    have st: "lowered_ok prog rt (E2, ds2) stb [store_at cg fty (ptr_add (ME_AddrOf tmp) (field_off ?env fldTys f)) e1] stb (E2, ds2)"
+      using store_at_ok[OF lowered_ok_scope[OF lo] dst e1[unfolded ty2] fsz] .
+    show "\<exists>E2 ds2. lowered_ok prog rt (Ea, dsa) sta ((\<lambda>y. y) y) stb (E2, ds2) \<and> True"
+      unfolding y using lowered_ok_append[OF lo st] by auto
+  next
+    show "\<And>E1 E2 y. env_le E1 E2 \<Longrightarrow> True \<Longrightarrow> True" by simp
+  qed
+  then obtain E2 ds2 where lo2: "lowered_ok prog rt (?E1, tmp # ds) st1 (concat rs) st' (E2, ds2)" by auto
+  have res: "expr_ok E2 (ME_AddrOf tmp) (res_cty recTy)"
+    using expr_ok_mono[OF lowered_ok_env_le'[OF lo2] tmp1] rec by (simp add: res_cty_def)
+  have lo: "lowered_ok prog rt (E, ds) st S st' (E2, ds2)" unfolding S using lowered_ok_append[OF d lo2] by simp
+  show "\<exists>E' ds' ty. core_term_type ?env NotGhost (CoreTm_Record flds) = Some ty
+          \<and> lowered_ok prog rt (E, ds) st S st' (E', ds') \<and> expr_ok E' e (res_cty ty)"
+    unfolding e using tyP res lo by blast
+qed
+
+lemma lt_Match:
+  assumes IHs: "\<And>x st st' xa sta st'a. ty_of cg s st = Inr (x, st') \<Longrightarrow> ty_of cg (CoreTm_Match s arms) sta = Inr (xa, st'a) \<Longrightarrow> lt_ok prog rt cg s"
+    and IHb: "\<And>x st st' xa sta st'a xb stb st'b xc y xba stc st'c xbb ya xbc std st'd xbd yb xbe xbf yc xbg ste st'e.
+        ty_of cg s st = Inr (x, st') \<Longrightarrow> ty_of cg (CoreTm_Match s arms) sta = Inr (xa, st'a) \<Longrightarrow>
+        lower_term cg s stb = Inr (xb, st'b) \<Longrightarrow> (xc, y) = xb \<Longrightarrow>
+        match_tag cg x y stc = Inr (xba, st'c) \<Longrightarrow> (xbb, ya) = xba \<Longrightarrow>
+        temp_for cg ''res'' xa std = Inr (xbc, st'd) \<Longrightarrow> (xbd, yb) = xbc \<Longrightarrow>
+        xbe \<in> set arms \<Longrightarrow> (xbf, yc) = xbe \<Longrightarrow> arm_cond cg x ya xbf ste = Inr (xbg, st'e) \<Longrightarrow> lt_ok prog rt cg yc"
+  shows "lt_ok prog rt cg (CoreTm_Match s arms)"
+  unfolding lt_ok_def
+proof (intro allI impI)
+  fix E ds st S e st'
+  assume l: "lower_term cg (CoreTm_Match s arms) st = Inr ((S, e), st')" and ok: "cg_ok prog E cg"
+    and sc: "scope_ok prog (E, ds) st" and tf: "term_fits (CG_TyEnv cg) (CoreTm_Match s arms)"
+  let ?env = "CG_TyEnv cg"
+  from term_fits_type[OF tf] obtain resTy where tyP: "core_term_type ?env NotGhost (CoreTm_Match s arms) = Some resTy"
+    and fres: "fits ?env resTy" by blast
+  obtain scrutTy where ts: "core_term_type ?env NotGhost s = Some scrutTy"
+    and arms_ty: "\<forall>(p, body) \<in> set arms. pattern_compatible ?env p scrutTy \<and> core_term_type ?env NotGhost body = Some resTy"
+    by (rule match_typed[OF tyP])
+  note tfs = term_fits_Match[OF tf]
+  have rwk: "is_well_kinded ?env resTy" using term_type_wk(1)[OF ok tyP] .
+  let ?arm = "\<lambda>tag res. \<lambda>(pat, body). cg_bind (arm_cond cg scrutTy tag pat)
+                 (\<lambda>c. cg_bind (lower_term cg body)
+                   (\<lambda>(Sb, eb). cg_return (c, Sb @ [temp_store cg resTy res eb])))"
+  have unf: "lower_term cg (CoreTm_Match s arms) st =
+      cg_bind (lower_term cg s) (\<lambda>(Ss, es).
+      cg_bind (match_tag cg scrutTy es) (\<lambda>(St, tag).
+      cg_bind (temp_for cg ''res'' resTy) (\<lambda>(res, decl).
+      cg_bind (cg_mapM (?arm tag res) arms) (\<lambda>armsL.
+      cg_return (Ss @ St @ [decl] @ if_chain armsL, temp_result resTy res))))) st"
+    unfolding lower_term.simps by (simp add: cg_bind_def ty_of_Some[OF ts] ty_of_Some[OF tyP])
+  from l[unfolded unf] obtain r1 st1 where ls': "lower_term cg s st = Inr (r1, st1)"
+    and k1: "(\<lambda>(Ss, es). cg_bind (match_tag cg scrutTy es) (\<lambda>(St, tag).
+      cg_bind (temp_for cg ''res'' resTy) (\<lambda>(res, decl).
+      cg_bind (cg_mapM (?arm tag res) arms) (\<lambda>armsL.
+      cg_return (Ss @ St @ [decl] @ if_chain armsL, temp_result resTy res))))) r1 st1 = Inr ((S, e), st')"
+    by (rule cg_bind_InrE)
+  obtain Ss es where r1: "r1 = (Ss, es)" by (cases r1)
+  have ls: "lower_term cg s st = Inr ((Ss, es), st1)" using ls' r1 by simp
+  from k1[unfolded r1 case_prod_conv] obtain r2 st2 where mt': "match_tag cg scrutTy es st1 = Inr (r2, st2)"
+    and k2: "(\<lambda>(St, tag). cg_bind (temp_for cg ''res'' resTy) (\<lambda>(res, decl).
+      cg_bind (cg_mapM (?arm tag res) arms) (\<lambda>armsL.
+      cg_return (Ss @ St @ [decl] @ if_chain armsL, temp_result resTy res)))) r2 st2 = Inr ((S, e), st')"
+    by (rule cg_bind_InrE)
+  obtain St tag where r2: "r2 = (St, tag)" by (cases r2)
+  have mt: "match_tag cg scrutTy es st1 = Inr ((St, tag), st2)" using mt' r2 by simp
+  from k2[unfolded r2 case_prod_conv] obtain r3 st3 where tfr': "temp_for cg ''res'' resTy st2 = Inr (r3, st3)"
+    and k3: "(\<lambda>(res, decl). cg_bind (cg_mapM (?arm tag res) arms) (\<lambda>armsL.
+      cg_return (Ss @ St @ [decl] @ if_chain armsL, temp_result resTy res))) r3 st3 = Inr ((S, e), st')"
+    by (rule cg_bind_InrE)
+  obtain res decl where r3: "r3 = (res, decl)" by (cases r3)
+  have tfr: "temp_for cg ''res'' resTy st2 = Inr ((res, decl), st3)" using tfr' r3 by simp
+  from k3[unfolded r3 case_prod_conv] obtain armsL st4 where lm: "cg_mapM (?arm tag res) arms st3 = Inr (armsL, st4)"
+    and k4: "cg_return (Ss @ St @ [decl] @ if_chain armsL, temp_result resTy res) st4 = Inr ((S, e), st')"
+    by (rule cg_bind_InrE)
+  from k4 have S: "S = Ss @ St @ [decl] @ if_chain armsL" and e: "e = temp_result resTy res" and st': "st' = st4"
+    by (auto simp: cg_return_def)
+  note lm = lm[folded st']
+  (* the scrutinee *)
+  obtain E1 ds1 ty1 where ty1: "core_term_type ?env NotGhost s = Some ty1"
+    and lo1: "lowered_ok prog rt (E, ds) st Ss st1 (E1, ds1)" and es: "expr_ok E1 es (res_cty ty1)"
+    by (rule lt_okD[OF IHs[OF ty_of_Some[OF ts] ty_of_Some[OF tyP]] ls ok sc tfs[THEN conjunct1]])
+  have ty1: "ty1 = scrutTy" using ty1 ts by simp
+  (* the tag *)
+  obtain E2 ds2 where lo2: "lowered_ok prog rt (E1, ds1) st1 St st2 (E2, ds2)" and tag: "expr_ok E2 tag (tag_cty ?env scrutTy)"
+    using match_tag_ok[OF mt lowered_ok_scope[OF lo1] es[unfolded ty1]] by blast
+  have ok2: "cg_ok prog E2 cg" using cg_ok_mono[OF lowered_ok_env_le'[OF lo2] cg_ok_mono[OF lowered_ok_env_le'[OF lo1] ok]] .
+  (* the result temporary *)
+  from temp_for_ok[OF tfr ok2 lowered_ok_scope[OF lo2] rwk fres] obtain E3 where
+    d: "lowered_ok prog rt (E2, ds2) st2 [decl] st3 (E3, res # ds2)"
+    and resE: "expr_ok E3 (temp_result resTy res) (res_cty resTy)"
+    and lk: "fmlookup E3 res = Some (case scalar_ty resTy of Some cty \<Rightarrow> VT_Scalar cty | None \<Rightarrow> VT_Buf)"
+    by blast
+  have le3: "env_le E2 E3" by (rule lowered_ok_env_le'[OF d])
+  have ok3: "cg_ok prog E3 cg" using cg_ok_mono[OF le3 ok2] .
+  have tag3: "expr_ok E3 tag (tag_cty ?env scrutTy)" using expr_ok_mono[OF le3 tag] .
+  have sc3: "scope_ok prog (E3, res # ds2) st3" by (rule lowered_ok_scope[OF d])
+  (* the arms *)
+  have arms: "(\<forall>(c, Sb) \<in> set armsL. (\<forall>ce. c = Some ce \<longrightarrow> expr_ok E3 ce CTy_U8)
+                \<and> stmts_ok (mk_ctx prog rt) (E3, []) Sb \<noteq> None \<and> (\<forall>l. stmts_wf prog l Sb)) \<and> used_le st3 st'"
+  proof (rule cg_mapM_same_scope[OF lm sc3])
+    fix x sta y stb
+    assume x: "x \<in> set arms" and fx: "?arm tag res x sta = Inr (y, stb)" and sca: "scope_ok prog (E3, res # ds2) sta"
+    obtain pat body where xpb: "x = (pat, body)" by (cases x)
+    have pc: "pattern_compatible ?env pat scrutTy" and bt: "core_term_type ?env NotGhost body = Some resTy"
+      using arms_ty x unfolding xpb by auto
+    have tfb: "term_fits ?env body" using tfs x unfolding xpb by auto
+    have fx': "cg_bind (arm_cond cg scrutTy tag pat) (\<lambda>c. cg_bind (lower_term cg body)
+                   (\<lambda>(Sb, eb). cg_return (c, Sb @ [temp_store cg resTy res eb]))) sta = Inr (y, stb)"
+      using fx unfolding xpb by simp
+    from fx' obtain c sta1 where ac: "arm_cond cg scrutTy tag pat sta = Inr (c, sta1)"
+      and k5: "cg_bind (lower_term cg body) (\<lambda>(Sb, eb). cg_return (c, Sb @ [temp_store cg resTy res eb])) sta1 = Inr (y, stb)"
+      by (rule cg_bind_InrE)
+    have acok: "sta1 = sta \<and> (\<forall>ce. c = Some ce \<longrightarrow> expr_ok E3 ce CTy_U8)"
+      by (rule arm_cond_ok[OF ac cg_ok_wf[OF ok] cg_ok_tags[OF ok] tag3 pc])
+    from k5 obtain r stb' where lb': "lower_term cg body sta1 = Inr (r, stb')"
+      and k6: "(\<lambda>(Sb, eb). cg_return (c, Sb @ [temp_store cg resTy res eb])) r stb' = Inr (y, stb)"
+      by (rule cg_bind_InrE)
+    obtain Sb eb where r: "r = (Sb, eb)" by (cases r)
+    from k6 have y: "y = (c, Sb @ [temp_store cg resTy res eb])" and stb: "stb = stb'" unfolding r by (auto simp: cg_return_def)
+    have lb: "lower_term cg body sta = Inr ((Sb, eb), stb)" using lb' acok unfolding r stb by simp
+    have sca0: "scope_ok prog (E3, []) sta" using sca by (simp add: scope_ok_def)
+    obtain E4 ds4 ty4 where ty4: "core_term_type ?env NotGhost body = Some ty4"
+      and lo4: "lowered_ok prog rt (E3, []) sta Sb stb (E4, ds4)" and eb: "expr_ok E4 eb (res_cty ty4)"
+      by (rule lt_okD[OF IHb[OF ty_of_Some[OF ts] ty_of_Some[OF tyP] ls refl mt refl tfr refl x xpb[symmetric] ac] lb ok3 sca0 tfb])
+    have ty4: "ty4 = resTy" using ty4 bt by simp
+    have le4: "env_le E3 E4" by (rule lowered_ok_env_le'[OF lo4])
+    have tst: "lowered_ok prog rt (E4, ds4) stb [temp_store cg resTy res eb] stb (E4, ds4)"
+      using temp_store_ok[OF lowered_ok_scope[OF lo4] env_le_lookup[OF le4 lk] eb[unfolded ty4]
+                             cg_size_ok[OF cg_ok_mono[OF le4 ok3] rwk fres]] .
+    have lo5: "lowered_ok prog rt (E3, []) sta (Sb @ [temp_store cg resTy res eb]) stb (E4, ds4)"
+      by (rule lowered_ok_append[OF lo4 tst])
+    show "(case y of (c, Sb) \<Rightarrow> (\<forall>ce. c = Some ce \<longrightarrow> expr_ok E3 ce CTy_U8)
+                \<and> stmts_ok (mk_ctx prog rt) (E3, []) Sb \<noteq> None \<and> (\<forall>l. stmts_wf prog l Sb)) \<and> used_le sta stb"
+      using acok lo5 unfolding y lowered_ok_def by simp
+  qed
+  have ic: "lowered_ok prog rt (E3, res # ds2) st3 (if_chain armsL) st' (E3, res # ds2)"
+    using if_chain_ok[OF sc3 arms[THEN conjunct2] arms[THEN conjunct1]] .
+  have lo: "lowered_ok prog rt (E, ds) st S st' (E3, res # ds2)"
+    unfolding S using lowered_ok_append[OF lowered_ok_append[OF lowered_ok_append[OF lo1 lo2] d] ic] by simp
+  show "\<exists>E' ds' ty. core_term_type ?env NotGhost (CoreTm_Match s arms) = Some ty
+          \<and> lowered_ok prog rt (E, ds) st S st' (E', ds') \<and> expr_ok E' e (res_cty ty)"
+    unfolding e using tyP resE lo by blast
+qed
+
+lemma lt_FunctionCall:
+  assumes IH: "\<And>x st st'. ty_of cg (CoreTm_FunctionCall f tys args) st = Inr (x, st') \<Longrightarrow> lc_ok prog rt cg f tys args"
+  shows "lt_ok prog rt cg (CoreTm_FunctionCall f tys args)"
+  unfolding lt_ok_def
+proof (intro allI impI)
+  fix E ds st S e st'
+  assume l: "lower_term cg (CoreTm_FunctionCall f tys args) st = Inr ((S, e), st')" and ok: "cg_ok prog E cg"
+    and sc: "scope_ok prog (E, ds) st" and tf: "term_fits (CG_TyEnv cg) (CoreTm_FunctionCall f tys args)"
+  let ?env = "CG_TyEnv cg"
+  from term_fits_type[OF tf] obtain rty where tyP: "core_term_type ?env NotGhost (CoreTm_FunctionCall f tys args) = Some rty"
+    and frty: "fits ?env rty" by blast
+  obtain info where info: "fmlookup (TE_Functions ?env) f = Some info" using tyP by (auto split: option.splits)
+  have ngp: "no_ghost_params info" using cg_ok_prog[OF ok] info unfolding prog_ok_def by blast
+  note ct = call_typed_pure[OF tyP info ngp]
+  have unf: "lower_term cg (CoreTm_FunctionCall f tys args) st =
+      cg_bind (lower_call cg f tys args) (\<lambda>(S, res).
+        (case call_result_expr rty res of
+           Some e \<Rightarrow> cg_return (S, e)
+         | None \<Rightarrow> cg_bind (fresh_name (CG_Fun cg) ''unit'') (\<lambda>tmp. cg_return (S @ [MS_DeclBuf tmp (u64_lit 1)], ME_AddrOf tmp)))) st"
+    unfolding lower_term.simps by (simp add: cg_bind_def ty_of_Some[OF tyP])
+  from l[unfolded unf] obtain r1 st1 where lc': "lower_call cg f tys args st = Inr (r1, st1)"
+    and k1: "(\<lambda>(S, res). (case call_result_expr rty res of
+           Some e \<Rightarrow> cg_return (S, e)
+         | None \<Rightarrow> cg_bind (fresh_name (CG_Fun cg) ''unit'') (\<lambda>tmp. cg_return (S @ [MS_DeclBuf tmp (u64_lit 1)], ME_AddrOf tmp)))) r1 st1 = Inr ((S, e), st')"
+    by (rule cg_bind_InrE)
+  obtain S1 res where r1: "r1 = (S1, res)" by (cases r1)
+  have lc: "lower_call cg f tys args st = Inr ((S1, res), st1)" using lc' r1 by simp
+  note tfs = term_fits_FunctionCall[OF tf]
+  obtain E1 ds1 where lo1: "lowered_ok prog rt (E, ds) st S1 st1 (E1, ds1)" and ro: "res_ok E1 info res"
+    by (rule lc_okD[OF IH[OF ty_of_Some[OF tyP]] lc ok sc info ct(1) tfs[THEN conjunct1] tfs[THEN conjunct2]
+                       term_type_wk(1)[OF ok tyP, unfolded ct(2)] frty[unfolded ct(2)]])
+  show "\<exists>E' ds' ty. core_term_type ?env NotGhost (CoreTm_FunctionCall f tys args) = Some ty
+          \<and> lowered_ok prog rt (E, ds) st S st' (E', ds') \<and> expr_ok E' e (res_cty ty)"
+  proof (cases "call_result_expr rty res")
+    case (Some e1)
+    have Se: "S = S1" "e = e1" "st' = st1" using k1 Some unfolding r1 by (simp_all add: cg_return_def)
+    have res1: "expr_ok E1 e1 (res_cty rty)" unfolding ct(2) by (rule call_result_expr_ok[OF ro Some[unfolded ct(2)]])
+    show ?thesis unfolding Se using tyP lo1 res1 by blast
+  next
+    case None
+    then have ru: "res = CR_Unit" by (simp add: call_result_expr_None)
+    have k1': "cg_bind (fresh_name (CG_Fun cg) ''unit'') (\<lambda>tmp. cg_return (S1 @ [MS_DeclBuf tmp (u64_lit 1)], ME_AddrOf tmp)) st1 = Inr ((S, e), st')"
+      using k1 None unfolding r1 by simp
+    from k1' obtain tmp st2 where fr: "fresh_name (CG_Fun cg) ''unit'' st1 = Inr (tmp, st2)"
+      and k2: "cg_return (S1 @ [MS_DeclBuf tmp (u64_lit 1)], ME_AddrOf tmp) st2 = Inr ((S, e), st')"
+      by (rule cg_bind_InrE)
+    from k2 have S: "S = S1 @ [MS_DeclBuf tmp (u64_lit 1)]" and e: "e = ME_AddrOf tmp" and st': "st' = st2"
+      by (auto simp: cg_return_def)
+    note fr = fr[folded st']
+    have d: "lowered_ok prog rt (E1, ds1) st1 [MS_DeclBuf tmp (u64_lit 1)] st' (fmupd tmp VT_Buf E1, tmp # ds1)"
+      by (rule fresh_buf_ok[OF lowered_ok_scope[OF lo1] fr]) (simp add: u64_max_def)
+    have unit: "ret_kind (FI_ReturnType info) = RK_Unit" using ro ru by simp
+    have "FI_ReturnType info = CoreTy_Record []" using unit by (auto simp: ret_kind_def split: option.splits if_splits)
+    then have "rty = CoreTy_Record []" using ct(2) by simp
+    then have res: "expr_ok (fmupd tmp VT_Buf E1) (ME_AddrOf tmp) (res_cty rty)" by (simp add: expr_ok_def res_cty_def)
+    have lo: "lowered_ok prog rt (E, ds) st S st' (fmupd tmp VT_Buf E1, tmp # ds1)"
+      unfolding S using lowered_ok_append[OF lo1 d] by simp
+    show ?thesis unfolding e using tyP lo res by blast
+  qed
+qed
+
+lemma lc_call:
+  assumes IHa: "\<And>x st st' xa sta st'a xaa xab stb st'b xac y xad ya xae yb xaf xb yc xc yd xd ye.
+        cg_lift (CG_Fun cg) (''unknown function '' @ f) (fmlookup (TE_Functions (CG_TyEnv cg)) f) st = Inr (x, st') \<Longrightarrow>
+        (if length args \<noteq> length (FI_TmArgs x) \<or> length tys \<noteq> length (FI_TyArgs x)
+         then internal cg (''wrong number of arguments in a call of '' @ f) else cg_return ()) sta = Inr (xa, st'a) \<Longrightarrow>
+        xaa = fmap_of_list (zip (FI_TyArgs x) tys) \<Longrightarrow>
+        (case ret_kind (FI_ReturnType x) of
+           RK_Scalar cty \<Rightarrow> cg_bind (fresh_name (CG_Fun cg) ''call'') (\<lambda>x. cg_return ([MS_DeclScalar x cty], [], Some x, CR_Scalar (ME_Var x)))
+         | RK_Unit \<Rightarrow> cg_return ([], [], None, CR_Unit)
+         | RK_Buf \<Rightarrow> cg_bind (fresh_name (CG_Fun cg) ''ret'')
+               (\<lambda>r. cg_return ([MS_DeclBuf r (buf_size (cg_size cg (apply_subst xaa (FI_ReturnType x))))], [ME_AddrOf r], None, CR_Place (ME_AddrOf r)))) stb = Inr (xab, st'b) \<Longrightarrow>
+        (xac, y) = xab \<Longrightarrow> (xad, ya) = y \<Longrightarrow> (xae, yb) = ya \<Longrightarrow>
+        xaf \<in> set (zip args (FI_TmArgs x)) \<Longrightarrow> (xb, yc) = xaf \<Longrightarrow> (xc, yd) = yc \<Longrightarrow> (xd, ye) = yd \<Longrightarrow> param_by_ptr xc xd \<Longrightarrow>
+        la_ok prog rt cg xb"
+    and IHt: "\<And>x st st' xa sta st'a xaa xab stb st'b xac y xad ya xae yb xaf xb yc xc yd xd ye.
+        cg_lift (CG_Fun cg) (''unknown function '' @ f) (fmlookup (TE_Functions (CG_TyEnv cg)) f) st = Inr (x, st') \<Longrightarrow>
+        (if length args \<noteq> length (FI_TmArgs x) \<or> length tys \<noteq> length (FI_TyArgs x)
+         then internal cg (''wrong number of arguments in a call of '' @ f) else cg_return ()) sta = Inr (xa, st'a) \<Longrightarrow>
+        xaa = fmap_of_list (zip (FI_TyArgs x) tys) \<Longrightarrow>
+        (case ret_kind (FI_ReturnType x) of
+           RK_Scalar cty \<Rightarrow> cg_bind (fresh_name (CG_Fun cg) ''call'') (\<lambda>x. cg_return ([MS_DeclScalar x cty], [], Some x, CR_Scalar (ME_Var x)))
+         | RK_Unit \<Rightarrow> cg_return ([], [], None, CR_Unit)
+         | RK_Buf \<Rightarrow> cg_bind (fresh_name (CG_Fun cg) ''ret'')
+               (\<lambda>r. cg_return ([MS_DeclBuf r (buf_size (cg_size cg (apply_subst xaa (FI_ReturnType x))))], [ME_AddrOf r], None, CR_Place (ME_AddrOf r)))) stb = Inr (xab, st'b) \<Longrightarrow>
+        (xac, y) = xab \<Longrightarrow> (xad, ya) = y \<Longrightarrow> (xae, yb) = ya \<Longrightarrow>
+        xaf \<in> set (zip args (FI_TmArgs x)) \<Longrightarrow> (xb, yc) = xaf \<Longrightarrow> (xc, yd) = yc \<Longrightarrow> (xd, ye) = yd \<Longrightarrow> \<not> param_by_ptr xc xd \<Longrightarrow>
+        lt_ok prog rt cg xb"
+  shows "lc_ok prog rt cg f tys args"
+  unfolding lc_ok_def
+proof (intro allI impI)
+  fix E ds st S res st' info
+  assume l: "lower_call cg f tys args st = Inr ((S, res), st')" and ok: "cg_ok prog E cg"
+    and sc: "scope_ok prog (E, ds) st" and info: "fmlookup (TE_Functions (CG_TyEnv cg)) f = Some info"
+    and cat: "call_args_typed (CG_TyEnv cg) info tys args"
+    and tfa: "\<forall>t \<in> set args. term_fits (CG_TyEnv cg) t" and ftys: "\<forall>ty \<in> set tys. fits (CG_TyEnv cg) ty"
+    and rwk: "is_well_kinded (CG_TyEnv cg) (apply_subst (fmap_of_list (zip (FI_TyArgs info) tys)) (FI_ReturnType info))"
+    and rf: "fits (CG_TyEnv cg) (apply_subst (fmap_of_list (zip (FI_TyArgs info) tys)) (FI_ReturnType info))"
+  let ?env = "CG_TyEnv cg"
+  let ?subst = "fmap_of_list (zip (FI_TyArgs info) tys)"
+  let ?retTy = "apply_subst ?subst (FI_ReturnType info)"
+  have lens: "length args = length (FI_TmArgs info)" "length tys = length (FI_TyArgs info)"
+    using cat unfolding call_args_typed_def by simp_all
+  have cl: "cg_lift (CG_Fun cg) (''unknown function '' @ f) (fmlookup (TE_Functions ?env) f) st = Inr (info, st)"
+    using info by (simp add: cg_lift_Inr)
+  let ?chk = "(if length args \<noteq> length (FI_TmArgs info) \<or> length tys \<noteq> length (FI_TyArgs info)
+               then internal cg (''wrong number of arguments in a call of '' @ f) else cg_return ())"
+  have chk: "?chk st = Inr ((), st)" using lens by (simp add: cg_return_def)
+  let ?retK = "(case ret_kind (FI_ReturnType info) of
+           RK_Scalar cty \<Rightarrow> cg_bind (fresh_name (CG_Fun cg) ''call'') (\<lambda>x. cg_return ([MS_DeclScalar x cty], [], Some x, CR_Scalar (ME_Var x)))
+         | RK_Unit \<Rightarrow> cg_return ([], [], None, CR_Unit)
+         | RK_Buf \<Rightarrow> cg_bind (fresh_name (CG_Fun cg) ''ret'')
+               (\<lambda>r. cg_return ([MS_DeclBuf r (buf_size (cg_size cg ?retTy))], [ME_AddrOf r], None, CR_Place (ME_AddrOf r))))"
+  let ?argf = "\<lambda>(a, (pty, vor, _)). if param_by_ptr pty vor then lower_addr cg a else lower_term cg a"
+  have unf: "lower_call cg f tys args st =
+      cg_bind ?retK (\<lambda>(Sret, retArgs, xopt, res).
+      cg_bind (cg_mapM ?argf (zip args (FI_TmArgs info))) (\<lambda>argsL.
+      cg_return (Sret @ concat (map fst argsL) @ [MS_Call xopt f (retArgs @ map (cg_size cg) tys @ map snd argsL)], res))) st"
+    unfolding lower_call.simps cg_bind_def cl by (simp add: lens cg_return_def Let_def)
+  from l[unfolded unf] obtain r1 st1 where rk': "?retK st = Inr (r1, st1)"
+    and k1: "(\<lambda>(Sret, retArgs, xopt, res). cg_bind (cg_mapM ?argf (zip args (FI_TmArgs info))) (\<lambda>argsL.
+      cg_return (Sret @ concat (map fst argsL) @ [MS_Call xopt f (retArgs @ map (cg_size cg) tys @ map snd argsL)], res))) r1 st1 = Inr ((S, res), st')"
+    by (rule cg_bind_InrE)
+  obtain Sret retArgs xopt res1 where r1: "r1 = (Sret, retArgs, xopt, res1)" by (rule prod_cases4)
+  have rk: "?retK st = Inr ((Sret, retArgs, xopt, res1), st1)" using rk' r1 by simp
+  from k1[unfolded r1 case_prod_conv] obtain argsL st2 where lm: "cg_mapM ?argf (zip args (FI_TmArgs info)) st1 = Inr (argsL, st2)"
+    and k2: "cg_return (Sret @ concat (map fst argsL) @ [MS_Call xopt f (retArgs @ map (cg_size cg) tys @ map snd argsL)], res1) st2 = Inr ((S, res), st')"
+    by (rule cg_bind_InrE)
+  from k2 have S: "S = Sret @ concat (map fst argsL) @ [MS_Call xopt f (retArgs @ map (cg_size cg) tys @ map snd argsL)]"
+    and res: "res = res1" and st': "st' = st2" by (auto simp: cg_return_def)
+  note lm = lm[folded st']
+  (* the function's prototype *)
+  obtain fn where fn: "lookup_fun prog f = Some fn" and params: "map snd (MF_Params fn) = param_ctys info"
+    and mret: "MF_Ret fn = rk_cty (ret_kind (FI_ReturnType info))"
+    using cg_ok_prog[OF ok] info unfolding prog_ok_def by blast
+  (* the return kind *)
+  have retk: "\<exists>E1 ds1. lowered_ok prog rt (E, ds) st Sret st1 (E1, ds1) \<and> res_ok E1 info res1
+          \<and> list_all2 (\<lambda>e cty. expr_ok E1 e cty) retArgs (case ret_kind (FI_ReturnType info) of RK_Buf \<Rightarrow> [CTy_CharPtr] | _ \<Rightarrow> [])
+          \<and> (case xopt of None \<Rightarrow> True
+               | Some x \<Rightarrow> (\<exists>rty ty. MF_Ret fn = Some rty \<and> fmlookup E1 x = Some (VT_Scalar ty) \<and> ty_compat rty ty))"
+  proof (cases "ret_kind (FI_ReturnType info)")
+    case (RK_Scalar cty)
+    from rk[unfolded RK_Scalar RetKind.case] obtain x where fr: "fresh_name (CG_Fun cg) ''call'' st = Inr (x, st1)"
+      and eq: "Sret = [MS_DeclScalar x cty]" "retArgs = []" "xopt = Some x" "res1 = CR_Scalar (ME_Var x)"
+      by (auto simp: cg_return_def elim!: cg_bind_InrE)
+    let ?E1 = "fmupd x (VT_Scalar cty) E"
+    have d: "lowered_ok prog rt (E, ds) st [MS_DeclScalar x cty] st1 (?E1, x # ds)" by (rule fresh_scalar_ok[OF sc fr])
+    have "res_ok ?E1 info res1" unfolding eq(4) using RK_Scalar by (auto simp: expr_ok_def)
+    moreover have "case xopt of None \<Rightarrow> True | Some x \<Rightarrow> (\<exists>rty ty. MF_Ret fn = Some rty \<and> fmlookup ?E1 x = Some (VT_Scalar ty) \<and> ty_compat rty ty)"
+      unfolding eq(3) using mret RK_Scalar by (simp add: ty_compat_def)
+    ultimately show ?thesis using d unfolding eq(1,2) RK_Scalar by auto
+  next
+    case RK_Unit
+    have eq: "Sret = []" "retArgs = []" "xopt = None" "res1 = CR_Unit" "st1 = st"
+      using rk unfolding RK_Unit RetKind.case by (auto simp: cg_return_def)
+    show ?thesis unfolding eq RK_Unit using lowered_ok_nil[OF sc] RK_Unit by auto
+  next
+    case RK_Buf
+    from rk[unfolded RK_Buf RetKind.case] obtain r where fr: "fresh_name (CG_Fun cg) ''ret'' st = Inr (r, st1)"
+      and eq: "Sret = [MS_DeclBuf r (buf_size (cg_size cg ?retTy))]" "retArgs = [ME_AddrOf r]" "xopt = None" "res1 = CR_Place (ME_AddrOf r)"
+      by (auto simp: cg_return_def elim!: cg_bind_InrE)
+    let ?E1 = "fmupd r VT_Buf E"
+    have d: "lowered_ok prog rt (E, ds) st [MS_DeclBuf r (buf_size (cg_size cg ?retTy))] st1 (?E1, r # ds)"
+      by (rule fresh_buf_ok[OF sc fr cg_buf_size_ok[OF ok rwk rf]])
+    show ?thesis unfolding eq RK_Buf using d RK_Buf by (auto simp: expr_ok_def)
+  qed
+  then obtain E1 ds1 where lo1: "lowered_ok prog rt (E, ds) st Sret st1 (E1, ds1)" and ro1: "res_ok E1 info res1"
+    and ra1: "list_all2 (\<lambda>e cty. expr_ok E1 e cty) retArgs (case ret_kind (FI_ReturnType info) of RK_Buf \<Rightarrow> [CTy_CharPtr] | _ \<Rightarrow> [])"
+    and xo1: "case xopt of None \<Rightarrow> True
+               | Some x \<Rightarrow> (\<exists>rty ty. MF_Ret fn = Some rty \<and> fmlookup E1 x = Some (VT_Scalar ty) \<and> ty_compat rty ty)"
+    by blast
+  have ok1: "cg_ok prog E1 cg" using cg_ok_mono[OF lowered_ok_env_le'[OF lo1] ok] .
+  (* the arguments *)
+  have args: "\<exists>E' ds'. lowered_ok prog rt (E1, ds1) st1 (concat (map fst argsL)) st' (E', ds')
+       \<and> list_all2 (\<lambda>x y. expr_ok E' (snd y) ((\<lambda>(ty, vor, _). param_cty ty vor) (snd x))) (zip args (FI_TmArgs info)) argsL"
+  proof (rule cg_mapM_chain2[OF lm lowered_ok_scope[OF lo1]])
+    fix x sta y stb Ea dsa
+    assume x: "x \<in> set (zip args (FI_TmArgs info))" and fx: "?argf x sta = Inr (y, stb)"
+      and sca: "scope_ok prog (Ea, dsa) sta" and le: "env_le E1 Ea"
+    obtain a pty vor gh where xa: "x = (a, pty, vor, gh)" by (rule prod_cases4)
+    have mem: "(a, (pty, vor, gh)) \<in> set (zip args (FI_TmArgs info))" using x xa by simp
+    obtain i where i: "i < length args" and ai: "args ! i = a" and pi: "FI_TmArgs info ! i = (pty, vor, gh)"
+      using mem lens(1) by (auto simp: in_set_zip)
+    have aty: "core_term_type ?env NotGhost a = Some (apply_subst ?subst pty)"
+      using cat[unfolded call_args_typed_def, THEN conjunct2, THEN conjunct2, THEN conjunct2, rule_format, OF i] ai pi by simp
+    have ain: "a \<in> set args" using i ai by auto
+    have tfa': "term_fits ?env a" using tfa ain by simp
+    have oka: "cg_ok prog Ea cg" using cg_ok_mono[OF le ok1] .
+    show "\<exists>E2 ds2. lowered_ok prog rt (Ea, dsa) sta (fst y) stb (E2, ds2)
+            \<and> expr_ok E2 (snd y) ((\<lambda>(ty, vor, _). param_cty ty vor) (snd x))"
+    proof (cases "param_by_ptr pty vor")
+      case True
+      have la: "lower_addr cg a sta = Inr (y, stb)" using fx True unfolding xa by simp
+      obtain Sa ea where y: "y = (Sa, ea)" by (cases y)
+      obtain E2 ds2 where lo: "lowered_ok prog rt (Ea, dsa) sta Sa stb (E2, ds2)" and ea: "expr_ok E2 ea CTy_CharPtr"
+        by (rule la_okD[OF IHa[OF cl chk refl rk refl refl refl mem refl refl refl True] la[unfolded y] oka sca tfa'])
+      show ?thesis unfolding y xa using lo ea True by (auto simp: param_cty_def)
+    next
+      case False
+      have lt: "lower_term cg a sta = Inr (y, stb)" using fx False unfolding xa by simp
+      obtain Sa ea where y: "y = (Sa, ea)" by (cases y)
+      obtain E2 ds2 ty2 where ty2: "core_term_type ?env NotGhost a = Some ty2"
+        and lo: "lowered_ok prog rt (Ea, dsa) sta Sa stb (E2, ds2)" and ea: "expr_ok E2 ea (res_cty ty2)"
+        by (rule lt_okD[OF IHt[OF cl chk refl rk refl refl refl mem refl refl refl False] lt[unfolded y] oka sca tfa'])
+      obtain cty where sty: "scalar_ty pty = Some cty" using False by (auto simp: param_by_ptr_def)
+      have "ty2 = apply_subst ?subst pty" using ty2 aty by simp
+      then have "res_cty ty2 = cty" using res_cty_apply_subst_scalar[OF sty, of ?subst] by simp
+      moreover have "param_cty pty vor = cty" using False sty by (simp add: param_cty_def)
+      ultimately show ?thesis unfolding y xa using lo ea by auto
+    qed
+  next
+    fix E1 E2 x y assume "env_le E1 E2" "expr_ok E1 (snd y) ((\<lambda>(ty, vor, _). param_cty ty vor) (snd x))"
+    then show "expr_ok E2 (snd y) ((\<lambda>(ty, vor, _). param_cty ty vor) (snd x))" by (rule expr_ok_mono)
+  qed
+  from args obtain E2 ds2 where lo2: "lowered_ok prog rt (E1, ds1) st1 (concat (map fst argsL)) st' (E2, ds2)"
+    and al: "list_all2 (\<lambda>x y. expr_ok E2 (snd y) ((\<lambda>(ty, vor, _). param_cty ty vor) (snd x))) (zip args (FI_TmArgs info)) argsL"
+    by blast
+  have le2: "env_le E1 E2" by (rule lowered_ok_env_le'[OF lo2])
+  have ok2: "cg_ok prog E2 cg" using cg_ok_mono[OF le2 ok1] .
+  (* the call *)
+  have wktys: "list_all (is_well_kinded ?env) tys" using cat unfolding call_args_typed_def by simp
+  have szs: "list_all2 (\<lambda>e cty. expr_ok E2 e cty) (map (cg_size cg) tys) (map (\<lambda>_. CTy_U64) (FI_TyArgs info))"
+    using lens(2) wktys ftys by (auto simp: list_all2_conv_all_nth list_all_length intro!: cg_size_ok[OF ok2])
+  have argsl: "list_all2 (\<lambda>e cty. expr_ok E2 e cty) (map snd argsL) (map (\<lambda>(ty, vor, _). param_cty ty vor) (FI_TmArgs info))"
+  proof -
+    have len: "length argsL = length (FI_TmArgs info)" using list_all2_lengthD[OF al] lens(1) by simp
+    show ?thesis using al lens(1) unfolding list_all2_conv_all_nth by (auto simp: len)
+  qed
+  have ra2: "list_all2 (\<lambda>e cty. expr_ok E2 e cty) retArgs (case ret_kind (FI_ReturnType info) of RK_Buf \<Rightarrow> [CTy_CharPtr] | _ \<Rightarrow> [])"
+    using ra1 expr_ok_mono[OF le2] by (auto simp: list_all2_conv_all_nth)
+  have callargs: "list_all2 (\<lambda>e cty. expr_compat E2 e cty \<and> expr_wf e)
+       (retArgs @ map (cg_size cg) tys @ map snd argsL) (map snd (MF_Params fn))"
+    unfolding params param_ctys_def
+    by (rule list_all2_mono[OF list_all2_appendI[OF ra2 list_all2_appendI[OF szs argsl]]]) (auto simp: expr_ok_compat expr_ok_wf)
+  have xo2: "case xopt of None \<Rightarrow> True
+               | Some x \<Rightarrow> (\<exists>rty ty. MF_Ret fn = Some rty \<and> fmlookup E2 x = Some (VT_Scalar ty) \<and> ty_compat rty ty)"
+    using xo1 env_le_lookup[OF le2] by (auto split: option.splits)
+  have call: "lowered_ok prog rt (E2, ds2) st' [MS_Call xopt f (retArgs @ map (cg_size cg) tys @ map snd argsL)] st' (E2, ds2)"
+    by (rule call_ok[OF lowered_ok_scope[OF lo2] fn callargs xo2])
+  have ro2: "res_ok E2 info res" unfolding res using res_ok_mono[OF le2 ro1] .
+  have lo: "lowered_ok prog rt (E, ds) st S st' (E2, ds2)"
+    unfolding S using lowered_ok_append[OF lowered_ok_append[OF lo1 lo2] call] by simp
+  show "\<exists>E' ds'. lowered_ok prog rt (E, ds) st S st' (E', ds') \<and> res_ok E' info res" using lo ro2 by blast
 qed
 
 end
