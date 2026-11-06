@@ -265,6 +265,21 @@ definition desc_dim_exprs :: "MExpr \<Rightarrow> nat \<Rightarrow> MExpr list" 
 definition desc_data :: "MExpr \<Rightarrow> MExpr" where
   "desc_data p = ME_Load CTy_CharPtr p"
 
+(* The flat index and the element offset of a run-time index, without the
+   literal folding of flat_index_expr/elem_offset_expr (SizeExpr.thy): a
+   program may index with a literal that is out of bounds (a RuntimeError
+   in Core), and folding it could produce a literal outside uint64_t, which
+   program_wf forbids; unfolded, the arithmetic is simply undefined
+   behaviour on that (never taken) path. A one-dimensional index is used
+   as it is. *)
+fun flat_index_raw :: "MExpr list \<Rightarrow> MExpr list \<Rightarrow> MExpr" where
+  "flat_index_raw [n] [i] = i"
+| "flat_index_raw (n # ns) (i # is) = ME_Binop CB_Add i (ME_Binop CB_Mul n (flat_index_raw ns is))"
+| "flat_index_raw _ _ = u64_lit 0"
+
+definition elem_offset_raw :: "MExpr \<Rightarrow> MExpr list \<Rightarrow> MExpr list \<Rightarrow> MExpr" where
+  "elem_offset_raw esz ns is = ME_Binop CB_Mul esz (flat_index_raw ns is)"
+
 (* The address of element idx (index expressions) of an array of the
    given element type and dimensions at place p: for fixed dimensions the
    element is inside the bytes at p; for a descriptor it is in the data
@@ -273,9 +288,9 @@ definition desc_data :: "MExpr \<Rightarrow> MExpr" where
 definition elem_addr :: "CoreTyEnv \<Rightarrow> CoreType \<Rightarrow> CoreDimension list \<Rightarrow> MExpr \<Rightarrow> MExpr list \<Rightarrow> MExpr" where
   "elem_addr env elemTy dims p idxs =
     (if dims_all_fixed dims
-     then ptr_add p (elem_offset_expr (size_of env elemTy) (fixed_dim_exprs dims) idxs)
+     then ME_PtrAdd p (elem_offset_raw (size_of env elemTy) (fixed_dim_exprs dims) idxs)
      else ME_PtrAdd (desc_data p)
-            (elem_offset_expr (size_of env elemTy) (desc_dim_exprs p (length dims)) idxs))"
+            (elem_offset_raw (size_of env elemTy) (desc_dim_exprs p (length dims)) idxs))"
 
 (* Does an array type have an allocatable dimension? Such an array may be
    reallocated through a ref, so references into it are lazy (section 3.5). *)

@@ -290,14 +290,19 @@ where
     cg_return (S, ME_Unop (unop_of op) e)
    }"
 
-| "lower_term cg (CoreTm_Binop op t1 t2) = do {
-    (S1, e1) \<leftarrow> lower_term cg t1;
-    (S2, e2) \<leftarrow> lower_term cg t2;
+| "lower_term cg (CoreTm_Binop op t1 t2) =
     (case binop_of op of
-       Some cop \<Rightarrow> cg_return (S1 @ S2, ME_Binop cop e1 e2)
+       Some cop \<Rightarrow> do {
+         (S1, e1) \<leftarrow> lower_term cg t1;
+         (S2, e2) \<leftarrow> lower_term cg t2;
+         cg_return (S1 @ S2, ME_Binop cop e1 e2) }
      | None \<Rightarrow> do {
-         \<comment> \<open>short circuit: the right operand's statements run only when needed\<close>
+         \<comment> \<open>short circuit: the right operand's statements run only when needed
+             (the temporary is created before the right operand is lowered, so
+             that the generator's state follows the order of the statements)\<close>
+         (S1, e1) \<leftarrow> lower_term cg t1;
          tmp \<leftarrow> fresh_name (CG_Fun cg) ''sc'';
+         (S2, e2) \<leftarrow> lower_term cg t2;
          cg_return (S1 @ [MS_DeclScalar tmp CTy_U8]
                     @ (if op = CoreBinop_And
                        then [MS_Assign tmp e1, MS_If (ME_Var tmp) (S2 @ [MS_Assign tmp e2]) []]
@@ -305,8 +310,7 @@ where
                        then [MS_Assign tmp e1, MS_If (ME_Var tmp) [] (S2 @ [MS_Assign tmp e2])]
                        else [MS_Assign tmp (ME_Unop CU_Not e1),
                              MS_If (ME_Var tmp) [] (S2 @ [MS_Assign tmp e2])]),
-                    ME_Var tmp) })
-   }"
+                    ME_Var tmp) })"
 
 | "lower_term cg (CoreTm_Let x t1 t2) = do {
     ty1 \<leftarrow> ty_of cg t1;
@@ -330,7 +334,7 @@ where
      | None \<Rightarrow> do {
          \<comment> \<open>a void call used as a term of the unit type: a dummy place\<close>
          tmp \<leftarrow> fresh_name (CG_Fun cg) ''unit'';
-         cg_return ([MS_DeclBuf tmp (u64_lit 1)] @ S, ME_AddrOf tmp) })
+         cg_return (S @ [MS_DeclBuf tmp (u64_lit 1)], ME_AddrOf tmp) })
    }"
 
 | "lower_term cg (CoreTm_VariantCtor c tys t) = do {
