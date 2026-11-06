@@ -2235,4 +2235,41 @@ lemma la_Record:
   shows "la_ok prog rt cg (CoreTm_Record flds)"
   by (rule la_from_lt[OF IH]) (auto simp: lower_addr.simps split: option.splits if_splits)
 
+
+section \<open>The term theorem\<close>
+
+(* The mutual induction over the lowering functions: every case is one of
+   the lemmas above, whose hypotheses are the induction hypotheses. *)
+theorem lower_ok:
+  "lt_ok prog rt cg tm" "la_ok prog rt cg tm" "lc_ok prog rt cg f tys args"
+  by (induction rule: lower_term_lower_addr_lower_call.induct)
+     ((rule lt_LitBool lt_LitInt lt_LitArray lt_Var lt_Cast lt_Unop lt_Binop lt_Let lt_Ghost(1) lt_FunctionCall
+            lt_VariantCtor lt_Record lt_RecordProj lt_VariantProj lt_ArrayProj lt_Match lt_Sizeof lt_Ghost(2) lt_Default
+            la_Var la_RecordProj la_VariantProj la_ArrayProj la_Cast la_LitBool la_LitInt la_LitArray la_Unop la_Binop
+            la_Let la_Ghost(1) la_FunctionCall la_VariantCtor la_Record la_Match la_Sizeof la_Ghost(2) la_Default lc_call;
+       assumption)+)
+
+corollary lower_term_ok:
+  assumes "lower_term cg tm st = Inr ((S, e), st')" and "cg_ok prog E cg" and "scope_ok prog (E, ds) st"
+    and "term_fits (CG_TyEnv cg) tm"
+  obtains E' ds' ty where "core_term_type (CG_TyEnv cg) NotGhost tm = Some ty"
+    and "lowered_ok prog rt (E, ds) st S st' (E', ds')" and "expr_ok E' e (res_cty ty)"
+  by (rule lt_okD[OF lower_ok(1) assms])
+
+corollary lower_addr_ok:
+  assumes "lower_addr cg tm st = Inr ((S, a), st')" and "cg_ok prog E cg" and "scope_ok prog (E, ds) st"
+    and "term_fits (CG_TyEnv cg) tm"
+  obtains E' ds' where "lowered_ok prog rt (E, ds) st S st' (E', ds')" and "expr_ok E' a CTy_CharPtr"
+  by (rule la_okD[OF lower_ok(2) assms])
+
+corollary lower_call_ok:
+  assumes "lower_call cg f tys args st = Inr ((S, res), st')" and "cg_ok prog E cg" and "scope_ok prog (E, ds) st"
+    and "fmlookup (TE_Functions (CG_TyEnv cg)) f = Some info"
+    and "call_args_typed (CG_TyEnv cg) info tys args"
+    and "\<forall>t \<in> set args. term_fits (CG_TyEnv cg) t" and "\<forall>ty \<in> set tys. fits (CG_TyEnv cg) ty"
+    and "is_well_kinded (CG_TyEnv cg) (apply_subst (fmap_of_list (zip (FI_TyArgs info) tys)) (FI_ReturnType info))"
+    and "fits (CG_TyEnv cg) (apply_subst (fmap_of_list (zip (FI_TyArgs info) tys)) (FI_ReturnType info))"
+  obtains E' ds' where "lowered_ok prog rt (E, ds) st S st' (E', ds')" and "res_ok E' info res"
+  by (rule lc_okD[OF lower_ok(3) assms])
+
 end
