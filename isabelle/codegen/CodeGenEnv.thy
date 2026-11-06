@@ -213,10 +213,25 @@ definition size_tv :: "string \<Rightarrow> MExpr" where
 definition size_of :: "CoreTyEnv \<Rightarrow> CoreType \<Rightarrow> MExpr" where
   "size_of env ty = size_expr env size_tv ty"
 
+(* A size expression that is syntactically positive: a positive literal,
+   the pointer size, a sum with a positive summand, a product or maximum
+   of positive factors. *)
+fun expr_positive :: "MExpr \<Rightarrow> bool" where
+  "expr_positive (ME_Int _ _ i) = (0 < i)"
+| "expr_positive ME_PtrSize = True"
+| "expr_positive (ME_Binop CB_Add a b) = (expr_positive a \<or> expr_positive b)"
+| "expr_positive (ME_Binop CB_Mul a b) = (expr_positive a \<and> expr_positive b)"
+| "expr_positive (ME_Binop CB_Max a b) = (expr_positive a \<or> expr_positive b)"
+| "expr_positive _ = False"
+
 (* The size of a buffer declaration: at least one byte (C forbids
-   zero-length arrays; risk 12). Folded when the size is a literal. *)
+   zero-length arrays; risk 12). The max is omitted when the size is
+   syntactically positive (every literal size but 0, every descriptor
+   size), so that such buffers are printed with constant sizes rather
+   than as VLAs (gcc 13 at -O2 reports a spurious dangling pointer to a
+   VLA descriptor temporary passed to an inlined function; section 11.3). *)
 definition buf_size :: "MExpr \<Rightarrow> MExpr" where
-  "buf_size e = e_max (u64_lit 1) e"
+  "buf_size e = (if expr_positive e then e else e_max (u64_lit 1) e)"
 
 (* p + off, with a zero literal offset folded away. *)
 definition ptr_add :: "MExpr \<Rightarrow> MExpr \<Rightarrow> MExpr" where

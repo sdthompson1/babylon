@@ -107,7 +107,8 @@ fun cg_error_to_strings :: "CGError \<Rightarrow> string list" where
    (match_compile_module), runs the static checks of the code generator on it
    (sizeable_check), and generates the MiniC program (codegen_module, with the
    extern C-name map extern_name_map of the renamed modules and the root
-   module's main as the Core main). The driver runs extern_clashes on the
+   module's main, whose Core name is package-qualified: main:Root.main, as
+   the loader names the modules of the package main). The driver runs extern_clashes on the
    program and prints it (minic/DESIGN.md, section 11).
 
    The link should always succeed on elaborator output, and the hypothesis of the
@@ -146,7 +147,7 @@ fun run_compiler :: "(string \<times> string) list \<Rightarrow> CompileResult"
                               Some err \<Rightarrow> CR_Errors (size_error_to_strings err)
                             | None \<Rightarrow>
                                 (case codegen_module (extern_name_map babModules)
-                                        (rootModName @ ''.main'') compiled of
+                                        (''main:'' @ rootModName @ ''.main'') compiled of
                                    Inl err \<Rightarrow> CR_Errors (cg_error_to_strings err)
                                  | Inr prog \<Rightarrow> CR_Success prog))))))"
 

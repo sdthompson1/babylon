@@ -120,7 +120,7 @@ main = realMain `catch` handler
         hPutStrLn stderr ("Main: " ++ displayException e)
         exitWith (ExitFailure 3)
 
-usage :: IO ()
+usage :: IO a
 usage = do
   hPutStrLn stderr "Usage: Main [--uninit=memset|omit] [-o <out.c>] [Name=]<RootModule.b> [[Name=]<OtherModule.b> ...]"
   hPutStrLn stderr "   or: Main --minic [--uninit=memset|omit] <program> <out.c> [<expected-output.txt>]"
