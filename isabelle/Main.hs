@@ -120,25 +120,65 @@ main = realMain `catch` handler
         hPutStrLn stderr ("Main: " ++ displayException e)
         exitWith (ExitFailure 3)
 
+usage :: IO ()
+usage = do
+  hPutStrLn stderr "Usage: Main [--uninit=memset|omit] [-o <out.c>] [Name=]<RootModule.b> [[Name=]<OtherModule.b> ...]"
+  hPutStrLn stderr "   or: Main --minic [--uninit=memset|omit] <program> <out.c> [<expected-output.txt>]"
+  exitWith (ExitFailure 2)
+
+-- The options of the compiler mode: the MS_Uninit printing mode, the output
+-- file (if any), and the module arguments.
+data Options = Options { optUninit :: UninitPrint, optOutput :: Maybe FilePath, optFiles :: [Prelude.String] }
+
+parseOptions :: [Prelude.String] -> Options -> IO Options
+parseOptions args opts =
+  case args of
+    [] -> return opts
+    "--uninit=memset" : rest -> parseOptions rest opts { optUninit = UP_Memset }
+    "--uninit=omit" : rest -> parseOptions rest opts { optUninit = UP_Omit }
+    "-o" : path : rest -> parseOptions rest opts { optOutput = Just path }
+    ('-' : _) : _ -> usage
+    file : rest -> parseOptions rest opts { optFiles = optFiles opts ++ [file] }
+
+-- Compiler mode: "Main [--uninit=MODE] [-o out.c] Root.b Other.b ..." runs
+-- the whole pipeline (front end, elaboration, link, normalisation, ghost
+-- erasure, match compilation, the size check and the code generator), then
+-- checks the generated MiniC program for extern C names that clash with
+-- mangled names (extern_clashes) and, if -o was given, prints it as C to the
+-- file. Without -o it only reports success or failure (test/isabelle_test.sh
+-- runs it this way on every test case). See isabelle/minic/DESIGN.md,
+-- section 11.
+compilerMain :: Options -> IO ()
+compilerMain opts = do
+  let namedFiles = map parseArg (optFiles opts)
+  contents <- mapM (readBinaryFile . snd) namedFiles
+  let modules = zipWith (\(n, _) c -> (toIsabelleString n,
+                                       toIsabelleString c))
+                        namedFiles contents
+  case run_compiler modules of
+    CR_Errors errs -> do
+      mapM_ (hPutStrLn stderr . fromIsabelleString) errs
+      exitWith (ExitFailure 1)
+    CR_Success prog -> do
+      case extern_clashes prog of
+        [] -> return ()
+        clashes -> do
+          mapM_ (hPutStrLn stderr . fromIsabelleString . extern_clash_message) clashes
+          exitWith (ExitFailure 1)
+      case optOutput opts of
+        Nothing -> putStrLn "Success"
+        Just path -> do
+          let popts = pO_Uninit_update (const (optUninit opts)) default_print_opts
+          writeBinaryFile path (fromIsabelleString (print_program popts prog))
+
 realMain :: IO ()
 realMain = do
   args <- getArgs
   case args of
-    [] -> do
-      hPutStrLn stderr "Usage: Main [Name=]<RootModule.b> [[Name=]<OtherModule.b> ...]"
-      hPutStrLn stderr "   or: Main --minic [--uninit=memset|omit] <program> <out.c> [<expected-output.txt>]"
-      exitWith (ExitFailure 2)
+    [] -> usage
     "--minic" : "--uninit=memset" : rest -> minicArgs UP_Memset rest
     "--minic" : "--uninit=omit" : rest -> minicArgs UP_Omit rest
     "--minic" : rest -> minicArgs UP_Memset rest
     _ -> do
-      let namedFiles = map parseArg args
-      contents <- mapM (readBinaryFile . snd) namedFiles
-      let modules = zipWith (\(n, _) c -> (toIsabelleString n,
-                                           toIsabelleString c))
-                            namedFiles contents
-      case run_compiler modules of
-        CR_Success -> putStrLn "Success"
-        CR_Errors errs -> do
-          mapM_ (hPutStrLn stderr . fromIsabelleString) errs
-          exitWith (ExitFailure 1)
+      opts <- parseOptions args (Options UP_Memset Nothing [])
+      if null (optFiles opts) then usage else compilerMain opts

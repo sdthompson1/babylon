@@ -6,6 +6,8 @@ theory CodeExport
     "../minic/MiniCPrint"
     "../minic/MiniCExample"
     "../codegen/SizeBound"
+    "../codegen/ExternNames"
+    "../codegen/CodeGen"
     "HOL-Library.Code_Binary_Nat"
 
     (* TODO: maybe explore other performance options, e.g. Code_Target_Numeral, or
@@ -24,10 +26,10 @@ code_identifier
 
 (* Code Export *)
 
-(* Result of a compiler run: either success, or a list of human-readable
-   error messages. *)
+(* Result of a compiler run: either success, with the generated MiniC
+   program, or a list of human-readable error messages. *)
 datatype CompileResult =
-  CR_Success
+  CR_Success MProgram
   | CR_Errors "string list"
 
 (* The pointer size bound P at which the static size check of
@@ -65,6 +67,32 @@ fun size_error_to_strings :: "SizeError \<Rightarrow> string list" where
      [''the type '' @ quote (core_type_to_string ty) @ '' of the global '' @ quote g
       @ '' needs more than 18446744073709551615 bytes'']"
 
+(* The code generator's errors in the user's terms (CodeGen.thy, section
+   3.9 of minic/DESIGN.md). *)
+fun cg_error_to_strings :: "CGError \<Rightarrow> string list" where
+  "cg_error_to_strings (CGE_MainMissing f) =
+     [''main function '' @ quote f @ '' not found (or not exported in module interface)'']"
+| "cg_error_to_strings (CGE_MainWrongType f) =
+     [quote f @ '' has the wrong type - expected a non-ghost function with no arguments and no return value'']"
+| "cg_error_to_strings CGE_FunctionNamedMain =
+     [''a function or global is named '' @ quote ''main'' @ '', which the generated C program needs for itself'']"
+| "cg_error_to_strings (CGE_DollarName x) =
+     [''the name '' @ quote x @ '' contains the character '' @ quote [dollar] @ '', which the code generator reserves'']"
+| "cg_error_to_strings (CGE_NameIsFunction f x) =
+     [''in function '' @ quote f @ '', the variable '' @ quote x @ '' has the name of a function'']"
+| "cg_error_to_strings (CGE_GlobalIsFunction g) =
+     [''the global '' @ quote g @ '' has the name of a function'']"
+| "cg_error_to_strings (CGE_DuplicateParam f x) =
+     [''function '' @ quote f @ '' has two parameters named '' @ quote x]"
+| "cg_error_to_strings (CGE_ParamCount f) =
+     [''internal compiler error: function '' @ quote f @ '': parameter names and signature disagree'']"
+| "cg_error_to_strings (CGE_GlobalHandle g) =
+     [''the global '' @ quote g @ '' holds a non-null value of an extern type'']"
+| "cg_error_to_strings (CGE_Ghost f) =
+     [''internal compiler error: a ghost construct survived erasure in function '' @ quote f]"
+| "cg_error_to_strings (CGE_Internal f msg) =
+     [''internal compiler error: in '' @ quote f @ '': '' @ msg]"
+
 (* Main compiler entry point for testing.
 
    The input is a list of (module name, module source text) pairs; the first
@@ -72,11 +100,15 @@ fun size_error_to_strings :: "SizeError \<Rightarrow> string list" where
    modules are placed into a single package named "main".
 
    This runs the front end (lexer, parser, loader, renamer), and then, if that
-   succeeds, elaborates all the modules to Core (which includes typechecking
-   them), runs the whole-program link, normalizes the linked module
+   succeeds, checks the explicit C names of extern functions
+   (invalid_extern_names), elaborates all the modules to Core (which includes
+   typechecking them), runs the whole-program link, normalizes the linked module
    (normalize_module), erases ghost code, compiles the pattern matches to flat ones
-   (match_compile_module), and runs the static checks of the code generator on it
-   (sizeable_check).
+   (match_compile_module), runs the static checks of the code generator on it
+   (sizeable_check), and generates the MiniC program (codegen_module, with the
+   extern C-name map extern_name_map of the renamed modules and the root
+   module's main as the Core main). The driver runs extern_clashes on the
+   program and prints it (minic/DESIGN.md, section 11).
 
    The link should always succeed on elaborator output, and the hypothesis of the
    match compilation pass (every non-flat match has a variable scrutinee) should
@@ -96,6 +128,10 @@ fun run_compiler :: "(string \<times> string) list \<Rightarrow> CompileResult"
    in case compiler_front_end [rawPkg] ''main'' rootModName of
         Inl errs \<Rightarrow> CR_Errors (map frontend_error_to_string errs)
       | Inr babModules \<Rightarrow>
+          if invalid_extern_names babModules \<noteq> []
+          then CR_Errors (map (\<lambda>loc. loc_prefix loc @ ''Invalid '' @ quote ''extern'' @ '' name'')
+                              (invalid_extern_names babModules))
+          else
           (case elab_program babModules of
              Inl err \<Rightarrow> CR_Errors (pipeline_error_to_strings err)
            | Inr ps \<Rightarrow> 
@@ -105,10 +141,14 @@ fun run_compiler :: "(string \<times> string) list \<Rightarrow> CompileResult"
                   (let erased = erase_ghost_module (normalize_module linked)
                    in if \<not> core_module_match_scrutinees_ok erased
                       then CR_Errors [''internal error: match scrutinee is not a variable'']
-                      else (case sizeable_check codegen_ptr_size_bound
-                                   (match_compile_module erased) of
+                      else (let compiled = match_compile_module erased
+                            in case sizeable_check codegen_ptr_size_bound compiled of
                               Some err \<Rightarrow> CR_Errors (size_error_to_strings err)
-                            | None \<Rightarrow> CR_Success)))))"
+                            | None \<Rightarrow>
+                                (case codegen_module (extern_name_map babModules)
+                                        (rootModName @ ''.main'') compiled of
+                                   Inl err \<Rightarrow> CR_Errors (cg_error_to_strings err)
+                                 | Inr prog \<Rightarrow> CR_Success prog))))))"
 
 (* Also exported: the MiniC-to-C printer (print_program, with its options:
    default_print_opts, and the two ways of printing MS_Uninit), the check
@@ -117,8 +157,8 @@ fun run_compiler :: "(string \<times> string) list \<Rightarrow> CompileResult"
    programs with the stdout the MiniC interpreter computes for them
    (minic_examples), which the driver (Main.hs, option --minic) checks and
    prints to a .c file for the C-level check described in minic/DESIGN.md.
-   There is no code generator yet (stage 5), so these are the only MiniC
-   programs. *)
+   The driver applies the same check and printer to the program that
+   run_compiler generates (option -o). *)
 export_code run_compiler CR_Success CR_Errors
   print_program default_print_opts PO_Uninit_update UP_Memset UP_Omit
   extern_clashes extern_clash_message minic_examples

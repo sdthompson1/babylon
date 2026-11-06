@@ -182,6 +182,10 @@ session Babylon = "HOL-Library" +
     "codegen/RepValPath"
     "codegen/RepValDefault"
     "codegen/StateRep"
+    "codegen/ExternNames"
+    "codegen/CodeGenEnv"
+    "codegen/CodeGenTerm"
+    "codegen/CodeGen"
 
     (* front_end *)
     "front_end/BabRenamer"
