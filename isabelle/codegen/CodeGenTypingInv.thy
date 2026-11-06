@@ -61,12 +61,18 @@ and ll_ok :: "MTyEnv \<Rightarrow> CoreTyEnv \<Rightarrow> LazyLv \<Rightarrow> 
 | "ll_ok E env (LL_Base rep ty) =
     (rep_ok E env ty rep \<and> (\<forall>ll. rep \<noteq> VR_Lazy ll)
      \<and> is_well_kinded env ty \<and> size_fits env 0 (\<lambda>_. 0) ty)"
-| "ll_ok E env (LL_Field ll f ty) = (ll_ok E env ll \<and> is_well_kinded env ty \<and> size_fits env 0 (\<lambda>_. 0) ty)"
-| "ll_ok E env (LL_Payload ll c ty) = (ll_ok E env ll \<and> is_well_kinded env ty \<and> size_fits env 0 (\<lambda>_. 0) ty)"
+| "ll_ok E env (LL_Field ll f ty) =
+    (ll_ok E env ll \<and> is_well_kinded env ty \<and> size_fits env 0 (\<lambda>_. 0) ty
+     \<and> (\<exists>flds. ll_type ll = CoreTy_Record flds \<and> map_of flds f = Some ty))"
+| "ll_ok E env (LL_Payload ll c ty) =
+    (ll_ok E env ll \<and> is_well_kinded env ty \<and> size_fits env 0 (\<lambda>_. 0) ty
+     \<and> (\<exists>d args. ll_type ll = CoreTy_Datatype d args))"
 | "ll_ok E env (LL_Index ll vs ty) =
     (ll_ok E env ll \<and> is_well_kinded env ty \<and> size_fits env 0 (\<lambda>_. 0) ty
-     \<and> (\<forall>v \<in> set vs. fmlookup E v = Some (VT_Scalar CTy_U64)))"
-| "ll_ok E env (LL_Cast ll ty) = (ll_ok E env ll \<and> is_well_kinded env ty \<and> size_fits env 0 (\<lambda>_. 0) ty)"
+     \<and> (\<forall>v \<in> set vs. fmlookup E v = Some (VT_Scalar CTy_U64))
+     \<and> (\<exists>dims. ll_type ll = CoreTy_Array ty dims \<and> length vs = length dims))"
+| "ll_ok E env (LL_Cast ll ty) =
+    (ll_ok E env ll \<and> is_well_kinded env ty \<and> size_fits env 0 (\<lambda>_. 0) ty \<and> array_cast_ok (ll_type ll) ty)"
 
 (* The size check reads only the datatype tables of the environment. *)
 lemma tsz_fits_cong_env:
@@ -357,6 +363,9 @@ lemma lowered_ok_scope: "lowered_ok prog rt sc st S st' sc' \<Longrightarrow> sc
   by (simp add: lowered_ok_def)
 
 lemma lowered_ok_env_le: "lowered_ok prog rt sc st S st' sc' \<Longrightarrow> env_le (fst sc) (fst sc')"
+  by (simp add: lowered_ok_def)
+
+lemma lowered_ok_env_le': "lowered_ok prog rt (E, ds) st S st' (E', ds') \<Longrightarrow> env_le E E'"
   by (simp add: lowered_ok_def)
 
 lemma lowered_ok_used_le: "lowered_ok prog rt sc st S st' sc' \<Longrightarrow> used_le st st'"
@@ -664,7 +673,6 @@ lemma build_desc_ok:
   assumes "build_desc cg dimsF toTy p st = Inr ((S, a), st')"
     and "scope_ok prog (E, ds) st" and "expr_ok E p CTy_CharPtr"
     and "u64_ok E (cg_size cg toTy)" and "array_dims_well_kinded dimsF"
-    and "\<not> dims_all_fixed (case toTy of CoreTy_Array _ d \<Rightarrow> d | _ \<Rightarrow> [])"
     and "8 * length dimsF < u64_max"
   shows "\<exists>E' ds'. lowered_ok prog rt (E, ds) st S st' (E', ds') \<and> expr_ok E' a CTy_CharPtr"
 proof -
@@ -686,7 +694,7 @@ proof -
         [MS_Store CTy_U64 (ptr_add (ME_AddrOf tmp) (dim_off k)) (u64_lit (dim_size (dimsF ! k)))] st1 (?E1, tmp # ds)"
   proof -
     fix k assume k: "k < length dimsF"
-    have "8 * k < u64_max" using k assms(7) by simp
+    have "8 * k < u64_max" using k assms(6) by simp
     then have off: "expr_ok ?E1 (ptr_add (ME_AddrOf tmp) (dim_off k)) CTy_CharPtr"
       by (intro expr_ok_ptr_add[OF tmp]) (simp_all add: u64_ok_def)
     have "dim_size (dimsF ! k) < u64_max" using k assms(5) by (intro dim_size_lt_u64_max) auto

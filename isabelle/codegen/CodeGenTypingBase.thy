@@ -649,7 +649,7 @@ qed
 
 lemma elem_addr_type:
   assumes "sizes_in E (type_tyvars elemTy)" and "size_fits env 0 (\<lambda>_. 0) elemTy"
-    and "array_dims_well_kinded dims" and "8 * length dims < u64_max"
+    and "array_dims_well_kinded dims" and "\<not> dims_all_fixed dims \<longrightarrow> 8 * length dims < u64_max"
     and "expr_type E p = Some CTy_CharPtr" and "expr_wf p"
     and "\<forall>e \<in> set idxs. u64_ok E e"
   shows "expr_type E (elem_addr env elemTy dims p idxs) = Some CTy_CharPtr"
@@ -657,17 +657,24 @@ lemma elem_addr_type:
 proof -
   have esz: "u64_ok E (size_of env elemTy)" using assms(1,2) by (rule size_of_ok)
   note fixed = fixed_dim_exprs_ok[OF assms(3)]
-  note desc = desc_dim_exprs_ok[OF assms(4,5,6)]
-  have off_fixed: "u64_ok E (elem_offset_raw (size_of env elemTy) (fixed_dim_exprs dims) idxs)"
-    unfolding elem_offset_raw_def
-    by (intro u64_ok_binop[OF esz u64_ok_flat_index_raw[OF fixed assms(7)]]) simp
-  have off_desc: "u64_ok E (elem_offset_raw (size_of env elemTy) (desc_dim_exprs p (length dims)) idxs)"
-    unfolding elem_offset_raw_def
-    by (intro u64_ok_binop[OF esz u64_ok_flat_index_raw[OF desc assms(7)]]) simp
+  have off: "u64_ok E (if dims_all_fixed dims then elem_offset_raw (size_of env elemTy) (fixed_dim_exprs dims) idxs
+                       else elem_offset_raw (size_of env elemTy) (desc_dim_exprs p (length dims)) idxs)"
+  proof (cases "dims_all_fixed dims")
+    case True
+    then show ?thesis
+      unfolding elem_offset_raw_def
+      by (simp, intro u64_ok_binop[OF esz u64_ok_flat_index_raw[OF fixed assms(7)]]) simp
+  next
+    case False
+    note desc = desc_dim_exprs_ok[OF assms(4)[rule_format, OF False] assms(5,6)]
+    show ?thesis using False
+      unfolding elem_offset_raw_def
+      by (simp, intro u64_ok_binop[OF esz u64_ok_flat_index_raw[OF desc assms(7)]]) simp
+  qed
   show "expr_type E (elem_addr env elemTy dims p idxs) = Some CTy_CharPtr"
-    using assms(5) off_fixed off_desc by (auto simp: elem_addr_def desc_data_def u64_ok_def)
+    using assms(5) off by (auto simp: elem_addr_def desc_data_def u64_ok_def split: if_splits)
   show "expr_wf (elem_addr env elemTy dims p idxs)"
-    using assms(6) off_fixed off_desc by (auto simp: elem_addr_def desc_data_def u64_ok_def)
+    using assms(6) off by (auto simp: elem_addr_def desc_data_def u64_ok_def split: if_splits)
 qed
 
 end
