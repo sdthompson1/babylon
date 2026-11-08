@@ -186,6 +186,12 @@ session Babylon = "HOL-Library" +
     "codegen/CodeGenEnv"
     "codegen/CodeGenTerm"
     "codegen/CodeGen"
+    "codegen/CodeGenTypingBase"
+    "codegen/CodeGenTypingInv"
+    "codegen/CodeGenTypingHelpers"
+    "codegen/CodeGenTypingTerm"
+    "codegen/CodeGenTypingStmt"
+    "codegen/CodeGenTyping"
 
     (* front_end *)
     "front_end/BabRenamer"

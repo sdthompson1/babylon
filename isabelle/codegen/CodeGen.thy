@@ -322,7 +322,11 @@ function init_value :: "CoreTyEnv \<Rightarrow> string \<Rightarrow> CoreType \<
     (case ty of
        CoreTy_Datatype dtName args \<Rightarrow>
          (case fmlookup (TE_DataCtors env) c of
-            Some (_, tyvars, payloadTy) \<Rightarrow> do {
+            Some (_, tyvars, payloadTy) \<Rightarrow>
+              \<comment> \<open>the instantiated payload type must fit (its offsets are literals)\<close>
+              if \<not> size_fits env 0 (\<lambda>_. 0) (apply_subst (fmap_of_list (zip tyvars args)) payloadTy)
+              then cg_fail (CGE_Internal g ''payload of a global value too large'')
+              else do {
               (gs, S) \<leftarrow> init_value env g (apply_subst (fmap_of_list (zip tyvars args)) payloadTy) p
                            (ptr_add base (tag_off env dtName));
               cg_return (gs, MS_Store (tag_ty env dtName) base (tag_lit env dtName c) # S) }
@@ -343,6 +347,10 @@ function init_value :: "CoreTyEnv \<Rightarrow> string \<Rightarrow> CoreType \<
          in if dims_all_fixed dims then do {
               rs \<leftarrow> initElems base;
               cg_return (concat (map fst rs), concat (map snd rs)) }
+            else if \<not> (size_fits env 0 (\<lambda>_. 0) elemTy \<and> sizes_count sizes < u64_max
+                       \<and> type_size env 0 (\<lambda>_. 0) elemTy * sizes_count sizes < u64_max)
+            then \<comment> \<open>the element offsets and the data buffer's size are literals: they must fit\<close>
+                 cg_fail (CGE_Internal g ''global array value too large'')
             else do {
               \<comment> \<open>a descriptor: the sizes, and (if there are elements) a data buffer global\<close>
               let dimStores = map (\<lambda>k. MS_Store CTy_U64 (ptr_add base (dim_off k)) (u64_lit (nat (sizes ! k))))
