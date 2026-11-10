@@ -46,8 +46,10 @@ definition temp_for :: "CGEnv \<Rightarrow> string \<Rightarrow> CoreType \<Righ
 definition temp_result :: "CoreType \<Rightarrow> string \<Rightarrow> MExpr" where
   "temp_result ty tmp = (case scalar_ty ty of Some _ \<Rightarrow> ME_Var tmp | None \<Rightarrow> ME_AddrOf tmp)"
 
-(* The address of a temporary (scalar or buffer): ME_AddrOf. The statement
-   that stores a result into a temporary. *)
+(* The statement that stores a result (a value or a place) into a temporary:
+   an assignment for a scalar type, a copy into the buffer for an aggregate.
+   (No helper is needed for the address of a temporary: it is ME_AddrOf tmp
+   for a scalar and a buffer temporary alike.) *)
 definition temp_store :: "CGEnv \<Rightarrow> CoreType \<Rightarrow> string \<Rightarrow> MExpr \<Rightarrow> MStmt" where
   "temp_store cg ty tmp e =
     (case scalar_ty ty of
