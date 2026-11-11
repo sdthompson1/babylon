@@ -1,0 +1,2 @@
+src/AssignCallOrder.b:31:5: Array index might be out of bounds
+src/AssignCallOrder.b:41:5: Assert might not hold
