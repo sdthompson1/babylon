@@ -1727,14 +1727,9 @@ where
 
   (* Assignment from an impure call *)
 | "interp_statement d (Suc fuel) state (CoreStmt_AssignCall _ lhsLvalue castOpt fnName argTys argTms) =
-    \<comment> \<open>The rhs is evaluated first: run the (possibly impure) call, including
-        the write-back of its ref arguments, and apply the optional cast. Only
-        then is the lhs resolved to an address and path, in the state after
-        the call, and the result stored there. So in a[i] = f(i), where f
-        modifies i, the element written is the one selected by the new value
-        of i. This is the order the verifier uses (it translates the call and
-        then builds the lhs's reference chain in the post-call state), and
-        the code generators follow it.\<close>
+    \<comment> \<open>Note the order of operations: evaluate the rhs first, then resolve the lhs to
+        an address and path (in the new state). So in a[i] = f(i), where f modifies i,
+        the element written is determined by the new value of i, not the old.\<close>
     (case interp_function_call d fuel state fnName argTys argTms of
       Inr (newState, retVal) \<Rightarrow>
         (case apply_cast_opt castOpt retVal of
