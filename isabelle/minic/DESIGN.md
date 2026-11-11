@@ -881,7 +881,7 @@ representation of a global is `global_rep` (section 3.7), of a parameter
 | `VarDeclCall x ty cast f tys args` | declare `x`; the call of section 3.4; apply the cast (an integer cast of the scalar result, or an array cast of the result place as in section 3.3); copy/assign into `x` |
 | `VarDecl NotGhost r Ref ty lv` | section 3.5: either `MS_DeclScalar r CharPtr; r = address(lv)`, or (lazy) freeze the indices of `lv` into fresh locals and record the term |
 | `Assign NotGhost ty lv t` | `⟦t⟧`; `a = address(lv)`; `MS_Store ty a e` (scalar) or `MS_Copy a e |ty|` (aggregate; `memmove`, since `lv` and `t` may overlap, e.g. `x := x`). Core's copy check (stage 2) makes copying an allocated value a `RuntimeError`, so the byte copy never duplicates ownership of a heap block |
-| `AssignCall lv cast f tys args` | freeze the index expressions of `lv` (Core resolves the lhs before the call); the call; the cast; then compute the address of `lv` from the frozen indices (after the call, because the call may have reallocated an array the lvalue goes through) and copy/store |
+| `AssignCall lv cast f tys args` | the call of section 3.4 (a completed `MS_Call` statement, its result in a fresh variable or in the return buffer); the cast; and only then `a = address(lv)` and the store/copy, exactly as for `Assign`. So the lhs is resolved *after* the call, in the state the call leaves: this is Core's order (rhs first, as the verifier assumes; section 10), and it also covers a call that reallocates an array the lvalue goes through |
 | `Swap NotGhost lv1 lv2` | `MS_DeclBuf/DeclScalar tmp`; `tmp := lv1; lv1 := lv2; lv2 := tmp` as three copies/stores (addresses computed once; the lvalues are of the same type and either identical or disjoint). Ownership of allocated values moves with the bytes |
 | `Return t` | scalar: `⟦t⟧; MS_Return (Some e)`; unit: `MS_Return None`; aggregate: `⟦t⟧; MS_Copy (ME_Var ret$) e |rty|; MS_Return None`. (The copy check in `call_body` makes returning an allocated value a `RuntimeError`) |
 | `While NotGhost c [] None body` | `MS_Loop (⟦c⟧ @ [MS_If (ME_Unop CU_Not e) [MS_Break] []] @ ⟦body⟧)` |
@@ -901,13 +901,16 @@ inline expressions over the size parameters (section 3.2). Core's
 `CodeGen.thy`).** As the table. The context after a `VarDecl` or
 `VarDeclCall` is `env_after`, the typechecker's own `core_statement_type`;
 `decl_local`/`init_local` declare (with `local_name`) and initialise a
-local; `lower_store` stores through a Core lvalue and `store_lazy` through
-a frozen one; `cast_call_res` applies the optional cast of a
-`VarDeclCall`/`AssignCall` to the `CallRes` and `call_store` stores it
-(nothing for a `void` result; a result that comes back through the buffer
-at a scalar instantiated type is loaded first). `AssignCall` freezes the
-left-hand side with `freeze_lvalue` before the call and stores through
-`store_lazy` after it. `Swap` uses a `swap$n` temporary. `Return` follows
+local; `lower_store` stores through a Core lvalue; `cast_call_res` applies
+the optional cast of a `VarDeclCall`/`AssignCall` to the `CallRes` and
+`call_store` stores it (nothing for a `void` result; a result that comes
+back through the buffer at a scalar instantiated type is loaded first).
+`AssignCall` is `lower_call`, `cast_call_res` and then `call_store` with
+`lower_store` on the left-hand side itself, so every statement the lvalue
+needs (index evaluations, loads through references and descriptors) comes
+after the `MS_Call`; nothing of the left-hand side is evaluated before the
+call. (`freeze_lvalue` is used for lazy `ref` locals only.) `Swap` uses a
+`swap$n` temporary. `Return` follows
 `CG_Ret`; `return {}` is a bare `MS_Return None`, any other unit-typed
 term is still lowered (for its temporaries) before it. `While`, `Block`
 and the arms of a `Match` lower their bodies in `cg_nested cg` (the
@@ -1829,7 +1832,7 @@ result. Non-termination, `TypeError`, `RuntimeError` and
     -pedantic -Werror` at `-O0` and `-O2` under three standards and compared
     with the interpreter byte for byte (section 11.4); from stage 5 on the
     codegen tests in `test/cases/codegen` are an independent oracle (all
-    64 pass; section 11.5). Known gaps are listed in section 11.2 (reserved
+    65 pass; section 11.5). Known gaps are listed in section 11.2 (reserved
     identifiers) and 11.3. Reduced.
 12. **Zero-sized aggregates** (`{}`, `T[0]`). C forbids zero-length arrays.
     Mitigation: every buffer declaration uses `max 1 |ty|` (`buf_size`,
@@ -1952,6 +1955,44 @@ could not change in that stage) and fixed afterwards:
   `true` under the Isabelle pipeline. `process_binop_chain` now folds a
   `<==` chain to the left (`fold_binop_left`), which gives
   `C ==> (B ==> A)`; only `==>` chains go through `fold_implies_right`.
+
+Fixed between stages 5 and 6 (a change to Core's semantics, made before the
+simulation proof so that the interpreter is the semantics we want):
+
+- **An assignment from a call evaluates the right-hand side first.** For
+  `lv = f(args);` where the call has side effects (in Core,
+  `CoreStmt_AssignCall`; it is the only statement in which the order of two
+  evaluations can be observed, since index expressions and arguments are
+  pure and an impure call can only be a whole right-hand side), the four
+  components disagreed. The verifier (`verify_assign_stmt`) translates the
+  call and then builds the reference chain of the lhs in the state after
+  it; `interp_statement` resolved the lhs with `interp_lvalue` *before* the
+  call and stored at the remembered `(addr, path)`; the generator followed
+  the interpreter (it froze the index expressions of the lhs with
+  `freeze_lvalue` before the call); and `src/codegen.c` generated the lhs
+  before the rhs, so whatever the lhs needed as a preliminary statement (a
+  load through a `ref`, the data pointer of an allocatable array) ran
+  before the call and the rest after it. So for `a[i] = f(i);`, with `f`
+  setting a `ref` parameter `i` of the caller, a verified program stored
+  to the element selected by the old `i`, possibly out of bounds, under
+  both compilers. The rule, decided by the project owner on 2026-11-11, is
+  the verifier's (as in Rust and Python, not Java): run the call, including
+  the write-back of its `ref` arguments; apply the cast; resolve the lhs
+  *in the state after the call*; store. `interp_statement`'s `AssignCall`
+  equation was reordered accordingly (no theorem statement changed: type
+  soundness, fuel and depth monotonicity, the frame, static-parts and world
+  lemmas, ghost invisibility, the erasure simulation and the match-compiler
+  simulation were re-proved with the lvalue fact taken at the post-call
+  state), `lower_stmt` now stores through `lower_store` after the call
+  (section 3.6; `store_lazy` is gone), and `codegen_assign_stmt` in
+  `src/codegen.c` evaluates a call rhs into a temporary (or, for an
+  aggregate result, takes a pointer to its buffer) as completed C
+  statements before generating any part of the lhs. A `ref` *local* is
+  unaffected: it is resolved when it is declared (section 3.5), so `ref r =
+  a[i]; r = f(i);` still stores to the element selected at the
+  declaration. `CoreStmt_Assign` is unchanged (its rhs is pure). The
+  agreement with the verifier is by inspection, not by proof (nothing about
+  the verifier is formalised). Test: `test/cases/codegen/AssignCallOrder.b`.
 
 Still proposed / deferred:
 
@@ -2243,7 +2284,7 @@ have always been for `codegen.c`'s output.
 
 `test/isabelle_codegen_test.sh`, run from the root of the repository, is
 the end-to-end oracle of the generator: for every test program in
-`test/cases/codegen` (58 single `.b` files and the `multi.txt`
+`test/cases/codegen` (59 single `.b` files and the `multi.txt`
 directories with `Main.b` as root, exactly as `isabelle_test.sh`
 enumerates them) and for each `MS_Uninit` mode (`memset`, `omit`) it
 compiles the program together with `test/test-support-0.1/src/Test.b` to
@@ -2254,11 +2295,13 @@ to the test's `.output` file with the `//` comments stripped (as
 `run_test` in `test/run_tests.sh` does). The files are left in
 `$TMPDIR/isabelle-codegen-test`.
 
-Outcome (gcc 13.3, x86-64 Linux): all 64 tests pass in both modes and at
-both optimisation levels. (At the end of stage 5 `Bitwise.b` failed: its
-constants `imp_by_left_assoc` and `imp_by_4` came out `false` because the
-elaborator associated `<==` chains the wrong way; that has since been
-fixed in the elaborator, see section 10.) What the tests found and
+Outcome (gcc 13.3, x86-64 Linux): all 65 tests pass in both modes and at
+both optimisation levels. (At the end of stage 5 there were 64 tests and
+`Bitwise.b` failed: its constants `imp_by_left_assoc` and `imp_by_4` came
+out `false` because the elaborator associated `<==` chains the wrong way;
+that has since been fixed in the elaborator. The 65th test,
+`AssignCallOrder.b`, was added with the evaluation-order fix for an
+assignment from a call. See section 10 for both.) What the tests found and
 changed on the way:
 
 1. **Unique names per function** (section 3.1): `Let.b` declares two
@@ -2282,7 +2325,8 @@ changed on the way:
    verified by the C test suite); `isabelle_test.sh` expects this, and the
    three formerly unexpected typechecker results (`ExternName.b`,
    `MainWrongType.b`, `MissingMain.b`) are now rejected as expected, so it
-   reports 349 of 349.
+   reports 349 of 349 (351 of 351 with the two `AssignCallOrder.b` tests
+   added since, one in `codegen` and one in `verifier`).
 
 The optional second oracle (running the generated MiniC in the
 interpreter, deliverable 6 of stage 5) was not built; section 10 records
