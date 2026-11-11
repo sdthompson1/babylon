@@ -1828,9 +1828,8 @@ result. Non-termination, `TypeError`, `RuntimeError` and
     line of `MiniCPrint.thy`; the examples are compiled with `-Wall -Wextra
     -pedantic -Werror` at `-O0` and `-O2` under three standards and compared
     with the interpreter byte for byte (section 11.4); from stage 5 on the
-    codegen tests in `test/cases/codegen` are an independent oracle (63 of
-    64 pass, the one failure being an elaborator bug unrelated to MiniC;
-    section 11.5). Known gaps are listed in section 11.2 (reserved
+    codegen tests in `test/cases/codegen` are an independent oracle (all
+    64 pass; section 11.5). Known gaps are listed in section 11.2 (reserved
     identifiers) and 11.3. Reduced.
 12. **Zero-sized aggregates** (`{}`, `T[0]`). C forbids zero-length arrays.
     Mitigation: every buffer declaration uses `max 1 |ty|` (`buf_size`,
@@ -1940,18 +1939,19 @@ Implemented in stage 5: the extern C-name map, as a function over the
 renamed modules rather than a change to `elab_program` (section 3.9,
 `ExternNames.thy`), with the validity check of explicit C names; the
 checks of section 3.9 inside `codegen_module`; the driver option `-o`
-and the end-to-end test (section 11.5). Found in stage 5 and left alone,
-because the elaborator may not change in this stage:
+and the end-to-end test (section 11.5). Found in stage 5 (the elaborator
+could not change in that stage) and fixed afterwards:
 
-- **`<==` chains associate the wrong way in the elaborator.**
-  `process_binop_chain` (`ElabTerm.thy`) right-associates a chain
+- **`<==` chains associated the wrong way in the elaborator.**
+  `process_binop_chain` (`ElabTerm.thy`) right-associated a chain
   `A <== B <== C` as `A <== (B <== C)`, whereas the C compiler reverses the
   chain and then right-associates (`break_implies_chain` in
   `src/typechecker.c`), i.e. `C ==> (B ==> A)`, so the chain is
   left-associative. The constants `imp_by_left_assoc` and `imp_by_4` of
-  `test/cases/codegen/Bitwise.b` therefore evaluate to `false` instead of
-  `true` under the Isabelle pipeline, and that test is the one codegen
-  test that fails (section 11.5). The fix belongs in the elaborator.
+  `test/cases/codegen/Bitwise.b` therefore evaluated to `false` instead of
+  `true` under the Isabelle pipeline. `process_binop_chain` now folds a
+  `<==` chain to the left (`fold_binop_left`), which gives
+  `C ==> (B ==> A)`; only `==>` chains go through `fold_implies_right`.
 
 Still proposed / deferred:
 
@@ -2254,11 +2254,11 @@ to the test's `.output` file with the `//` comments stripped (as
 `run_test` in `test/run_tests.sh` does). The files are left in
 `$TMPDIR/isabelle-codegen-test`.
 
-Outcome (gcc 13.3, x86-64 Linux): 63 of the 64 tests pass in both modes
-and at both optimisation levels. The failure is `Bitwise.b`, whose
-constants `imp_by_left_assoc` and `imp_by_4` come out `false` because the
-elaborator associates `<==` chains the wrong way (section 10); the
-generated C is right for the Core it is given. What the tests found and
+Outcome (gcc 13.3, x86-64 Linux): all 64 tests pass in both modes and at
+both optimisation levels. (At the end of stage 5 `Bitwise.b` failed: its
+constants `imp_by_left_assoc` and `imp_by_4` came out `false` because the
+elaborator associated `<==` chains the wrong way; that has since been
+fixed in the elaborator, see section 10.) What the tests found and
 changed on the way:
 
 1. **Unique names per function** (section 3.1): `Let.b` declares two
