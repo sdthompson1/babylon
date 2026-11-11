@@ -105,11 +105,8 @@ fun cg_error_to_strings :: "CGError \<Rightarrow> string list" where
    typechecking them), runs the whole-program link, normalizes the linked module
    (normalize_module), erases ghost code, compiles the pattern matches to flat ones
    (match_compile_module), runs the static checks of the code generator on it
-   (sizeable_check), and generates the MiniC program (codegen_module, with the
-   extern C-name map extern_name_map of the renamed modules and the root
-   module's main, whose Core name is package-qualified: main:Root.main, as
-   the loader names the modules of the package main). The driver runs extern_clashes on the
-   program and prints it (minic/DESIGN.md, section 11).
+   (sizeable_check), and generates the MiniC program (codegen_module). The driver
+   runs extern_clashes on the program and prints it (minic/DESIGN.md, section 11).
 
    The link should always succeed on elaborator output, and the hypothesis of the
    match compilation pass (every non-flat match has a variable scrutinee) should
@@ -135,7 +132,7 @@ fun run_compiler :: "(string \<times> string) list \<Rightarrow> CompileResult"
           else
           (case elab_program babModules of
              Inl err \<Rightarrow> CR_Errors (pipeline_error_to_strings err)
-           | Inr ps \<Rightarrow> 
+           | Inr ps \<Rightarrow>
               (case whole_program_link ps of
                 Inl err \<Rightarrow> CR_Errors (whole_program_link_error_to_strings err)
               | Inr linked \<Rightarrow>

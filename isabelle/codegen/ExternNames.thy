@@ -17,7 +17,7 @@ begin
    naming without touching the elaborator or any of its theorems. The
    string hoisting that elab_program applies first does not rename
    functions. The C name is DF_ExternName if given, otherwise the
-   unqualified Babylon name (get_extern_name in src/codegen.c).
+   unqualified Babylon name.
 
    Also here: the check that an explicit C name is a valid C identifier
    (non-empty, alphanumeric or underscore, starting with a letter), as

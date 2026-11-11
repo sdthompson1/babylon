@@ -13,7 +13,7 @@ section \<open>Lazy references (section 3.5)\<close>
 (* Does a ref to this lvalue need to be lazy? Yes if the lvalue passes
    through a projection of an array with an allocatable dimension (which
    may be reallocated while the ref is live) or through a variable that
-   is itself lazy (needs_lazy_ref in src/codegen.c). *)
+   is itself lazy. *)
 fun needs_lazy :: "CGEnv \<Rightarrow> CoreTerm \<Rightarrow> bool" where
   "needs_lazy cg (CoreTm_Var x) =
     (case fmlookup (CG_Vars cg) x of Some (VR_Lazy _) \<Rightarrow> True | _ \<Rightarrow> False)"
