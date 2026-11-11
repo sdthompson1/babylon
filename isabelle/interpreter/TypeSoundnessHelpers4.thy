@@ -1452,8 +1452,9 @@ next
           qed
       next
         case (CoreStmt_AssignCall assignGhost lhsTm castOpt fnName tyArgs argTms)
-          \<comment> \<open>AssignCall (ghost or not): resolve lhs, run the call, apply the optional
-              cast, update the store. The call facts come from core_impure_call_type. \<close>
+          \<comment> \<open>AssignCall (ghost or not): run the call, apply the optional cast,
+              resolve the lhs in the post-call state, update the store. The call
+              facts come from core_impure_call_type. \<close>
           \<comment> \<open>The typing hypothesis is taken apart one layer at a time (a single
               auto over all the layers does not terminate). \<close>
           from typing CoreStmt_AssignCall have
@@ -1494,109 +1495,91 @@ next
                             fst (snd (FI_TmArgs funInfo ! i)) = Ref
                               \<longrightarrow> is_writable_lvalue env (argTms ! i)"
             by blast
-          from IH_lvalue[OF "4.prems"(1,2) conjI[OF lhs_writable lhs_ty]]
-          have lhs_sound: "sound_lvalue_result state env storeTyping lhsTy
-              (interp_writable_lvalue d fuel state lhsTm)" .
           from IH_fc[OF "4.prems"(1,2) fn_lookup args_check fn_ty_eq
                         len_tyargs tyargs_wk ref_lvalues]
           have fc_sound: "sound_function_call_result state env storeTyping retTy
               (interp_function_call d fuel state fnName tyArgs argTms)" .
           show ?thesis
-          proof (cases "interp_writable_lvalue d fuel state lhsTm")
+          proof (cases "interp_function_call d fuel state fnName tyArgs argTms")
             case (Inl err)
-            with lhs_sound have "sound_error_result err" by simp
-            with Inl CoreStmt_AssignCall show ?thesis by simp
+            with fc_sound have err_sound: "sound_error_result err" by simp
+            have interp_err: "interp_statement d (Suc fuel) state
+                (CoreStmt_AssignCall assignGhost lhsTm castOpt fnName tyArgs argTms) = Inl err"
+              using Inl by simp
+            with err_sound CoreStmt_AssignCall show ?thesis by simp
           next
-            case (Inr addrPath)
-            obtain addr path where ap_eq: "addrPath = (addr, path)"
-              by (cases addrPath) auto
-            from lhs_sound Inr ap_eq have
-              addr_valid: "addr < length (IS_Store state)" and
-              path_ty: "type_at_path env (storeTyping ! addr) path
-                          = Some (apply_subst (IS_TyArgs state) lhsTy)"
+            case (Inr fcResult)
+            obtain newState retVal where fcResult_eq: "fcResult = (newState, retVal)"
+              by (cases fcResult) auto
+            note call_eq = Inr[unfolded fcResult_eq]
+            from fc_sound Inr fcResult_eq obtain storeTyping1 where
+              new_sme: "state_matches_env newState env storeTyping1" and
+              ext1: "storeTyping_extends storeTyping storeTyping1" and
+              tyargs_eq: "IS_TyArgs newState = IS_TyArgs state" and
+              ret_typed: "value_has_type env retVal
+                            (apply_subst (IS_TyArgs state) retTy)"
               by auto
+            \<comment> \<open>Apply the optional cast to the call's return value. \<close>
             show ?thesis
-            proof (cases "interp_function_call d fuel state fnName tyArgs argTms")
+            proof (cases "apply_cast_opt castOpt retVal")
               case (Inl err)
-              with fc_sound have err_sound: "sound_error_result err" by simp
+              \<comment> \<open>A failed cast is a RuntimeError (apply_cast_opt overflow). \<close>
+              have err_eq: "err = RuntimeError"
+                using apply_cast_opt_error_is_runtime[OF Inl cast_ty ret_typed] .
               have interp_err: "interp_statement d (Suc fuel) state
-                  (CoreStmt_AssignCall assignGhost lhsTm castOpt fnName tyArgs argTms) = Inl err"
-                using Inl \<open>interp_writable_lvalue d fuel state lhsTm = Inr addrPath\<close> ap_eq by simp
-              with err_sound CoreStmt_AssignCall show ?thesis by simp
+                  (CoreStmt_AssignCall assignGhost lhsTm castOpt fnName tyArgs argTms) = Inl RuntimeError"
+                using Inl call_eq err_eq by simp
+              with CoreStmt_AssignCall show ?thesis by simp
             next
-              case (Inr fcResult)
-              obtain newState retVal where fcResult_eq: "fcResult = (newState, retVal)"
-                by (cases fcResult) auto
-              from fc_sound Inr fcResult_eq obtain storeTyping1 where
-                new_sme: "state_matches_env newState env storeTyping1" and
-                ext1: "storeTyping_extends storeTyping storeTyping1" and
-                tyargs_eq: "IS_TyArgs newState = IS_TyArgs state" and
-                ret_typed: "value_has_type env retVal
-                              (apply_subst (IS_TyArgs state) retTy)"
-                by auto
-              \<comment> \<open>storeTyping_extends preserves the original addr's type.\<close>
-              from ext1 obtain suffix where st1_eq: "storeTyping1 = storeTyping @ suffix"
-                unfolding storeTyping_extends_def by auto
-              from new_sme
-              have st1_len: "length storeTyping1 = length (IS_Store newState)"
-                unfolding state_matches_env_def store_well_typed_def by simp
-              from "4.prems"(1)
-              have st_len: "length storeTyping = length (IS_Store state)"
-                unfolding state_matches_env_def store_well_typed_def by simp
-              from addr_valid st_len have addr_lt_st: "addr < length storeTyping" by simp
-              have st1_at_addr: "storeTyping1 ! addr = storeTyping ! addr"
-                using st1_eq addr_lt_st by (simp add: nth_append)
-              from addr_lt_st st1_eq have addr_lt_st1: "addr < length storeTyping1" by simp
-              from addr_lt_st1 st1_len
-              have addr_valid_new: "addr < length (IS_Store newState)" by simp
-              from path_ty st1_at_addr
-              have path_ty_new: "type_at_path env (storeTyping1 ! addr) path
-                                   = Some (apply_subst (IS_TyArgs state) lhsTy)" by simp
-              from new_sme addr_valid_new
-              have old_slot_typed: "value_has_type env (IS_Store newState ! addr)
-                                      (storeTyping1 ! addr)"
-                unfolding state_matches_env_def store_well_typed_def by simp
-              \<comment> \<open>Apply the optional cast to the call's return value. \<close>
+              case (Inr rhsVal)
+              note cast_eq = Inr
+              from apply_cast_opt_sound[OF Inr cast_ty ret_typed[unfolded tyargs_eq[symmetric]]]
+              have rhs_typed: "value_has_type env rhsVal (apply_subst (IS_TyArgs newState) lhsTy)" .
+              \<comment> \<open>The lhs is resolved in the post-call state, so the lvalue IH is
+                  applied to newState with the store typing the call produced. \<close>
+              from IH_lvalue[OF new_sme "4.prems"(2) conjI[OF lhs_writable lhs_ty]]
+              have lhs_sound: "sound_lvalue_result newState env storeTyping1 lhsTy
+                  (interp_writable_lvalue d fuel newState lhsTm)" .
               show ?thesis
-              proof (cases "apply_cast_opt castOpt retVal")
+              proof (cases "interp_writable_lvalue d fuel newState lhsTm")
                 case (Inl err)
-                \<comment> \<open>A failed cast is a RuntimeError (apply_cast_opt overflow). \<close>
-                have err_eq: "err = RuntimeError"
-                  using apply_cast_opt_error_is_runtime[OF Inl cast_ty ret_typed] .
+                with lhs_sound have err_sound: "sound_error_result err" by simp
                 have interp_err: "interp_statement d (Suc fuel) state
-                    (CoreStmt_AssignCall assignGhost lhsTm castOpt fnName tyArgs argTms) = Inl RuntimeError"
-                  using Inl Inr fcResult_eq
-                        \<open>interp_writable_lvalue d fuel state lhsTm = Inr addrPath\<close> ap_eq err_eq by simp
-                with CoreStmt_AssignCall show ?thesis by simp
+                    (CoreStmt_AssignCall assignGhost lhsTm castOpt fnName tyArgs argTms) = Inl err"
+                  using Inl call_eq cast_eq by simp
+                with err_sound CoreStmt_AssignCall show ?thesis by simp
               next
-                case (Inr rhsVal)
-                from apply_cast_opt_sound[OF Inr cast_ty ret_typed[unfolded tyargs_eq[symmetric]]]
-                have rhs_typed: "value_has_type env rhsVal (apply_subst (IS_TyArgs newState) lhsTy)" .
-                hence rhs_typed': "value_has_type env rhsVal (apply_subst (IS_TyArgs state) lhsTy)"
-                  using tyargs_eq by simp
+                case (Inr addrPath)
+                obtain addr path where ap_eq: "addrPath = (addr, path)"
+                  by (cases addrPath) auto
+                note lv_eq = Inr[unfolded ap_eq]
+                from lhs_sound Inr ap_eq have
+                  addr_valid_new: "addr < length (IS_Store newState)" and
+                  path_ty_new: "type_at_path env (storeTyping1 ! addr) path
+                              = Some (apply_subst (IS_TyArgs newState) lhsTy)"
+                  by auto
+                from new_sme addr_valid_new
+                have old_slot_typed: "value_has_type env (IS_Store newState ! addr)
+                                        (storeTyping1 ! addr)"
+                  unfolding state_matches_env_def store_well_typed_def by simp
                 show ?thesis
                 proof (cases "update_value_at_path (IS_Store newState ! addr) path rhsVal")
                   case (Inl err)
-                  from update_value_at_path_error_is_runtime[OF old_slot_typed path_ty_new Inl rhs_typed']
+                  from update_value_at_path_error_is_runtime[OF old_slot_typed path_ty_new Inl rhs_typed]
                   have err_eq: "err = RuntimeError" .
                   have interp_err: "interp_statement d (Suc fuel) state
                       (CoreStmt_AssignCall assignGhost lhsTm castOpt fnName tyArgs argTms) = Inl RuntimeError"
-                    using Inl \<open>interp_function_call d fuel state fnName tyArgs argTms = Inr fcResult\<close>
-                          fcResult_eq \<open>apply_cast_opt castOpt retVal = Inr rhsVal\<close>
-                          \<open>interp_writable_lvalue d fuel state lhsTm = Inr addrPath\<close>
-                          ap_eq err_eq by simp
+                    using Inl call_eq cast_eq lv_eq err_eq by simp
                   with CoreStmt_AssignCall show ?thesis by simp
                 next
                   case (Inr newVal)
-                  from update_value_at_path_preserves_type[OF old_slot_typed Inr path_ty_new rhs_typed']
+                  from update_value_at_path_preserves_type[OF old_slot_typed Inr path_ty_new rhs_typed]
                   have new_slot_typed: "value_has_type env newVal (storeTyping1 ! addr)" .
                   let ?finalState = "newState \<lparr> IS_Store := (IS_Store newState)[addr := newVal] \<rparr>"
                   have interp_eq: "interp_statement d (Suc fuel) state
                       (CoreStmt_AssignCall assignGhost lhsTm castOpt fnName tyArgs argTms)
                         = Inr (Continue ?finalState)"
-                    using Inr \<open>interp_function_call d fuel state fnName tyArgs argTms = Inr fcResult\<close>
-                          fcResult_eq \<open>apply_cast_opt castOpt retVal = Inr rhsVal\<close>
-                          \<open>interp_writable_lvalue d fuel state lhsTm = Inr addrPath\<close> ap_eq by simp
+                    using Inr call_eq cast_eq lv_eq by simp
                   from state_matches_env_update_store[OF new_sme addr_valid_new
                       new_slot_typed refl]
                   have final_sme: "state_matches_env ?finalState env storeTyping1" .

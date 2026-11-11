@@ -346,16 +346,16 @@ next
           by (simp add: static_parts_eq_def Let_def)
       next
         case (CoreStmt_AssignCall g lhsLv castOpt fnName argTys argTms)
-        \<comment> \<open>Resolve lhs, run the call (newState), apply cast, store. \<close>
-        from H CoreStmt_AssignCall obtain addr path where
-          lv: "interp_writable_lvalue d fuel state lhsLv = Inr (addr, path)"
-          by (auto split: sum.splits)
-        from H CoreStmt_AssignCall lv obtain newState retVal where
+        \<comment> \<open>Run the call (newState), apply cast, resolve lhs in newState, store. \<close>
+        from H CoreStmt_AssignCall obtain newState retVal where
           call: "interp_function_call d fuel state fnName argTys argTms = Inr (newState, retVal)"
           by (auto split: sum.splits prod.splits)
         from IH_call call have call_eq: "static_parts_eq state newState" by blast
-        from H CoreStmt_AssignCall lv call obtain rhsVal where
+        from H CoreStmt_AssignCall call obtain rhsVal where
           cast: "apply_cast_opt castOpt retVal = Inr rhsVal"
+          by (auto split: sum.splits)
+        from H CoreStmt_AssignCall call cast obtain addr path where
+          lv: "interp_writable_lvalue d fuel newState lhsLv = Inr (addr, path)"
           by (auto split: sum.splits)
         from H CoreStmt_AssignCall lv call cast obtain newVal where
           upd: "update_value_at_path (IS_Store newState ! addr) path rhsVal = Inr newVal"

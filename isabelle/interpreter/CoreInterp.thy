@@ -1727,14 +1727,15 @@ where
 
   (* Assignment from an impure call *)
 | "interp_statement d (Suc fuel) state (CoreStmt_AssignCall _ lhsLvalue castOpt fnName argTys argTms) =
-    \<comment> \<open>Resolve the lhs first, then run the (possibly impure) call observing its
-        state effect, apply the optional cast, and store the result.\<close>
-    (case interp_lvalue d fuel True state lhsLvalue of
-      Inr (addr, path) \<Rightarrow>
-        (case interp_function_call d fuel state fnName argTys argTms of
-          Inr (newState, retVal) \<Rightarrow>
-            (case apply_cast_opt castOpt retVal of
-              Inr rhsVal \<Rightarrow>
+    \<comment> \<open>Note the order of operations: evaluate the rhs first, then resolve the lhs to
+        an address and path (in the new state). So in a[i] = f(i), where f modifies i,
+        the element written is determined by the new value of i, not the old.\<close>
+    (case interp_function_call d fuel state fnName argTys argTms of
+      Inr (newState, retVal) \<Rightarrow>
+        (case apply_cast_opt castOpt retVal of
+          Inr rhsVal \<Rightarrow>
+            (case interp_lvalue d fuel True newState lhsLvalue of
+              Inr (addr, path) \<Rightarrow>
                 (let oldVal = IS_Store newState ! addr in
                 case update_value_at_path oldVal path rhsVal of
                   Inr newVal \<Rightarrow>

@@ -2689,10 +2689,79 @@ static void codegen_var_decl_stmt(struct CGContext *cxt,
     }
 }
 
+// Is this term a function call, possibly wrapped in casts? (The
+// typechecker wraps the call in a TM_CAST when the result needs an
+// implicit integer cast.)
+static bool is_call_under_casts(struct Term *term)
+{
+    while (term->tag == TM_CAST) {
+        term = term->cast.operand;
+    }
+    return term->tag == TM_CALL;
+}
+
 static void codegen_assign_stmt(struct CGContext *cxt,
                                 struct Statement *stmt)
 {
-    copy_term_to_term(cxt, stmt->assign.lhs, stmt->assign.rhs);
+    struct Term *lhs = stmt->assign.lhs;
+    struct Term *rhs = stmt->assign.rhs;
+
+    // An assignment evaluates its right-hand side first, and only then
+    // resolves its left-hand side (this is the order the verifier
+    // assumes). The order can only be observed when the rhs is a call
+    // with side effects (e.g. "a[i] = f(i)" where f modifies i), and such
+    // a call can only appear as the whole rhs (perhaps under an implicit
+    // cast).
+    //
+    // copy_term_to_term does not guarantee that order: it generates the
+    // lhs before the rhs, so any preliminary statements that the lhs
+    // needs (e.g. reading an index through a "ref", or loading the data
+    // pointer of an allocatable array) would be executed before the call.
+    //
+    // So, if the rhs is a call (of any function; we do not try to work
+    // out whether it has side effects), we first evaluate it completely,
+    // as C statements of its own, leaving the result in a temporary
+    // (for a scalar result) or a pointer to the result in a temporary
+    // (for an aggregate result, which is already in a buffer of its own;
+    // this avoids copying it twice). Only then is the lhs generated.
+    //
+    // The exception is when the lhs is a plain variable (not a "lazy"
+    // reference): then there is nothing to evaluate on the lhs (the
+    // address of a local, or the pointer held by a reference, does not
+    // change), so the simpler code can be used.
+    bool lhs_is_simple = lhs->tag == TM_VAR && !lookup_lazy_ref(cxt, lhs->var.name);
+
+    if (!is_call_under_casts(rhs) || lhs_is_simple) {
+        copy_term_to_term(cxt, lhs, rhs);
+
+    } else if (is_scalar_type(cxt, rhs->type)) {
+        char name[TEMP_NAME_LEN];
+        make_temporary(cxt, name, rhs->type);
+        copy_term_to_variable(cxt, name, false, rhs);
+        copy_variable_to_term(cxt, lhs, name);
+
+    } else {
+        char name[TEMP_NAME_LEN];
+        get_temp_name(cxt, name);
+
+        begin_item(cxt->pr);
+        print_token(cxt->pr, "char");
+        print_token(cxt->pr, "*");
+        print_token(cxt->pr, name);
+        print_token(cxt->pr, "=");
+        codegen_term(cxt, ASSIGN_EXPR, MODE_ADDR, rhs);
+        print_token(cxt->pr, ";");
+        new_line(cxt->pr);
+        end_item(cxt->pr);
+
+        begin_item(cxt->pr);
+        memmove_begin(cxt);
+        codegen_term(cxt, ASSIGN_EXPR, MODE_ADDR, lhs);
+        print_token(cxt->pr, ",");
+        print_token(cxt->pr, name);
+        memmove_end(cxt, rhs->type);
+        end_item(cxt->pr);
+    }
 }
 
 static void codegen_swap_stmt(struct CGContext *cxt,

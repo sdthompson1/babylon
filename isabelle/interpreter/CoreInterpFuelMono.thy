@@ -1564,7 +1564,7 @@ next
   qed
 next
   (* AssignCall.
-     Resolve the lhs, run the call, apply the cast, store. *)
+     Run the call, apply the cast, resolve the lhs in the post-call state, store. *)
   case (32 d fuel state assignGhost lhsLvalue castOpt fnName argTys argTms)
   then show ?case
   proof (intro allI impI)
@@ -1574,32 +1574,40 @@ next
     assume noFuel: "interp_statement d (Suc fuel) state
                       (CoreStmt_AssignCall assignGhost lhsLvalue castOpt fnName argTys argTms)
                         \<noteq> Inl InsufficientFuel"
-    hence lhs_noFuel: "interp_writable_lvalue d fuel state lhsLvalue \<noteq> Inl InsufficientFuel"
+    hence fc_noFuel: "interp_function_call d fuel state fnName argTys argTms \<noteq> Inl InsufficientFuel"
       by (auto split: sum.splits)
-    hence IH_lhs: "\<forall>f'\<ge>fuel. interp_writable_lvalue d f' state lhsLvalue
-                               = interp_writable_lvalue d fuel state lhsLvalue"
+    hence IH_fc: "\<forall>f'\<ge>fuel. interp_function_call d f' state fnName argTys argTms
+                                = interp_function_call d fuel state fnName argTys argTms"
       using "32.IH"(1) by blast
+    have fc_eq: "interp_function_call d f'' state fnName argTys argTms
+                   = interp_function_call d fuel state fnName argTys argTms"
+      using IH_fc f''_ge by blast
     show "interp_statement d f' state
             (CoreStmt_AssignCall assignGhost lhsLvalue castOpt fnName argTys argTms) =
           interp_statement d (Suc fuel) state
             (CoreStmt_AssignCall assignGhost lhsLvalue castOpt fnName argTys argTms)"
-    proof (cases "interp_writable_lvalue d fuel state lhsLvalue")
+    proof (cases "interp_function_call d fuel state fnName argTys argTms")
       case (Inl err)
-      hence "interp_writable_lvalue d f'' state lhsLvalue = Inl err" using IH_lhs f''_ge by metis
-      thus ?thesis using Inl f'_eq by simp
+      thus ?thesis using fc_eq f'_eq by simp
     next
-      case (Inr addrPath)
-      obtain addr path where addrPath_eq: "addrPath = (addr, path)" by (cases addrPath)
-      hence fc_noFuel: "interp_function_call d fuel state fnName argTys argTms \<noteq> Inl InsufficientFuel"
-        using noFuel Inr by (auto split: sum.splits prod.splits)
-      hence IH_fc: "\<forall>f'\<ge>fuel. interp_function_call d f' state fnName argTys argTms
-                                = interp_function_call d fuel state fnName argTys argTms"
-        using "32.IH"(2) addrPath_eq Inr by blast
-      have "interp_writable_lvalue d f'' state lhsLvalue = Inr addrPath" using IH_lhs Inr f''_ge by metis
-      moreover have "interp_function_call d f'' state fnName argTys argTms
-                       = interp_function_call d fuel state fnName argTys argTms"
-        using IH_fc f''_ge by metis
-      ultimately show ?thesis using f'_eq Inr addrPath_eq by (simp split: sum.splits prod.splits)
+      case (Inr res)
+      obtain newState retVal where res_eq: "res = (newState, retVal)" by (cases res)
+      show ?thesis
+      proof (cases "apply_cast_opt castOpt retVal")
+        case (Inl err)
+        thus ?thesis using fc_eq f'_eq Inr res_eq by simp
+      next
+        case cast: (Inr rhsVal)
+        have "interp_writable_lvalue d fuel newState lhsLvalue \<noteq> Inl InsufficientFuel"
+          using noFuel Inr res_eq cast by (auto split: sum.splits prod.splits)
+        hence "\<forall>f'\<ge>fuel. interp_writable_lvalue d f' newState lhsLvalue
+                           = interp_writable_lvalue d fuel newState lhsLvalue"
+          using "32.IH"(2) Inr res_eq cast by blast
+        hence "interp_writable_lvalue d f'' newState lhsLvalue
+                 = interp_writable_lvalue d fuel newState lhsLvalue"
+          using f''_ge by blast
+        thus ?thesis using fc_eq f'_eq Inr res_eq cast by simp
+      qed
     qed
   qed
 next
@@ -2952,27 +2960,34 @@ next
   show ?case
   proof (intro allI impI)
     fix d' assume d'_ge: "d' \<ge> d"
-    have "interp_writable_lvalue d fuel state lhsLvalue \<noteq> Inl InsufficientFuel"
+    have "interp_function_call d fuel state fnName argTys argTms \<noteq> Inl InsufficientFuel"
       using "32.prems" by (auto split: sum.splits)
-    hence lhs_eq: "interp_writable_lvalue d' fuel state lhsLvalue
-                     = interp_writable_lvalue d fuel state lhsLvalue"
+    hence fc_eq: "interp_function_call d' fuel state fnName argTys argTms
+                    = interp_function_call d fuel state fnName argTys argTms"
       using "32.IH"(1) d'_ge by blast
     show "interp_statement d' (Suc fuel) state
             (CoreStmt_AssignCall assignGhost lhsLvalue castOpt fnName argTys argTms) =
           interp_statement d (Suc fuel) state
             (CoreStmt_AssignCall assignGhost lhsLvalue castOpt fnName argTys argTms)"
-    proof (cases "interp_writable_lvalue d fuel state lhsLvalue")
+    proof (cases "interp_function_call d fuel state fnName argTys argTms")
       case (Inl err)
-      thus ?thesis using lhs_eq by simp
+      thus ?thesis using fc_eq by simp
     next
-      case (Inr addrPath)
-      obtain addr path where addrPath_eq: "addrPath = (addr, path)" by (cases addrPath)
-      hence "interp_function_call d fuel state fnName argTys argTms \<noteq> Inl InsufficientFuel"
-        using "32.prems" Inr by (auto split: sum.splits prod.splits)
-      hence "interp_function_call d' fuel state fnName argTys argTms
-               = interp_function_call d fuel state fnName argTys argTms"
-        using "32.IH"(2) addrPath_eq Inr d'_ge by blast
-      thus ?thesis using Inr addrPath_eq lhs_eq by (simp split: sum.splits prod.splits)
+      case (Inr res)
+      obtain newState retVal where res_eq: "res = (newState, retVal)" by (cases res)
+      show ?thesis
+      proof (cases "apply_cast_opt castOpt retVal")
+        case (Inl err)
+        thus ?thesis using fc_eq Inr res_eq by simp
+      next
+        case cast: (Inr rhsVal)
+        have "interp_writable_lvalue d fuel newState lhsLvalue \<noteq> Inl InsufficientFuel"
+          using "32.prems" Inr res_eq cast by (auto split: sum.splits prod.splits)
+        hence "interp_writable_lvalue d' fuel newState lhsLvalue
+                 = interp_writable_lvalue d fuel newState lhsLvalue"
+          using "32.IH"(2) Inr res_eq cast d'_ge by blast
+        thus ?thesis using fc_eq Inr res_eq cast by simp
+      qed
     qed
   qed
 next

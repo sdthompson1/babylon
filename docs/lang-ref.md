@@ -1315,6 +1315,25 @@ The effect of the statement is simply to change whatever the
 left-hand-side refers to (variable, array element, etc.) such that it
 is equal to the value of the right-hand-side.
 
+The right-hand-side is evaluated first, and only then is the
+left-hand-side resolved (that is, only then is it decided which
+variable, array element, etc. is to be modified). The order matters
+only when the right-hand-side is a function call with side effects
+(see "Restriction on side-effecting function calls" above). For
+example, in
+
+```
+a[i] = f(i);
+```
+
+where `f` takes its argument by `ref` and modifies it, the function
+`f` is called first, and the result is then stored in the element of
+`a` selected by the *new* value of `i` (the value that `i` has after
+the call). In particular, it is that element which must be within the
+bounds of the array. (If the element selected by the old value of `i`
+is wanted, a reference can be used: `ref r = a[i]; r = f(i);`. A
+reference is resolved when it is declared.)
+
 An important restriction on assignment statements (in non-ghost code)
 is that the right-hand-side of the assignment must not be "allocated"
 (i.e. if the right-hand-side expression is `E`, then `allocated(E)`

@@ -434,20 +434,37 @@ next
     by blast
   from ok have okl: "core_term_match_scrutinees_ok lhs"
     and oka: "list_all core_term_match_scrutinees_ok argTms" by simp_all
-  from ev obtain addr path newFull retVal v newVal where
-    ap: "interp_writable_lvalue d fuel full lhs = Inr (addr, path)" and
-    call: "interp_function_call d fuel full fnName tyArgs argTms = Inr (newFull, retVal)" and
-    cast: "apply_cast_opt castOpt retVal = Inr v" and
+  \<comment> \<open>The call runs first; the lhs is resolved in the state after it. \<close>
+  from ev obtain newFull retVal where
+    call: "interp_function_call d fuel full fnName tyArgs argTms = Inr (newFull, retVal)"
+    by (auto split: sum.splits)
+  from ev call obtain v where
+    cast: "apply_cast_opt castOpt retVal = Inr v"
+    by (auto split: sum.splits)
+  from ev call cast obtain addr path newVal where
+    ap: "interp_writable_lvalue d fuel newFull lhs = Inr (addr, path)" and
     upd: "update_value_at_path (IS_Store newFull ! addr) path v = Inr newVal" and
     res_eq: "res = Continue (newFull \<lparr> IS_Store := (IS_Store newFull)[addr := newVal] \<rparr>)"
     by (auto simp: Let_def split: sum.splits)
-  from lvalue_simD[OF IHl fe fs sme wf tl okl ap] obtain f1 where
-    f1: "interp_writable_lvalue d f1 (mc_state full) (match_compile_term lhs) = Inr (addr, path)" by auto
+  \<comment> \<open>The state after the call still has the function table and matches the
+      environment (by type soundness of the call), so the lvalue simulation
+      applies to it.\<close>
+  have "sound_function_call_result full env storeTyping
+          (apply_subst (fmap_of_list (zip (FI_TyArgs funInfo) tyArgs)) (FI_ReturnType funInfo))
+          (interp_function_call d fuel full fnName tyArgs argTms)"
+    by (rule interp_function_call_sound[OF sme wf fi args refl len_ty wk refs])
+  with call obtain storeTyping1 where sme1: "state_matches_env newFull env storeTyping1"
+    by auto
+  have fs1: "IS_Functions newFull = funs"
+    using interp_function_call_static[OF call] fs by (simp add: static_parts_eq_def)
   from call_simD[OF IH fe fs sme wf fi args len_ty wk refs oka call] obtain f2 where
     f2: "interp_function_call d f2 (mc_state full) fnName tyArgs (map match_compile_term argTms)
            = Inr (mc_state newFull, retVal)" by auto
+  from lvalue_simD[OF IHl fe fs1 sme1 wf tl okl ap] obtain f1 where
+    f1: "interp_writable_lvalue d f1 (mc_state newFull) (match_compile_term lhs) = Inr (addr, path)"
+    by auto
   let ?F = "max f1 f2"
-  have f1': "interp_writable_lvalue d ?F (mc_state full) (match_compile_term lhs) = Inr (addr, path)"
+  have f1': "interp_writable_lvalue d ?F (mc_state newFull) (match_compile_term lhs) = Inr (addr, path)"
     by (rule interp_writable_lvalue_Inr_more_fuel[OF f1]) simp
   have f2': "interp_function_call d ?F (mc_state full) fnName tyArgs (map match_compile_term argTms)
                = Inr (mc_state newFull, retVal)"
