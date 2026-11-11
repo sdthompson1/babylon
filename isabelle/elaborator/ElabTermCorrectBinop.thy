@@ -1017,10 +1017,15 @@ next
   show ?thesis
   proof (cases "?firstOp = BabBinop_Implies \<or> ?firstOp = BabBinop_ImpliedBy")
     case True
-    \<comment> \<open>Implies chain: right-associates (check_implies_chain must pass, else we'd get Inl)\<close>
-    with assms(1) Cons have "fold_implies_right is_flex loc ghost lhsTm lhsTy ops = Inr (resultTm, resultTy)"
+    \<comment> \<open>Implies chain (check_implies_chain must pass, else we'd get Inl):
+        a ==> chain right-associates, a <== chain left-associates\<close>
+    with assms(1) Cons have
+      "fold_implies_right is_flex loc ghost lhsTm lhsTy ops = Inr (resultTm, resultTy)
+       \<or> fold_binop_left is_flex loc ghost lhsTm lhsTy ops = Inr (resultTm, resultTy)"
       by (auto simp: Let_def split: if_splits)
-    thus ?thesis using fold_implies_right_correct assms(2,3,4) locals_rigid ret_rigid abs_rigid by blast
+    thus ?thesis
+      using fold_implies_right_correct fold_binop_left_correct
+            assms(2,3,4) locals_rigid ret_rigid abs_rigid by blast
   next
     case not_implies: False
     show ?thesis

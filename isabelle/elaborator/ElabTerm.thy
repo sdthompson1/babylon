@@ -682,7 +682,8 @@ fun build_comparison_chain :: "(string \<Rightarrow> bool) \<Rightarrow> Locatio
                   Inr (CoreTm_Let varName resolvedRhs
                         (CoreTm_Binop CoreBinop_And cmpTm restTm)))))"
 
-(* Right-associate an implies chain: a ==> b ==> c becomes a ==> (b ==> c) *)
+(* Right-associate an implies chain: a ==> b ==> c becomes a ==> (b ==> c).
+   (Only used for ==> chains; <== chains left-associate, see process_binop_chain.) *)
 fun fold_implies_right :: "(string \<Rightarrow> bool) \<Rightarrow> Location \<Rightarrow> GhostOrNot
     \<Rightarrow> CoreTerm \<Rightarrow> CoreType
     \<Rightarrow> (BabBinop \<times> CoreTerm \<times> CoreType) list
@@ -699,9 +700,10 @@ fun fold_implies_right :: "(string \<Rightarrow> bool) \<Rightarrow> Location \<
             elab_binop_with_special is_flex loc ghost op lhsTm lhsTy rightTm rightTy))"
 
 (* Process a binop chain: elaborate the operator list given already-elaborated operands.
-   Decides whether to chain (comparisons), right-associate (implies), or left-associate.
+   Decides whether to chain (comparisons), right-associate (==>), or left-associate
+   (everything else, including <==).
    Validates that all operators in a chain are consistent:
-   - Implies chains: all operators must be ==> or <==
+   - Implies chains: all operators must be ==>, or all must be <==
    - Comparison chains: all operators must be comparisons with compatible directions
      (e.g. a < b <= c is ok, a < b > c is not) *)
 fun process_binop_chain :: "(string \<Rightarrow> bool) \<Rightarrow> Location \<Rightarrow> GhostOrNot
@@ -712,10 +714,14 @@ fun process_binop_chain :: "(string \<Rightarrow> bool) \<Rightarrow> Location \
 | "process_binop_chain is_flex loc ghost lhsTm lhsTy ops =
     (let firstOp = fst (hd ops) in
      if firstOp = BabBinop_Implies \<or> firstOp = BabBinop_ImpliedBy then
-       \<comment> \<open>Implies chains: validate all ops, then right-associate\<close>
-       if check_implies_chain ops
+       \<comment> \<open>Implies chains: validate all ops (they must all equal firstOp), then
+           right-associate a ==> chain and left-associate a <== chain:
+           A <== B <== C is (A <== B) <== C, which elab_binop_with_special
+           turns into C ==> (B ==> A).\<close>
+       if \<not> check_implies_chain ops then Inl [TyErr_MixedImpliesInChain loc]
+       else if firstOp = BabBinop_Implies
        then fold_implies_right is_flex loc ghost lhsTm lhsTy ops
-       else Inl [TyErr_MixedImpliesInChain loc]
+       else fold_binop_left is_flex loc ghost lhsTm lhsTy ops
      else if is_comparison_bab_binop firstOp \<and> length ops > 1 then
        \<comment> \<open>Comparison chains: validate directions, then chain\<close>
        if check_comparison_chain_directions ops ChainNeutral
