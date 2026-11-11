@@ -27,9 +27,8 @@ fun needs_lazy :: "CGEnv \<Rightarrow> CoreTerm \<Rightarrow> bool" where
 
 (* Freeze an lvalue: capture the base's representation and evaluate every
    array index, once, into a fresh uint64_t variable (Core evaluates the
-   indices once too, when it resolves the lvalue). Used for lazy refs and
-   for the left-hand side of an AssignCall, which Core resolves before the
-   call. *)
+   indices once too, when it resolves the lvalue). Used for lazy refs,
+   which Core resolves at their declaration. *)
 fun freeze_lvalue :: "CGEnv \<Rightarrow> CoreTerm \<Rightarrow> (MStmt list \<times> LazyLv) CG" where
   "freeze_lvalue cg (CoreTm_Var x) = do {
     ty \<leftarrow> ty_of cg (CoreTm_Var x);
@@ -78,13 +77,6 @@ definition lower_store :: "CGEnv \<Rightarrow> CoreTerm \<Rightarrow> CoreType \
             Some (VR_Scalar n _) \<Rightarrow> cg_return [MS_Assign n e]
           | _ \<Rightarrow> do { (S, a) \<leftarrow> lower_addr cg lv; cg_return (S @ [store_at cg ty a e]) })
      | _ \<Rightarrow> do { (S, a) \<leftarrow> lower_addr cg lv; cg_return (S @ [store_at cg ty a e]) })"
-
-(* The same through a frozen lvalue. *)
-definition store_lazy :: "CGEnv \<Rightarrow> LazyLv \<Rightarrow> CoreType \<Rightarrow> MExpr \<Rightarrow> MStmt list CG" where
-  "store_lazy cg ll ty e =
-    (case ll of
-       LL_Base (VR_Scalar n _) _ \<Rightarrow> cg_return [MS_Assign n e]
-     | _ \<Rightarrow> do { (S, a) \<leftarrow> lazy_addr cg ll; cg_return (S @ [store_at cg ty a e]) })"
 
 (* The result of a call stored into a variable or lvalue of the given
    (instantiated) type: nothing for a void result. *)
@@ -185,11 +177,10 @@ where
 | "lower_stmt cg (CoreStmt_AssignCall NotGhost lv castOpt f tys args) = do {
     lhsTy \<leftarrow> ty_of cg lv;
     retTy \<leftarrow> impure_ret_type cg f tys args;
-    (Sf, ll) \<leftarrow> freeze_lvalue cg lv;
     (Sc, res) \<leftarrow> lower_call cg f tys args;
     (Scast, res') \<leftarrow> cast_call_res cg retTy castOpt res;
-    Ss \<leftarrow> call_store cg (store_lazy cg ll lhsTy) lhsTy res';
-    cg_return (Sf @ Sc @ Scast @ Ss, cg)
+    Ss \<leftarrow> call_store cg (lower_store cg lv lhsTy) lhsTy res';
+    cg_return (Sc @ Scast @ Ss, cg)
    }"
 
 | "lower_stmt cg (CoreStmt_Swap Ghost _ _) = cg_fail (CGE_Ghost (CG_Fun cg))"

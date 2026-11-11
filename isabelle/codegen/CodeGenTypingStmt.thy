@@ -570,37 +570,6 @@ proof -
   qed
 qed
 
-lemma store_lazy_ok:
-  assumes "store_lazy cg ll ty e st = Inr (S, st')" and "cg_ok prog E cg" and "scope_ok prog (E, ds) st"
-    and "ll_ok E (CG_TyEnv cg) ll" and "ll_type ll = ty"
-    and "expr_ok E e (res_cty ty)" and "u64_ok E (cg_size cg ty)"
-  shows "\<exists>E' ds'. lowered_ok prog rt (E, ds) st S st' (E', ds')"
-proof -
-  have "(\<exists>n cty ty'. ll = LL_Base (VR_Scalar n cty) ty' \<and> S = [MS_Assign n e] \<and> st' = st)
-      \<or> cg_bind (lazy_addr cg ll) (\<lambda>(S, a). cg_return (S @ [store_at cg ty a e])) st = Inr (S, st')"
-    using assms(1) unfolding store_lazy_def
-    apply (cases ll)
-    subgoal for rep ty' by (cases rep) (auto simp: cg_return_def simp del: lazy_addr.simps)
-    by (auto simp del: lazy_addr.simps)
-  then have "(\<exists>n cty ty'. ll = LL_Base (VR_Scalar n cty) ty' \<and> S = [MS_Assign n e] \<and> st' = st)
-      \<or> (\<exists>S1 a. lazy_addr cg ll st = Inr ((S1, a), st') \<and> S = S1 @ [store_at cg ty a e])"
-    by (auto simp: cg_return_def split: prod.splits elim!: cg_bind_InrE simp del: lazy_addr.simps)
-  then show ?thesis
-  proof (elim disjE exE conjE)
-    fix n cty ty' assume ll: "ll = LL_Base (VR_Scalar n cty) ty'" and S: "S = [MS_Assign n e]" and st': "st' = st"
-    have "scalar_ty ty = Some cty" "fmlookup E n = Some (VT_Scalar cty)" using assms(4,5) unfolding ll by simp_all
-    then show ?thesis unfolding S st' using assms(3,6) by (auto intro!: exI assign_ok[where cty' = cty] simp: ty_compat_def)
-  next
-    fix S1 a assume la: "lazy_addr cg ll st = Inr ((S1, a), st')" and S: "S = S1 @ [store_at cg ty a e]"
-    obtain E1 ds1 where lo1: "lowered_ok prog rt (E, ds) st S1 st' (E1, ds1)" and a: "expr_ok E1 a CTy_CharPtr"
-      using lazy_addr_ok[OF la assms(2,3,4)] by blast
-    have le: "env_le E E1" by (rule lowered_ok_env_le'[OF lo1])
-    have "lowered_ok prog rt (E1, ds1) st' [store_at cg ty a e] st' (E1, ds1)"
-      by (rule store_at_ok[OF lowered_ok_scope[OF lo1] a expr_ok_mono[OF le assms(6)]]) (use assms(7) le in \<open>auto simp: u64_ok_def expr_type_mono\<close>)
-    then show ?thesis unfolding S using lowered_ok_append[OF lo1] by blast
-  qed
-qed
-
 
 section \<open>Call results\<close>
 
@@ -1022,71 +991,54 @@ proof (intro allI impI)
     by (rule stmt_fits_AssignCall[OF sf])
   have fret: "fits ?env retTy" using fret ict ict' by simp
   have flhs: "fits ?env lhsTy" using term_fits_ty[OF tfl tl] .
-  have wklhs: "is_well_kinded ?env lhsTy" using term_type_wk(1)[OF ok tl] .
   obtain info where info: "fmlookup (TE_Functions ?env) f = Some info" using core_impure_call_type_fn_facts[OF ict] by blast
   have ngp: "no_ghost_params info" using cg_ok_prog[OF ok] info unfolding prog_ok_def by blast
   note cti = call_typed_impure[OF ict info ngp]
   have wkret: "is_well_kinded ?env retTy" and rtret: "is_runtime_type ?env retTy"
     using core_impure_call_type_well_kinded_and_runtime[OF ict cg_ok_wf[OF ok]] by simp_all
   have unf: "lower_stmt cg (CoreStmt_AssignCall NotGhost lv castOpt f tys args) st =
-      cg_bind (freeze_lvalue cg lv) (\<lambda>(Sf, ll).
       cg_bind (lower_call cg f tys args) (\<lambda>(Sc, res).
       cg_bind (cast_call_res cg retTy castOpt res) (\<lambda>(Scast, res').
-      cg_bind (call_store cg (store_lazy cg ll lhsTy) lhsTy res') (\<lambda>Ss.
-      cg_return (Sf @ Sc @ Scast @ Ss, cg))))) st"
+      cg_bind (call_store cg (lower_store cg lv lhsTy) lhsTy res') (\<lambda>Ss.
+      cg_return (Sc @ Scast @ Ss, cg)))) st"
     unfolding lower_stmt.simps impure_ret_type_def by (simp add: cg_bind_def cg_lift_def ty_of_Some[OF tl] ict cg_return_def)
-  from l[unfolded unf] obtain r1 st1 where fr': "freeze_lvalue cg lv st = Inr (r1, st1)"
-    and k1: "(\<lambda>(Sf, ll). cg_bind (lower_call cg f tys args) (\<lambda>(Sc, res).
-      cg_bind (cast_call_res cg retTy castOpt res) (\<lambda>(Scast, res').
-      cg_bind (call_store cg (store_lazy cg ll lhsTy) lhsTy res') (\<lambda>Ss.
-      cg_return (Sf @ Sc @ Scast @ Ss, cg))))) r1 st1 = Inr ((S, cg'), st')"
-    by (rule cg_bind_InrE)
-  obtain Sf ll where r1: "r1 = (Sf, ll)" by (cases r1)
-  have fr: "freeze_lvalue cg lv st = Inr ((Sf, ll), st1)" using fr' r1 by simp
-  from k1[unfolded r1 case_prod_conv] obtain r2 st2 where lc': "lower_call cg f tys args st1 = Inr (r2, st2)"
+  from l[unfolded unf] obtain r2 st2 where lc': "lower_call cg f tys args st = Inr (r2, st2)"
     and k2: "(\<lambda>(Sc, res). cg_bind (cast_call_res cg retTy castOpt res) (\<lambda>(Scast, res').
-      cg_bind (call_store cg (store_lazy cg ll lhsTy) lhsTy res') (\<lambda>Ss.
-      cg_return (Sf @ Sc @ Scast @ Ss, cg)))) r2 st2 = Inr ((S, cg'), st')"
+      cg_bind (call_store cg (lower_store cg lv lhsTy) lhsTy res') (\<lambda>Ss.
+      cg_return (Sc @ Scast @ Ss, cg)))) r2 st2 = Inr ((S, cg'), st')"
     by (rule cg_bind_InrE)
   obtain Sc res where r2: "r2 = (Sc, res)" by (cases r2)
-  have lc: "lower_call cg f tys args st1 = Inr ((Sc, res), st2)" using lc' r2 by simp
+  have lc: "lower_call cg f tys args st = Inr ((Sc, res), st2)" using lc' r2 by simp
   from k2[unfolded r2 case_prod_conv] obtain r3 st3 where ccr': "cast_call_res cg retTy castOpt res st2 = Inr (r3, st3)"
-    and k3: "(\<lambda>(Scast, res'). cg_bind (call_store cg (store_lazy cg ll lhsTy) lhsTy res') (\<lambda>Ss.
-      cg_return (Sf @ Sc @ Scast @ Ss, cg))) r3 st3 = Inr ((S, cg'), st')"
+    and k3: "(\<lambda>(Scast, res'). cg_bind (call_store cg (lower_store cg lv lhsTy) lhsTy res') (\<lambda>Ss.
+      cg_return (Sc @ Scast @ Ss, cg))) r3 st3 = Inr ((S, cg'), st')"
     by (rule cg_bind_InrE)
   obtain Scast res' where r3: "r3 = (Scast, res')" by (cases r3)
   have ccr: "cast_call_res cg retTy castOpt res st2 = Inr ((Scast, res'), st3)" using ccr' r3 by simp
-  from k3[unfolded r3 case_prod_conv] obtain Ss st4 where cs: "call_store cg (store_lazy cg ll lhsTy) lhsTy res' st3 = Inr (Ss, st4)"
-    and k4: "cg_return (Sf @ Sc @ Scast @ Ss, cg) st4 = Inr ((S, cg'), st')"
+  from k3[unfolded r3 case_prod_conv] obtain Ss st4 where cs: "call_store cg (lower_store cg lv lhsTy) lhsTy res' st3 = Inr (Ss, st4)"
+    and k4: "cg_return (Sc @ Scast @ Ss, cg) st4 = Inr ((S, cg'), st')"
     by (rule cg_bind_InrE)
-  from k4 have S: "S = Sf @ Sc @ Scast @ Ss" and cg': "cg' = cg" and st': "st' = st4" by (auto simp: cg_return_def)
-  (* the frozen lvalue *)
-  obtain E1 ds1 where lo1: "lowered_ok prog ?rt (E, ds) st Sf st1 (E1, ds1)" and lt: "ll_type ll = lhsTy" and lok: "ll_ok E1 ?env ll"
-    using freeze_lvalue_ok[OF fr ok sc tfl tl] by blast
-  have ok1: "cg_ok prog E1 cg" using cg_ok_mono[OF lowered_ok_env_le'[OF lo1] ok] .
+  from k4 have S: "S = Sc @ Scast @ Ss" and cg': "cg' = cg" and st': "st' = st4" by (auto simp: cg_return_def)
   (* the call *)
-  obtain E2 ds2 where lo2: "lowered_ok prog ?rt (E1, ds1) st1 Sc st2 (E2, ds2)" and ro: "res_ok E2 info res"
-    by (rule lower_call_ok[OF lc ok1 lowered_ok_scope[OF lo1] info cti(1) tfa ftys wkret[unfolded cti(2)] fret[unfolded cti(2)]])
-  have ok2: "cg_ok prog E2 cg" using cg_ok_mono[OF lowered_ok_env_le'[OF lo2] ok1] .
+  obtain E2 ds2 where lo2: "lowered_ok prog ?rt (E, ds) st Sc st2 (E2, ds2)" and ro: "res_ok E2 info res"
+    by (rule lower_call_ok[OF lc ok sc info cti(1) tfa ftys wkret[unfolded cti(2)] fret[unfolded cti(2)]])
+  have ok2: "cg_ok prog E2 cg" using cg_ok_mono[OF lowered_ok_env_le'[OF lo2] ok] .
   have cres2: "cres_ok E2 retTy res" using cres_ok_of_res_ok[OF ro] unfolding cti(2) .
   (* the cast *)
   obtain E3 ds3 where lo3: "lowered_ok prog ?rt (E2, ds2) st2 Scast st3 (E3, ds3)" and cres3: "cres_ok E3 lhsTy res'"
     using cast_call_res_ok[OF ccr ok2 lowered_ok_scope[OF lo2] cres2 crt wkret rtret flhs] by blast
   have ok3: "cg_ok prog E3 cg" using cg_ok_mono[OF lowered_ok_env_le'[OF lo3] ok2] .
-  have lok3: "ll_ok E3 ?env ll"
-    using ll_ok_mono[OF env_le_trans[OF lowered_ok_env_le'[OF lo2] lowered_ok_env_le'[OF lo3]] lok] .
-  have sz: "u64_ok E3 (cg_size cg lhsTy)" using cg_size_ok[OF ok3 wklhs flhs] .
-  (* the store *)
+  (* the store, through the lvalue computed after the call *)
   have "\<exists>E' ds'. lowered_ok prog ?rt (E3, ds3) st3 Ss st4 (E', ds')"
   proof (rule call_store_ok[OF cs cres3 lowered_ok_scope[OF lo3]])
     fix e S' st''
-    assume "store_lazy cg ll lhsTy e st3 = Inr (S', st'')" and "expr_ok E3 e (res_cty lhsTy)"
+    assume "lower_store cg lv lhsTy e st3 = Inr (S', st'')" and "expr_ok E3 e (res_cty lhsTy)"
     then show "\<exists>E' ds'. lowered_ok prog ?rt (E3, ds3) st3 S' st'' (E', ds')"
-      using store_lazy_ok[OF _ ok3 lowered_ok_scope[OF lo3] lok3 lt _ sz] by blast
+      using lower_store_ok[OF _ ok3 lowered_ok_scope[OF lo3] tfl tl _ flhs] by blast
   qed
   then obtain E4 ds4 where lo4: "lowered_ok prog ?rt (E3, ds3) st3 Ss st4 (E4, ds4)" by blast
   have lo: "lowered_ok prog ?rt (E, ds) st S st' (E4, ds4)"
-    unfolding S st' using lowered_ok_append[OF lowered_ok_append[OF lowered_ok_append[OF lo1 lo2] lo3] lo4] by simp
+    unfolding S st' using lowered_ok_append[OF lowered_ok_append[OF lo2 lo3] lo4] by simp
   show "\<exists>E' ds'. lowered_ok prog ?rt (E, ds) st S st' (E', ds') \<and> cg_ok prog E' cg' \<and> CG_TyEnv cg' = env' \<and> CG_Ret cg' = CG_Ret cg"
     unfolding cg' env' using lo cg_ok_mono[OF lowered_ok_env_le'[OF lo] ok] by blast
 qed
