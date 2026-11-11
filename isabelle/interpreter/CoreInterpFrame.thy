@@ -839,16 +839,16 @@ next
         show ?thesis by (rule frame_step_store_update[OF store' locals' refs' addr_in])
       next
         case (CoreStmt_AssignCall g lhsLv castOpt fnName argTys argTms)
-        \<comment> \<open>Resolve lhs, run the call (newState), apply cast, store. \<close>
-        from H CoreStmt_AssignCall obtain addr path where
-          lv: "interp_writable_lvalue d fuel state lhsLv = Inr (addr, path)"
-          by (auto split: sum.splits)
-        from H CoreStmt_AssignCall lv obtain newState retVal where
+        \<comment> \<open>Run the call (newState), apply cast, resolve lhs in newState, store. \<close>
+        from H CoreStmt_AssignCall obtain newState retVal where
           call: "interp_function_call d fuel state fnName argTys argTms = Inr (newState, retVal)"
           by (auto split: sum.splits prod.splits)
         from IH_call call have cf: "call_frame state fnName argTms newState" by blast
-        from H CoreStmt_AssignCall lv call obtain rhsVal where
+        from H CoreStmt_AssignCall call obtain rhsVal where
           cast: "apply_cast_opt castOpt retVal = Inr rhsVal"
+          by (auto split: sum.splits)
+        from H CoreStmt_AssignCall call cast obtain addr path where
+          lv: "interp_writable_lvalue d fuel newState lhsLv = Inr (addr, path)"
           by (auto split: sum.splits)
         from H CoreStmt_AssignCall lv call cast obtain newVal where
           upd: "update_value_at_path (IS_Store newState ! addr) path rhsVal = Inr newVal"
@@ -858,10 +858,8 @@ next
           locals': "IS_Locals (result_state res) = IS_Locals newState" and
           refs': "IS_Refs (result_state res) = IS_Refs newState"
           by (simp_all add: Let_def)
-        have "addr \<in> frame_addrs state"
+        have addr_in: "addr \<in> frame_addrs newState"
           by (rule interp_writable_lvalue_in_frame[OF lv])
-        then have addr_in: "addr \<in> frame_addrs newState"
-          using call_frame_frame_addrs[OF cf] by simp
         have "frame_step newState (result_state res)"
           by (rule frame_step_store_update[OF store' locals' refs' addr_in])
         with call_frame_frame_step[OF cf] show ?thesis by (rule frame_step_trans)

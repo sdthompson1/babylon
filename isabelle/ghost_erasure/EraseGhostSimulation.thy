@@ -942,28 +942,32 @@ next
             ngI: "FI_Ghost info = NotGhost" and
             cargs: "call_args_notghost env info argTms"
             by blast
-          \<comment> \<open>Resolve the lhs, run the call, apply the cast, store. \<close>
-          from H CoreStmt_AssignCall obtain addr path where
-            wl: "interp_writable_lvalue d fuel full lhsLv = Inr (addr, path)"
-            by (auto split: sum.splits)
-          from H CoreStmt_AssignCall wl obtain newFull retVal where
+          \<comment> \<open>Run the call, apply the cast, resolve the lhs in the post-call
+              state, store. \<close>
+          from H CoreStmt_AssignCall obtain newFull retVal where
             call: "interp_function_call d fuel full fnName argTys argTms
                      = Inr (newFull, retVal)"
             by (auto split: sum.splits prod.splits)
-          from H CoreStmt_AssignCall wl call obtain rhsVal where
+          from H CoreStmt_AssignCall call obtain rhsVal where
             cast: "apply_cast_opt castOpt retVal = Inr rhsVal"
+            by (auto split: sum.splits)
+          from H CoreStmt_AssignCall call cast obtain addr path where
+            wl: "interp_writable_lvalue d fuel newFull lhsLv = Inr (addr, path)"
             by (auto split: sum.splits)
           from H CoreStmt_AssignCall wl call cast obtain newVal where
             upd: "update_value_at_path (IS_Store newFull ! addr) path rhsVal = Inr newVal"
             by (auto simp: Let_def split: sum.splits)
-          from lvs[OF lW wl] obtain i where
-            wlE: "interp_writable_lvalue d fuel erased (?er lhsLv) = Inr (i, path)" and
-            i_lt: "i < length emb" and ei: "emb ! i = addr"
-            by blast
           from IH_call[OF fn_eq funs_eq rel info ngI cargs call] obtain newErased where
             callE: "interp_function_call d fuel erased fnName argTys ?argsE
                       = Inr (newErased, retVal)" and
             rel1: "state_erased env emb newFull newErased"
+            by blast
+          \<comment> \<open>The lvalue simulation is applied to the related post-call states. \<close>
+          have funs_eq1: "IS_Functions newFull = funs"
+            using static_parts_eqD(2)[OF interp_function_call_static[OF call]] funs_eq by simp
+          from IH_lv[OF fn_eq funs_eq1 rel1 lW wl] obtain i where
+            wlE: "interp_writable_lvalue d fuel newErased (?er lhsLv) = Inr (i, path)" and
+            i_lt: "i < length emb" and ei: "emb ! i = addr"
             by blast
           have cell: "IS_Store newErased ! i = IS_Store newFull ! addr"
             by (rule erased_cell[OF rel1 i_lt ei])

@@ -1038,17 +1038,19 @@ next
           by (auto split: if_splits option.splits)
         from T CoreStmt_AssignCall have env'_eq: "env' = env"
           by (auto split: if_splits option.splits)
-        \<comment> \<open>Resolve lhs, run the call (newState), apply cast, store. \<close>
-        from H CoreStmt_AssignCall obtain addr path where
-          wl: "interp_writable_lvalue d fuel full lhsLv = Inr (addr, path)"
-          by (auto split: sum.splits)
-        from H CoreStmt_AssignCall wl obtain newState retVal where
+        \<comment> \<open>Run the call (newState), apply cast, resolve lhs in newState, store. \<close>
+        from H CoreStmt_AssignCall obtain newState retVal where
           call: "interp_function_call d fuel full fnName argTys argTms = Inr (newState, retVal)"
           by (auto split: sum.splits prod.splits)
         have rel1: "state_erased env emb newState erased"
           by (rule ghost_call_invisible[OF rel agree' pure' callT call])
-        from H CoreStmt_AssignCall wl call obtain rhsVal where
+        from rel1 have gh1: "ghost_locals_separate env emb newState"
+          by (simp add: state_erased_def)
+        from H CoreStmt_AssignCall call obtain rhsVal where
           cast: "apply_cast_opt castOpt retVal = Inr rhsVal"
+          by (auto split: sum.splits)
+        from H CoreStmt_AssignCall call cast obtain addr path where
+          wl: "interp_writable_lvalue d fuel newState lhsLv = Inr (addr, path)"
           by (auto split: sum.splits)
         from H CoreStmt_AssignCall wl call cast obtain newVal where
           upd: "update_value_at_path (IS_Store newState ! addr) path rhsVal = Inr newVal"
@@ -1062,10 +1064,11 @@ next
           refs': "IS_Refs (result_state res) = IS_Refs newState" and
           consts': "IS_ConstLocals (result_state res) = IS_ConstLocals newState"
           by (simp_all add: Let_def static_parts_eq_def)
+        \<comment> \<open>The cell written is the cell of a ghost variable (in newState). \<close>
         have rel': "state_erased env emb (result_state res) erased"
           by (rule state_erased_ghost_write
                      [OF rel1 st2 world store' locals' refs' consts'
-                         ghost_lvalue_addr_separate(2)[OF gh glv wl]])
+                         ghost_lvalue_addr_separate(2)[OF gh1 glv wl]])
         show ?thesis unfolding env'_eq by (rule conjI[OF c rel'])
       next
         case (CoreStmt_Swap g lhsTm rhsTm)

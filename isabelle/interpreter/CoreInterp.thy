@@ -1727,14 +1727,20 @@ where
 
   (* Assignment from an impure call *)
 | "interp_statement d (Suc fuel) state (CoreStmt_AssignCall _ lhsLvalue castOpt fnName argTys argTms) =
-    \<comment> \<open>Resolve the lhs first, then run the (possibly impure) call observing its
-        state effect, apply the optional cast, and store the result.\<close>
-    (case interp_lvalue d fuel True state lhsLvalue of
-      Inr (addr, path) \<Rightarrow>
-        (case interp_function_call d fuel state fnName argTys argTms of
-          Inr (newState, retVal) \<Rightarrow>
-            (case apply_cast_opt castOpt retVal of
-              Inr rhsVal \<Rightarrow>
+    \<comment> \<open>The rhs is evaluated first: run the (possibly impure) call, including
+        the write-back of its ref arguments, and apply the optional cast. Only
+        then is the lhs resolved to an address and path, in the state after
+        the call, and the result stored there. So in a[i] = f(i), where f
+        modifies i, the element written is the one selected by the new value
+        of i. This is the order the verifier uses (it translates the call and
+        then builds the lhs's reference chain in the post-call state), and
+        the code generators follow it.\<close>
+    (case interp_function_call d fuel state fnName argTys argTms of
+      Inr (newState, retVal) \<Rightarrow>
+        (case apply_cast_opt castOpt retVal of
+          Inr rhsVal \<Rightarrow>
+            (case interp_lvalue d fuel True newState lhsLvalue of
+              Inr (addr, path) \<Rightarrow>
                 (let oldVal = IS_Store newState ! addr in
                 case update_value_at_path oldVal path rhsVal of
                   Inr newVal \<Rightarrow>

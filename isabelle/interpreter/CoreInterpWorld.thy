@@ -407,16 +407,16 @@ next
         from pure_context_callee_pure[OF callT ok'] fn_eq obtain info where
           info: "fmlookup funInfos fnName = Some info" and np: "\<not> FI_Impure info"
           by auto
-        \<comment> \<open>Resolve lhs, run the call (newState), apply cast, store. \<close>
-        from H CoreStmt_AssignCall obtain addr path where
-          wl: "interp_writable_lvalue d fuel state lhsLv = Inr (addr, path)"
-          by (auto split: sum.splits)
-        from H CoreStmt_AssignCall wl obtain newState retVal where
+        \<comment> \<open>Run the call (newState), apply cast, resolve lhs in newState, store. \<close>
+        from H CoreStmt_AssignCall obtain newState retVal where
           call: "interp_function_call d fuel state fnName argTys argTms = Inr (newState, retVal)"
           by (auto split: sum.splits prod.splits)
         note w1 = IH_call[OF funs_eq info np call]
-        from H CoreStmt_AssignCall wl call obtain rhsVal where
+        from H CoreStmt_AssignCall call obtain rhsVal where
           cast: "apply_cast_opt castOpt retVal = Inr rhsVal"
+          by (auto split: sum.splits)
+        from H CoreStmt_AssignCall call cast obtain addr path where
+          wl: "interp_writable_lvalue d fuel newState lhsLv = Inr (addr, path)"
           by (auto split: sum.splits)
         from H CoreStmt_AssignCall wl call cast obtain newVal where
           upd: "update_value_at_path (IS_Store newState ! addr) path rhsVal = Inr newVal"
