@@ -1,4 +1,4 @@
-# MiniC: design of the verified code generator (stages 3a and 3b)
+# MiniC: design of the verified code generator (stages 3a to 5)
 
 This document is the design for the verified code generator that will
 translate a linked, ghost-erased, match-compiled, normalized `CoreModule`
@@ -8,7 +8,12 @@ semantics; its decisions (the static size bound of section 3.2, the encoding
 as a record in section 2.2, the global initialisation in section 3.7 and the
 extern name map in section 3.9) were reviewed and accepted on 2026-10-23.
 Stage 3b added the typing judgement (section 1.2), the printer and the
-C-level validation of the example (section 11).
+C-level validation of the example (section 11). Stage 4 added the layout,
+the static size checker and the representation relation (sections 2.3,
+3.2, 4 and 6.2); stage 5 the generator itself, its driver, the end-to-end
+test over the codegen tests, and the typing theorem (sections 3, 8 and
+11.5). Each of sections 3.1 to 3.9 ends with an "as definitions" paragraph
+saying how the scheme was implemented and where it deviates.
 
 The theories in this directory:
 
@@ -24,7 +29,7 @@ The theories in this directory:
 | `MiniCExample.thy` | the hand-written example programs, their extern models, their evaluation and typing by `eval`, and the list `minic_examples` the driver exports |
 
 The theories of the code generator proper live in `isabelle/codegen/`
-(stages 4 to 6); those of stage 4:
+(stages 4 to 6); those of stages 4 and 5:
 
 | Theory | Contents |
 | --- | --- |
@@ -36,6 +41,16 @@ The theories of the code generator proper live in `isabelle/codegen/`
 | `codegen/RepValPath.thy` | `PathLoc`, `path_step`/`path_loc`, `val_owned`, the projection and update lemmas |
 | `codegen/RepValDefault.thy` | `default_value_rep_zero` |
 | `codegen/StateRep.thy` | the store-level relation, the ownership invariant, `extern_rep` and the `print_i32` instance |
+| `codegen/ExternNames.thy` | the extern C-name map `extern_name_map` over the renamed Babylon modules, and the check `invalid_extern_names` (section 3.9) |
+| `codegen/CodeGenEnv.thy` | the generator's error type `CGError`, state monad `CG`, names (`fresh_name`, `local_name`), C types, sizes and offsets of Core types, `VarRep`/`LazyLv`, the environment `CGEnv` (sections 3.1, 3.5) |
+| `codegen/CodeGenTerm.thy` | `lower_term`, `lower_addr`, `lower_call`, lazy addresses, matches (sections 3.3 to 3.5) |
+| `codegen/CodeGen.thy` | `freeze_lvalue`, `lower_stmt`/`lower_stmts`, globals (`init_value`, `lower_globals`), functions, `main`, the name checks and `codegen_module` (sections 3.6 to 3.9) |
+| `codegen/CodeGenTypingBase.thy` | typing facts about MiniC and about the size and offset expressions (`u64_ok`, `sizes_in`, `size_of_ok`, ...) |
+| `codegen/CodeGenTypingInv.thy` | the invariant `cg_ok` (the static half of stage 6's per-frame relation), `scope_ok`, `lowered_ok`, and the lemmas about declarations, stores, calls and lowered lists |
+| `codegen/CodeGenTypingHelpers.thy` | Core typing facts the proof needs, `fits`/`term_fits`, variables, lazy addresses, casts, temporaries, matches |
+| `codegen/CodeGenTypingTerm.thy` | one lemma per term form and the term theorem `lower_ok` (terms, addresses, calls) |
+| `codegen/CodeGenTypingStmt.thy` | size facts of statements, the proof-top-level flag, one lemma per statement form and `lower_stmt_ok_all` |
+| `codegen/CodeGenTyping.thy` | global values, parameters, functions, the generated `main`, and `codegen_well_typed` (section 8) |
 
 They are part of the main `Babylon` session (`isabelle/ROOT`); the separate
 `Babylon_MiniC` session of stage 3a is gone. To iterate on one theory
@@ -355,6 +370,51 @@ every form. The decision is reversible: if stage 6 finds the term cases too
 large, the lowering of terms to statements can be split off later without
 changing MiniC.
 
+**As definitions (stage 5, `codegen/CodeGenEnv.thy`, `CodeGenTerm.thy`,
+`CodeGen.thy`).** `CGEnv` is a record of plain data: `CG_TyEnv`, the Core
+typing context at the current point, threaded exactly as
+`core_statement_type` and `core_term_type` thread it (the generator
+re-types every subterm with `core_term_type (CG_TyEnv cg) NotGhost`, and
+computes the context after a declaration with `core_statement_type` itself,
+`env_after`, so it agrees with the typechecker by definition); `CG_Vars`,
+the representation of every Core variable in scope (section 3.5; globals
+included, locals shadow them); `CG_Ret`, how the enclosing function returns
+(`RetKind`: `RK_Scalar cty`, `RK_Unit`, `RK_Buf`); and `CG_Fun`, the
+function's name for error messages. The generator monad
+`'a CG = CGState ⇒ CGError + 'a × CGState` has as state a counter and the
+finite set `CS_Used` of every MiniC name in use in the current function.
+Every failure is a value of the structured type `CGError`
+(`CGE_MainMissing`, `CGE_MainWrongType`, `CGE_FunctionNamedMain`,
+`CGE_DollarName`, `CGE_NameIsFunction`, `CGE_GlobalIsFunction`,
+`CGE_DuplicateParam`, `CGE_ParamCount`, `CGE_GlobalHandle`, `CGE_Ghost`,
+`CGE_Internal f msg`), which `cg_error_to_strings` in `CodeExport.thy`
+turns into a message in the user's terms. The lowering functions are
+`lower_term`, `lower_addr` and `lower_call` (mutually recursive,
+`CodeGenTerm.thy`; `lower_addr` gives the address of a term: of the lvalue
+for an lvalue, the place for a non-lvalue aggregate, and a fresh temporary
+holding the value for a non-lvalue scalar, which is how a scalar is passed
+to a parameter of type-variable type), `freeze_lvalue`,
+`lower_stmt`/`lower_stmts`, `init_value`, `lower_globals`,
+`lower_function`, `lower_functions` and `codegen_module` (`CodeGen.thy`).
+Everything is structurally recursive (nothing is fuelled) and the whole
+generator is exported to Haskell through `CodeExport.thy`.
+
+*Names: one deviation from the scheme as written.* MiniC names are unique
+per function, not per scope. Core allows a nested scope to rebind a name of
+an outer one, and two sibling `Let`s of one name in one scope
+(`test/cases/codegen/Let.b`), while a lazy reference (section 3.5) declared
+in the outer scope must keep addressing the outer variable after the inner
+one is declared; with unique names a lazy reference can simply mention the
+MiniC name of its base. A Core local keeps its own name if it is not yet in
+use in the function and otherwise becomes `x$n` with the counter value `n`
+(`local_name`); temporaries are `hint$n` (`fresh_name`: `arr$3`, `sc$7`,
+...); the size parameter of `T` is `size$T` and the return buffer `ret$`.
+Core names never contain `$` (checked before generating, section 3.9), but
+the generator does not rely on it: every new name is tested against
+`CS_Used`, and a repetition is an internal error, so the typing proof needs
+only "every name in scope is among those in use" (`scope_ok`, section 8)
+and no lemma about the naming scheme.
+
 ### 3.2 Sizes, offsets and the static size bound
 
 The size of a (ground or generic) Core type is a `uint64_t` MiniC
@@ -522,6 +582,40 @@ statements here.
 Ghost constructs (`Quantifier`, `Allocated`, math types) cannot occur in a
 ghost-free module and are not handled.
 
+**As definitions (stage 5, `lower_term` in `CodeGenTerm.thy`).** The table
+is implemented row by row (`load_at`, `store_at`, `temp_for`,
+`temp_store` and `temp_result` are the shared helpers: a scalar's result
+is its value, an aggregate's its place), with these refinements:
+
+- Buffer sizes are `buf_size |ty|`, which is `|ty|` itself when the size
+  expression is syntactically positive (`expr_positive`: every literal but
+  `0`, every descriptor size, products and sums of such) and `max 1 |ty|`
+  otherwise, so that constant sizes print as constants rather than as
+  VLAs (gcc 13 at `-O2` reported a spurious dangling pointer to a VLA
+  descriptor temporary passed to an inlined function; section 11.5).
+- The element address of an `ArrayProj` is `elem_addr`, built with
+  `elem_offset_raw`: the raw `uint64_t` arithmetic, without the literal
+  folding of `elem_offset_expr` (stage 4), because an out-of-bounds literal
+  index (a `RuntimeError` in Core, on a path a normal run never takes)
+  folded to a literal could exceed `uint64_t`, which `program_wf` forbids,
+  whereas unfolded it is merely arithmetic that is never executed.
+- The short-circuit operators create their `uint8_t` temporary before the
+  right operand is lowered, so that the generator's state follows the
+  order of the statements (the typing proof threads the state).
+- A `Let` of a scalar binds `VR_Scalar x cty`, of an aggregate `VR_Ptr x`
+  (the place; section 3.5).
+- A pure call of a `void` function used as a term of the unit type gets a
+  one-byte dummy buffer as its place.
+- The arms of a `Match` are each an `MS_Block` (or the branch of an
+  `MS_If`), built by `if_chain`: the last arm is unconditional and a
+  wildcard arm ends the chain. `match_tag` holds the tag (loaded from the
+  place of a variant scrutinee) or the value of a bool/integer scrutinee
+  in a fresh variable; `arm_cond` is the comparison of each arm.
+- A `Default` of an extern type (a null pointer) is a fresh `void *`
+  variable zeroed with `MS_Zero` (A3: the null pointer is all-zero bytes);
+  of an integer type the literal `0`; of an aggregate a zeroed buffer.
+- `Quantifier` and `Allocated` are the error `CGE_Ghost`.
+
 ### 3.4 Calls, size passing, `ref` arguments
 
 A Core function `f<T1..Tm>(a1: ty1 [ref], ..., an: tyn [ref]): rty` becomes
@@ -681,6 +775,28 @@ aliasing hypothesis over the run, and `extern_rep`'s disjointness of the
 `ref` regions (section 6.2) follows from the Core run reaching a normal
 result.
 
+**As definitions (stage 5, `lower_call` in `CodeGenTerm.thy`;
+`fun_params`, `param_rep`, `lower_function` in `CodeGen.thy`).** The kind
+of every parameter and of the result is decided by the *declared* types of
+the callee's signature, as the C prototype is: `param_by_ptr ty vor` holds
+for a `ref` and for any declared type that is not a scalar, a type variable
+included (`param_cty` is then `char *`); `ret_kind` of the declared return
+type is `RK_Scalar cty`, `RK_Unit` for `{}`, or `RK_Buf`. Hence a scalar
+argument passed to a parameter of type-variable type is materialised in a
+temporary and its address passed (`lower_addr`), and the result of a call
+whose declared return type is a type variable instantiated at a scalar is
+loaded from the return buffer (`call_result_expr`, applied by the caller
+to the `CallRes` of `lower_call`: `CR_Scalar e`, `CR_Place p` or
+`CR_Unit`). The parameter list is `fun_params cf info`: `ret$` if
+`RK_Buf`, then `size$T` for every type parameter, then the Core parameter
+names with their `param_cty`; the size arguments of a call are `size_of`
+of the type arguments over the caller's `size$T` variables. A parameter
+whose name is already in use (a function name, a global name, or a
+repeated parameter) is rejected by `check_fun_names` (section 3.9). An
+extern function (`CF_Body = None`) gets the same prototype with
+`MF_Extern = Some cname` (section 3.9) and no body. The stage 4 relation
+`extern_rep` still classifies by the instantiated type (risk 19).
+
 ### 3.5 Variables, `ref` locals, lazy references
 
 The generator's environment records, for each Core variable in scope, how
@@ -732,6 +848,31 @@ aggregate parameter (the caller is suspended; by the aliasing hypothesis the
 callee's `ref` parameters do not overlap it). Section 4 says how the
 representation relation accommodates this sharing.
 
+**As definitions (stage 5, `CodeGenEnv.thy`, `CodeGenTerm.thy`,
+`CodeGen.thy`).** `VarRep` has one constructor per kind of row of the
+table: `VR_Scalar x cty` (a scalar MiniC variable holding the value:
+mutable scalar locals, scalar parameters, scalar `Let`s, scalar globals),
+`VR_Buf x` (a buffer holding the bytes: mutable aggregate locals,
+aggregate globals), `VR_Ptr x` (a `char *` holding the address: aggregate
+by-value parameters, aggregate `Let`s, `ref` parameters, non-lazy `ref`
+locals) and `VR_Lazy ll`. A lazy reference is not a Core term but a syntax
+tree `LazyLv` (`LL_Base rep ty`, `LL_Field ll f ty`, `LL_Payload ll c ty`,
+`LL_Index ll vs ty` with the frozen index variables `vs`, `LL_Cast ll ty`),
+each node annotated with the Core type of the sub-lvalue it denotes, so
+that offsets are computed without re-typing, and whose base carries the
+base variable's *representation* rather than its Core name (which a nested
+scope could shadow; the MiniC name is unique, section 3.1). `needs_lazy`
+is `needs_lazy_ref` of `codegen.c`: the lvalue passes through an
+`ArrayProj` of a type with an allocatable dimension (`has_alloc_dim`) or
+through a variable that is itself lazy. `freeze_lvalue` evaluates each
+index once into a fresh `uint64_t` local `idx$n` and builds the `LazyLv`;
+`lazy_addr` recomputes the address at every use (through the descriptor
+for an allocatable array, which may have been reallocated since).
+`read_rep` and `addr_rep` read or address a variable through its
+representation; `rep_addr` is the address of a non-lazy one. The
+representation of a global is `global_rep` (section 3.7), of a parameter
+`param_rep`.
+
 ### 3.6 Statements
 
 | Core statement | Lowering |
@@ -755,6 +896,24 @@ Function bodies: the statements of the body, with sizes and offsets as
 inline expressions over the size parameters (section 3.2). Core's
 `call_body` raises `RuntimeError` if the body falls off the end without
 `return`, so the generated body need not end with one.
+
+**As definitions (stage 5, `lower_stmt`/`lower_stmts` in
+`CodeGen.thy`).** As the table. The context after a `VarDecl` or
+`VarDeclCall` is `env_after`, the typechecker's own `core_statement_type`;
+`decl_local`/`init_local` declare (with `local_name`) and initialise a
+local; `lower_store` stores through a Core lvalue and `store_lazy` through
+a frozen one; `cast_call_res` applies the optional cast of a
+`VarDeclCall`/`AssignCall` to the `CallRes` and `call_store` stores it
+(nothing for a `void` result; a result that comes back through the buffer
+at a scalar instantiated type is loaded first). `AssignCall` freezes the
+left-hand side with `freeze_lvalue` before the call and stores through
+`store_lazy` after it. `Swap` uses a `swap$n` temporary. `Return` follows
+`CG_Ret`; `return {}` is a bare `MS_Return None`, any other unit-typed
+term is still lowered (for its temporaries) before it. `While`, `Block`
+and the arms of a `Match` lower their bodies in `cg_nested cg` (the
+proof-top-level flag cleared, as the typechecker does; nothing else
+changes), each arm in an `MS_Block` by `if_chain`. The ghost statement
+forms and the ghost-flagged forms are the error `CGE_Ghost`.
 
 ### 3.7 Global constants
 
@@ -796,6 +955,24 @@ function-level laziness in MiniC, and its correctness is the ordinary
 is that a C program that calls into the generated code without going
 through its `main` sees zeroed constants; such programs are not supported.
 
+**As definitions (stage 5, `CodeGen.thy`).** `global_decl env ty` is
+`MG_Scalar cty` or `MG_Buf (buf_size |ty|)`; `global_rep` is the
+corresponding `VarRep` and `global_reps` the initial `CG_Vars` of every
+function body. `init_value env g ty v base` yields the stores for the
+value `v` at the address `base` (leaves at their offsets, `elem_offset_expr`
+with literal indices for array elements) and the extra data-buffer globals,
+named `g$data$n` by `fresh_name` from the module-level state, so that they
+are distinct from every function, global and other data buffer;
+`lower_globals` runs it for every entry of `CM_GlobalVars` in name order
+with `base = ME_AddrOf g`. Two checks beyond the scheme: the instantiated
+payload type of a variant value, and the element type and element count of
+a descriptor-array value, must fit (`size_fits` at the zero assignment),
+because the offsets and the data buffer's size are literals, which
+`program_wf` requires to fit `uint64_t`. On `core_module_sizeable` input
+they always do (every closed type fits); the checks exist so that the
+typing theorem needs no hypothesis about global *values*. A non-null extern
+handle is `CGE_GlobalHandle`; a math value is an internal error.
+
 ### 3.8 The generated `main`
 
     int main(void) { <global initialisation>; <Core main>(); return 0; }
@@ -807,6 +984,15 @@ the generator (the driver knows the root module). The Core main is a
 procedure (`{}` return, no parameters, no type parameters); the generator
 checks this. `run_program` in the semantics mirrors the C start-up: allocate
 the globals zero-filled, call `main`, return its `int`.
+
+**As definitions (stage 5, `CodeGen.thy`).** `main_fun mainName init`
+is the `MFun` above; `check_main` requires `mainName` to be in
+`CM_Functions` and `TE_Functions` with no type parameters, no parameters
+and return type `{}`, else `CGE_MainMissing` or `CGE_MainWrongType` (this
+rejects `test/cases/typechecker/MissingMain.b` and `MainWrongType.b`, as
+`bab compile` does). The Core name of the root module's `main` is
+`main:Root.main`: the loader puts the modules into a package named `main`
+(`run_compiler` in `CodeExport.thy`).
 
 ### 3.9 Extern functions and their C names
 
@@ -833,7 +1019,42 @@ untouched, which is right because the C name is irrelevant to every theorem
 field `CF_ExternName :: string option` on `CoreFunction`, is more robust
 against the map and the module going out of sync but touches every
 construction site of `CoreFunction` in the elaborator and linker.
-Implementation is stage 5 work.
+**As definitions (stage 5, `codegen/ExternNames.thy`).** The route taken
+is a function over the parsed and renamed `BabModule list` (the input of
+`elab_program`), not a change to `elab_program`: `extern_name_map mods`
+collects, for every `DF_Extern` function declaration in each module's
+interface and implementation, `(DF_Name df, cname)` with `cname =
+DF_ExternName df` if given and the unqualified name otherwise
+(`unqualify`). The renamer (`front_end/BabRenamer.thy`) has already
+replaced `DF_Name` by the qualified name `Mod.name`, which is exactly the
+key `elab_function_decl` (`ElabDecl.thy`) uses for `TE_Functions` and
+`CM_Functions`, so the map agrees with the elaborator's naming without
+touching the elaborator or any of its theorems (the string hoisting that
+`elab_program` applies first does not rename functions). `run_compiler`
+passes `extern_name_map babModules` to `codegen_module`, which uses the
+entry of each `CF_Body = None` function and falls back to `unqualified f`
+if there is none. The optional validation is done too:
+`invalid_extern_names` lists the declarations whose explicit C name is not
+a C identifier (non-empty; a letter, then letters, digits and `_`;
+`is_valid_extern_name`, as in `src/typechecker.c`), and `run_compiler`
+reports them before elaboration, which rejects
+`test/cases/typechecker/ExternName.b` as expected.
+
+*The checks before generating, as definitions (stage 5, `CodeGen.thy`).*
+`check_module_names`: no function or global is named `main`
+(`CGE_FunctionNamedMain`), no function or global name contains `$`
+(`CGE_DollarName`), no global has the name of a function
+(`CGE_GlobalIsFunction`); function names are distinct because
+`CM_Functions` is a map. Per function, `check_fun_names`: the parameter
+names and the signature have the same length (`CGE_ParamCount`), the
+parameter names are distinct (`CGE_DuplicateParam`), no parameter or type
+parameter name contains `$` (`CGE_DollarName`), no parameter has the name
+of a function (`CGE_NameIsFunction`), and every MiniC parameter name
+(`ret$`, the `size$T`, the parameters) is reserved against the names in
+use, which include the globals: a Core parameter named like a global is
+therefore rejected (as `CGE_Internal`, since elaborator output never has
+one: globals are qualified `Mod.name`). Locals need no check, since
+`local_name` renames one that clashes (section 3.1).
 
 **Name clashes** (decided 2026-10-31). C has one namespace for functions
 and objects, and the generated file contains three kinds of identifier:
@@ -1258,7 +1479,8 @@ implementation `E :: 'w ExternFunc`, MiniC model `M :: 'w MExtern` and
 > by-value argument is its `scalar_val`, an aggregate by-value or `ref`
 > argument is a pointer to a region holding its bytes by `rep_val`
 > (`arg_rep`); the return buffer, if any, is a readable region of `|rty|`
-> bytes; all these regions are pairwise disjoint, `pairwise_disjoint`):
+> bytes; each `ref` region and the return region is disjoint from every
+> other region, `protected_disjoint`):
 > if `E w vs = (w', refUpds, ret)` then `M w mem as = Some (w', mem', r)`
 > for some `mem'` and `r` such that
 >   - `mem_agrees_outside mem mem' R X`: every block live in `mem` and not
@@ -1269,43 +1491,62 @@ implementation `E :: 'w ExternFunc`, MiniC model `M :: 'w MExtern` and
 >   - `results_rep`: the `ref` regions in `mem'` represent `refUpds` (one
 >     per `Ref` parameter, in parameter order, `ref_args`), each update owns
 >     its blocks (`val_owned`) and reaches only blocks that were not live in
->     `mem` (allocations) or that the argument reached before; the result is
+>     `mem` (allocations) or that the argument reached before; for a `ref`
+>     parameter whose type has a `CoreDim_Unknown` dimension
+>     (`has_unknown_dim`) the bytes of the `ref` region are the same in
+>     `mem'` as in `mem`; the result is
 >     represented in the return buffer (`r = None`), or `r` is its
 >     `scalar_val`, or (unit type) `r = None` and `ret = {}`; `hmap` gives
 >     the pointers of extern handles throughout (so it is a fixed injection
 >     shared by all externs).
 
-`pairwise_disjoint` is stronger than what the aliasing check of section
-3.4 provides: the check only separates each `ref` argument from the other
-arguments, and lets by-value arguments share bytes with each other and
-with the caller's locals (`f(x, x)`, or `f(cast<T[n]>(a), a[0])` with `a`
-allocatable, are fine in Core and pass the check), while `arg_region`
-puts every by-value aggregate argument into the pairwise-disjoint list.
-Since the generated call site passes the *place* of a by-value aggregate
-argument (no copy, section 3.4), `f(x, x)` to an extern builds an `as` on
-which `args_rep` is false, and the contract gives nothing. For a
-Core-to-Core call the per-frame invariant of stage 6 assumes only what
-the check gives, "each `ref` region is disjoint from every other argument
-region and from the return buffer"; `args_rep` should be weakened to the
-same condition (an extern cannot write a by-value argument, so a model
-never needs more), or else the generator must copy by-value aggregate
-arguments at extern call sites. Risk 17 of section 9.
+*Stage 5 changed two things here (decided 2026-11-06; risks 17 and 18 of
+section 9).* The first version of `args_rep` required all pointer argument
+regions to be pairwise disjoint, which is stronger than what the aliasing
+check of section 3.4 provides: the check only separates each `ref`
+argument from the other arguments, and lets by-value arguments share bytes
+with each other and with the caller's locals (`f(x, x)`, or
+`f(cast<T[n]>(a), a[0])` with `a` allocatable, are fine in Core and pass
+the check). Since the generated call site passes the *place* of a by-value
+aggregate argument (no copy, section 3.4), `f(x, x)` to an extern would
+have built an `as` on which `args_rep` was false, and the contract would
+have given nothing. `args_rep` now requires `protected_disjoint`: the
+regions are listed with a flag (the return region and the `ref` regions
+are protected, by-value aggregates are not), and a protected region must
+be disjoint from every other region in the list. This is exactly what the
+aliasing check guarantees, `mem_agrees_outside` and `results_rep` only
+ever mention the protected regions, and an extern cannot write a by-value
+argument, so no model needs more.
 
-`results_rep` is, conversely, too weak for a `ref` parameter of
-incomplete array type. For `ext(ref x: T[])` called with a `T[*]` cell the
-`ref` region is the cell's own descriptor (the cast keeps the location,
-section 4), and Core writes the extern's new value back through the cast
-(`apply_ref_updates`), keeping the sizes. `results_rep` only asks that the
-region represent that value, own its blocks and reach nothing but fresh or
-previously reached blocks, so a model could leave a descriptor pointing at
-a fresh block or at an interior offset of the old data block, and the
-`T[*]` cell would no longer own a block it can free: this is the whole
-write through an ownership-dropping cast that `path_casts_ok` excludes,
-and the only one executable Core can perform (risk 15). The clause to add
-is that for a `ref` parameter whose type has `CoreDim_Unknown` dimensions
-the bytes of the `ref` region are the same in `mem'` as in `mem`; the
-extern may change only the contents of the data block. Risk 18 of
-section 9.
+The first version of `results_rep` was, conversely, too weak for a `ref`
+parameter of incomplete array type. For `ext(ref x: T[])` called with a
+`T[*]` cell the `ref` region is the cell's own descriptor (the cast keeps
+the location, section 4), and Core writes the extern's new value back
+through the cast (`apply_ref_updates`), keeping the sizes. `results_rep`
+only asked that the region represent that value, own its blocks and reach
+nothing but fresh or previously reached blocks, so a model could have left
+a descriptor pointing at a fresh block or at an interior offset of the old
+data block, and the `T[*]` cell would no longer have owned a block it can
+free: this is the whole write through an ownership-dropping cast that
+`path_casts_ok` excludes, and the only one executable Core can perform
+(risk 15). The clause added says that for a `ref` parameter whose type has
+a `CoreDim_Unknown` dimension the bytes of the `ref` region are the same
+in `mem'` as in `mem`; the extern may change only the contents of the
+data block. (Only the top-level dimensions matter: a record with a `T[]`
+field cannot be the type of an executable cell, since array casts apply
+only at the top of a type.)
+
+*A gap found in stage 5, left for stage 6 (risk 19):* `arg_rep` and
+`ret_by_buffer` decide "scalar or pointer" by the *instantiated* type,
+whereas the C prototype of a generic extern (and the generated call site,
+section 3.4) decides by the *declared* type: `ext<T>(x: T)` called at
+`i32` passes a `char *` to the bytes of the `i32`, and a declared return
+type `T` always goes through the return buffer. `extern_rep` is therefore
+stated wrongly for an extern with a by-value parameter or return of
+type-variable type instantiated at a scalar; no extern in the test suite
+has one (`alloc_array<T>` takes `ref array: T[*]`). The fix is to compute
+the kinds from `FI_TmArgs`/`FI_ReturnType` before substitution, as the
+generator does (`param_by_ptr`, `ret_kind` in `CodeGenEnv.thy`).
 
 Because the Core `ExternFunc` is total and deterministic in `(w, vs)`,
 whether an allocation succeeds is decided by `w`: `E` returns `false` (and
@@ -1384,9 +1625,10 @@ printed, compiled and run.
 
 ## 8. The two target theorems
 
-Written out as they are expected to be stated in stage 5 (typing) and stage
-6 (simulation). `codegen_module` and `state_rep` (the per-frame part on top
-of `state_rep_store`) do not exist yet; `rep_val`, `extern_rep`, `hmap`
+The typing theorem is proved (stage 5, `codegen/CodeGenTyping.thy`); the
+simulation theorem is written out as it is expected to be stated in stage
+6. `state_rep` (the per-frame part on top of `state_rep_store`) does not
+exist yet; `rep_val`, `extern_rep`, `hmap`
 (section 4, 6.2), `datatypes_acyclic` (every datatype is non-recursive) and
 `core_module_sizeable P m` (the static size bound of section 3.2 at pointer
 size `P`, which includes acyclicity of the call graph and of the datatypes,
@@ -1400,19 +1642,67 @@ covered by "normal result". The name checks of section 3.9 are inside
 `codegen_module` (it returns `None` when one fails) and `extern_clashes`
 runs on its output in the driver, so neither appears as a hypothesis.
 
-    theorem codegen_well_typed:
+    theorem codegen_well_typed:                   (* proved, stage 5 *)
       assumes "core_module_well_typed m"
           and "core_module_closed m"
           and "core_module_ghost_free m"
-          and "core_module_flat m"
           and "CM_TypeSubst m = fmempty"            (* normalized *)
           and "core_module_sizeable P m"            (* implies datatypes_acyclic (CM_TyEnv m) *)
-          and "fmlookup (CM_Functions m) mainName = Some mainFn"
-          and "fmlookup (TE_Functions (CM_TyEnv m)) mainName = Some mainInfo"
-          and "FI_TyArgs mainInfo = []" and "FI_TmArgs mainInfo = []"
-          and "FI_ReturnType mainInfo = CoreTy_Record []"
-          and "codegen_module cnames mainName m = Some prog"
+          and "codegen_module cnames mainName m = Inr prog"
       shows "program_wf prog" and "program_well_typed prog"
+
+Compared with the statement planned for it, two hypotheses turned out to
+be unnecessary: `core_module_flat m` (the lowering of a match is typed
+whether or not the patterns are flat; flatness matters to the simulation,
+not to typing) and the facts about `mainName`'s signature, which the
+generator checks itself (`check_main`, section 3.8). `P` is arbitrary:
+the proof only uses that every type the generator takes the size of fits
+at pointer size `0` and the zero assignment (`fits`), which
+`core_module_sizeable P m` gives for every `P` by anti-monotonicity, and
+every literal size the generated code contains is such a size.
+
+*How it is proved* (the theories of the table at the top). The invariant
+`cg_ok prog E cg` (`CodeGenTypingInv.thy`) relates the generator's
+environment to the Core context and a MiniC typing environment `E`: the
+context is well formed, the size parameter `size$T` of every type variable
+in scope is in `E` (`sizes_in`), every Core variable's representation is
+typed in `E` for the variable's Core type (`rep_ok`, with `ll_ok` for lazy
+lvalues: every node well kinded and of fitting size, the index variables
+`uint64_t`), `CG_Ret` is the kind of the context's return type with `ret$`
+in `E` when it is `RK_Buf`, the return type fits, every datatype's tags fit,
+and the program has every function of the signature table with the
+prototype of section 3.4 (`prog_ok`). This is the static half of the
+per-frame relation stage 6 needs. `scope_ok prog sc st` says that every
+name of the MiniC scope `sc`, and every function name, is in `CS_Used st`,
+so that every fresh name can be declared; `lowered_ok prog rt sc st S st'
+sc'` is the conclusion every lowering lemma has: `stmts_ok` accepts `S`
+from `sc` to `sc'` at return type `rt`, the environment only grows
+(`env_le`), `scope_ok` holds again, `S` is `stmts_wf` in and out of loops,
+and `CS_Used` grew. The term theorem `lower_ok` (`CodeGenTypingTerm.thy`)
+proves `lt_ok`/`la_ok`/`lc_ok` (for `lower_term`, `lower_addr`,
+`lower_call`: under `cg_ok`, `scope_ok` and `term_fits`, the lowering of a
+well-typed term gives `lowered_ok` statements and a result of type
+`res_cty ty`, the scalar type or `char *`) by mutual induction over the
+lowering functions, one lemma per term form; the statement theorem
+`lower_stmt_ok_all` (`CodeGenTypingStmt.thy`) likewise proves `ls_ok`/
+`lss_ok` (the lowered statements are `lowered_ok` and the new environment
+satisfies `cg_ok` for the typechecker's new context), one lemma per
+statement form, with a side theory showing that `term_types`/`stmt_types`
+and the typing of ghost-free statements are invariant under the
+proof-top-level flag (stage 4's `stmt_types` keeps the environment for a
+`Block` body while the typechecker clears `TE_ProofTopLevel`). The size
+facts `term_fits`/`stmt_fits`/`stmts_fits` (every type in `term_types`/
+`stmt_types` fits) come from `sizeable_fun_type_fits`. `CodeGenTyping.thy`
+does the module: `init_value_ok`/`init_value_names` (a global value's
+stores are typed in any environment that has its data buffers; the buffer
+names are fresh and distinct), `fun_cg_ok` (the invariant at the start of a
+body: globals through `globals_env prog`, parameters through
+`fun_params`), `lower_function_ok` (`fun_ok` and `fun_wf`),
+`lower_globals_names`/`lower_globals_init_ok` (the generated globals are
+distinct and each is a Core global or a fresh data buffer), and the
+theorem, in which `prog_ok` follows from `lower_functions` producing one
+function per entry of `CM_Functions` and the generated `main` is typed
+from `pure_ok` of the initialisation statements.
 
     theorem codegen_correct:
       fixes w :: 'w and coreExterns :: "(string, 'w ExternFunc) fmap"
@@ -1454,7 +1744,9 @@ result. Non-termination, `TypeError`, `RuntimeError` and
    compiler did, for a single-leaf match term, and was changed (section
    3.4). Any future pass (and stage 5's own treatment of by-value
    aggregate arguments, which passes the place of an lvalue argument
-   without a copy) must keep this property.
+   without a copy) must keep this property. Stage 5: `lower_addr`
+   materialises every non-lvalue argument in a temporary by construction
+   (section 3.4), so the generator keeps it.
 2. **Size overflow in generic code** (section 3.2). The `uint64_t` size
    arithmetic of a generic function could wrap for an instantiation at a
    huge type. Mitigation: the static bound `core_module_sizeable`, checked
@@ -1485,7 +1777,9 @@ result. Non-termination, `TypeError`, `RuntimeError` and
    recomputed address. Mitigation: freeze indices as Core does; the path
    resolution lemmas (`path_loc_sound_conj`, `path_update_sound`, section
    4) are proved, in-place and through descriptors, for reads and updates.
-   Discharged as far as stage 4 can.
+   Stage 5 defined them (`LazyLv`, `needs_lazy`, `freeze_lvalue`,
+   `lazy_addr`, section 3.5) and proved their typing (`ll_ok`); the
+   semantic correspondence is stage 6's. Reduced to that.
 6. **Fuel.** Core and MiniC fuel are unrelated. Mitigation: the theorem is
    existential in MiniC fuel; `MiniCFuelMono.thy` gives monotonicity, and
    the simulation lemmas are stated as "for some fuel", combined with
@@ -1534,11 +1828,15 @@ result. Non-termination, `TypeError`, `RuntimeError` and
     line of `MiniCPrint.thy`; the examples are compiled with `-Wall -Wextra
     -pedantic -Werror` at `-O0` and `-O2` under three standards and compared
     with the interpreter byte for byte (section 11.4); from stage 5 on the
-    codegen tests in `test/cases/codegen` are an independent oracle. Known
-    gaps are listed in section 11.2 (reserved identifiers) and 11.3.
+    codegen tests in `test/cases/codegen` are an independent oracle (63 of
+    64 pass, the one failure being an elaborator bug unrelated to MiniC;
+    section 11.5). Known gaps are listed in section 11.2 (reserved
+    identifiers) and 11.3. Reduced.
 12. **Zero-sized aggregates** (`{}`, `T[0]`). C forbids zero-length arrays.
-    Mitigation: every buffer declaration uses `max 1 |ty|`; copies of 0
-    bytes are fine; the unit type is `void` in signatures.
+    Mitigation: every buffer declaration uses `max 1 |ty|` (`buf_size`,
+    section 3.3, which omits the `max` when the size is syntactically
+    positive); copies of 0 bytes are fine; the unit type is `void` in
+    signatures. Discharged for typing (`buf_size_ok`).
 13. **Evaluation of `CoreTm_Var` for a `ref` with an invalid path** (e.g. a
     re-tagged variant) is a `RuntimeError` in Core, so excluded; but the
     proof must show the generated load is then never executed, which it is,
@@ -1582,30 +1880,46 @@ result. Non-termination, `TypeError`, `RuntimeError` and
     applied, and erasing first deleted it. Fixed in `run_compiler`; the
     size checker found it because it types every erased body.
 17. **Extern argument disjointness** (found in stage 4, section 6.2). The
-    extern premise `args_rep` requires all pointer argument regions to be
+    extern premise `args_rep` required all pointer argument regions to be
     pairwise disjoint, by-value aggregates included, but the aliasing check
     only separates `ref` arguments from the others, and the call site
     passes the place of a by-value aggregate without copying. An extern
-    call `f(x, x)` therefore satisfies Core but not `args_rep`. Fix in
-    stage 6: weaken `pairwise_disjoint` in `args_rep` to "each `ref`
-    region and the return region are disjoint from every other region"
-    (`mem_agrees_outside` and `results_rep` only ever mention those), so
-    that the premise is exactly what the aliasing check guarantees.
+    call `f(x, x)` therefore satisfied Core but not `args_rep`.
+    *Discharged in stage 5:* `args_rep` now requires `protected_disjoint`,
+    "each `ref` region and the return region is disjoint from every other
+    region" (`mem_agrees_outside` and `results_rep` only ever mention
+    those), which is exactly what the aliasing check guarantees;
+    `print_i32_extern_rep` is re-proved.
 18. **Extern write-back through an ownership-dropping cast** (found in
     stage 4 while resolving risk 15; section 6.2). For `ext(ref x: T[])`
     called with a `T[*]` cell, Core writes the extern's new value for `x`
     back through a path ending in the cast (`apply_ref_updates`, sizes
     preserved by `update_value_at_path`), and MiniC passes the cell's own
-    descriptor as the `ref` region. `results_rep` lets the model put any
+    descriptor as the `ref` region. `results_rep` let the model put any
     descriptor there that represents the new value and reaches only
     fresh or previously reached blocks, e.g. a fresh block or an interior
     offset of the old one; the `T[*]` cell would then no longer own a
-    freeable block, which is the case `path_casts_ok` excludes. Fix in
-    stage 6: add to `results_rep` that for a `ref` parameter whose type
-    has `CoreDim_Unknown` dimensions the bytes of the `ref` region are
-    unchanged (the extern writes elements, not the descriptor). A C extern
-    cannot do otherwise anyway, since it does not know whether the
-    descriptor it was handed is resizable.
+    freeable block, which is the case `path_casts_ok` excludes.
+    *Discharged in stage 5:* `results_rep` now says that for a `ref`
+    parameter whose type has a `CoreDim_Unknown` dimension
+    (`has_unknown_dim`) the bytes of the `ref` region are unchanged (the
+    extern writes elements, not the descriptor). A C extern cannot do
+    otherwise anyway, since it does not know whether the descriptor it was
+    handed is resizable.
+19. **Scalar-instantiated generic extern parameters** (found in stage 5,
+    section 6.2). `arg_rep`/`ret_by_buffer` classify an argument by its
+    instantiated type, the C prototype by the declared one; `extern_rep`
+    is wrong for `ext<T>(x: T)` at `T = i32`. No test has such an extern.
+    To fix in stage 6 by classifying with the declared types, as the
+    generator does.
+20. **Parameters named like globals** (found in stage 5, section 3.9). The
+    generator keeps a parameter's Core name as its MiniC name and reserves
+    it against every name in use, globals included, so a Core function
+    whose parameter has a global's name is rejected (`CGE_Internal`).
+    Elaborator output cannot have one (globals are qualified `Mod.name`,
+    parameters are not), so no test is affected; if Core ever allows it,
+    `lower_function` can rename the parameter as `local_name` renames a
+    local, at the cost of the C prototype's parameter names.
 
 
 ## 10. Proposals for changes outside this directory, and deferred items
@@ -1622,9 +1936,25 @@ every datatype whose payload is an abstract type realized by a runtime type
 broke six test programs once the size checker typed the erased bodies; the
 erasure and match-compilation theorems assume a normalized module anyway.
 
+Implemented in stage 5: the extern C-name map, as a function over the
+renamed modules rather than a change to `elab_program` (section 3.9,
+`ExternNames.thy`), with the validity check of explicit C names; the
+checks of section 3.9 inside `codegen_module`; the driver option `-o`
+and the end-to-end test (section 11.5). Found in stage 5 and left alone,
+because the elaborator may not change in this stage:
+
+- **`<==` chains associate the wrong way in the elaborator.**
+  `process_binop_chain` (`ElabTerm.thy`) right-associates a chain
+  `A <== B <== C` as `A <== (B <== C)`, whereas the C compiler reverses the
+  chain and then right-associates (`break_implies_chain` in
+  `src/typechecker.c`), i.e. `C ==> (B ==> A)`, so the chain is
+  left-associative. The constants `imp_by_left_assoc` and `imp_by_4` of
+  `test/cases/codegen/Bitwise.b` therefore evaluate to `false` instead of
+  `true` under the Isabelle pipeline, and that test is the one codegen
+  test that fails (section 11.5). The fix belongs in the elaborator.
+
 Still proposed / deferred:
 
-- `elab_program`/driver: return the extern C-name map (section 3.9), stage 5.
 - Proving that elaboration output has acyclic datatypes (`check_sccs` in
   `ElabModule.thy` rejects recursive datatypes) would let the theorems be
   stated without the `datatypes_acyclic` check; deferred, the check stays in
@@ -1636,17 +1966,20 @@ Still proposed / deferred:
 - `val_owned` preservation (the ownership tree is maintained by updates
   whose new value's blocks are fresh) is stated only as a definition
   (section 4); stage 6 proves what it needs of it.
-- If stage 5 wants to run generated MiniC programs in the Haskell driver
-  (as an oracle next to the C output), the interpreter needs code equations
-  without `Suc` on the left-hand side: `CodeExport.thy` uses
-  `Code_Binary_Nat`, whose `Suc`-elimination preprocessor handles one `Suc`
-  equation per `f 0` equation, and `exec_stmt` and friends match on the
-  fuel *and* on the statement. One `[code]` lemma per equation of the form
+- Running generated MiniC programs in the Haskell driver (as a second
+  oracle next to the C output; the optional deliverable 6 of stage 5, not
+  done) needs code equations for the interpreter without `Suc` on the
+  left-hand side: `CodeExport.thy` uses `Code_Binary_Nat`, whose
+  `Suc`-elimination preprocessor handles one `Suc` equation per `f 0`
+  equation, and `exec_stmt` and friends match on the fuel *and* on the
+  statement. One `[code]` lemma per equation of the form
   `exec_stmt fuel ctx st s = (if fuel = 0 then Inl MErr_Fuel else ...)`,
-  proved by `cases fuel`, would do it; nothing in stage 3b needs it, so the
-  driver exports the documented expected output instead (section 11.4).
-  (`type_size`'s `tsz` is fuelled too, but its fuel equations are already
-  of the `if fuel = 0` form.)
+  proved by `cases fuel`, would do it; nothing in stages 3b to 5 needs it,
+  so the driver exports the documented expected output of the hand-written
+  examples instead (section 11.4). (`type_size`'s `tsz` is fuelled too,
+  but its fuel equations are already of the `if fuel = 0` form.)
+- `extern_rep` should classify parameters and results by the declared
+  types (risk 19), stage 6.
 
 
 ## 11. The printer and the C-level validation (stage 3b)
@@ -1663,6 +1996,22 @@ Then, from the root of the repository:
 
     ./isabelle/minic/check_example.sh            # all examples
     ./isabelle/minic/check_example.sh example    # one of them
+    ./test/isabelle_codegen_test.sh [FILTER]     # the codegen tests (stage 5, section 11.5)
+
+The compiler mode of the driver (stage 5) is
+
+    Main [--uninit=memset|omit] [-o out.c] [Name=]Root.b [[Name=]Other.b ...]
+
+which runs the whole pipeline of `run_compiler` (`CodeExport.thy`: front
+end, the extern-name check, elaboration, link, normalization, ghost
+erasure, match compilation, `sizeable_check`, `codegen_module`), then
+`extern_clashes` on the generated program, reporting clashes as `--minic`
+does, and, if `-o` was given, prints the program to the file with the
+chosen `MS_Uninit` mode. Without `-o` it reports success or failure only;
+`test/isabelle_test.sh` runs it that way on every test case, so the
+generator and the clash check are exercised on all of them (a test whose
+root module has no `main` now fails as expected, as it does under
+`bab compile`).
 
 The script runs, for each example `NAME` in `minic_examples`
 (`MiniCExample.thy`) and each `MODE` in `memset`, `omit` (the two ways of
@@ -1824,6 +2173,16 @@ definitions. Conventions:
 - `-pedantic` is clean: the printed code uses no extension (the only
   construct that would be one, `void *` arithmetic, is avoided by the cast
   in `ME_PtrAdd`).
+- The codegen test (section 11.5) compiles with `-Wall -Wextra -pedantic
+  -Werror` plus the `-Wno-...` flags of `test/config/babylon/babylon.toml`
+  (`-Wno-overflow -Wno-div-by-zero -Wno-stringop-overread`, which the C
+  compiler's own tests need) and `-Wno-unused-variable
+  -Wno-unused-but-set-variable -Wno-unused-parameter`: the generator
+  declares a MiniC variable for every Core local and parameter whether or
+  not it is ever read (the elaborator's `call@@tmp` of a procedure call, a
+  shadowed `let` variable, the tag of a match whose arms are all wildcards,
+  a parameter the Babylon function ignores) and does no dead-variable
+  analysis, and that is where the warning-free property stops.
 - `-Wreturn-type` (in `-Wall`) warns about a non-void function whose body
   can fall off the end. The generator (section 3.6) need not end every body
   with a `return`, because Core raises `RuntimeError` there; such a program
@@ -1879,3 +2238,52 @@ with `-Wall -Wextra -pedantic -Werror` (plus `-Wno-uninitialized
 Not a finding, but confirmed: the `print_bool`/`print_string` prototype
 mismatches of `Test.c` (section 11.3) are harmless on this ABI, as they
 have always been for `codegen.c`'s output.
+
+### 11.5 The codegen tests (stage 5)
+
+`test/isabelle_codegen_test.sh`, run from the root of the repository, is
+the end-to-end oracle of the generator: for every test program in
+`test/cases/codegen` (58 single `.b` files and the `multi.txt`
+directories with `Main.b` as root, exactly as `isabelle_test.sh`
+enumerates them) and for each `MS_Uninit` mode (`memset`, `omit`) it
+compiles the program together with `test/test-support-0.1/src/Test.b` to
+one `.c` file with `Main -o`, compiles that with `gcc -std=c99` and the
+flags of section 11.3 at `-O0` and at `-O2`, links it against `Test.c`,
+runs it, and requires exit status 0, an empty stderr and a stdout equal
+to the test's `.output` file with the `//` comments stripped (as
+`run_test` in `test/run_tests.sh` does). The files are left in
+`$TMPDIR/isabelle-codegen-test`.
+
+Outcome (gcc 13.3, x86-64 Linux): 63 of the 64 tests pass in both modes
+and at both optimisation levels. The failure is `Bitwise.b`, whose
+constants `imp_by_left_assoc` and `imp_by_4` come out `false` because the
+elaborator associates `<==` chains the wrong way (section 10); the
+generated C is right for the Core it is given. What the tests found and
+changed on the way:
+
+1. **Unique names per function** (section 3.1): `Let.b` declares two
+   sibling `let`s of one name in one scope, which C rejects as a
+   redeclaration, and a lazy reference must address its base by a name
+   that no nested scope can shadow.
+2. **Declared types decide the parameter kinds** (section 3.4): the C
+   prototype of a generic function is fixed while its instantiations vary,
+   so a scalar argument to a type-variable parameter goes through a
+   temporary and its address, and a scalar result declared at a type
+   variable is loaded from the return buffer.
+3. **Constant buffer sizes, not VLAs** (`buf_size`, section 3.3): gcc 13
+   at `-O2` reported a false "dangling pointer" (`-Wdangling-pointer`,
+   under `-Werror`) for a VLA descriptor temporary of `MatchIncomplete.b`
+   passed to an inlined function; with the `max 1` omitted for
+   syntactically positive sizes the buffer is an ordinary array.
+4. **Unused variables** (section 11.3): the three `-Wno-unused-...` flags.
+5. **`main` is required** by the generator, so the verifier-category tests
+   of `isabelle_test.sh` whose root module has no `main` now fail as they
+   do under `bab compile` (they all have `.errors` files and are only
+   verified by the C test suite); `isabelle_test.sh` expects this, and the
+   three formerly unexpected typechecker results (`ExternName.b`,
+   `MainWrongType.b`, `MissingMain.b`) are now rejected as expected, so it
+   reports 349 of 349.
+
+The optional second oracle (running the generated MiniC in the
+interpreter, deliverable 6 of stage 5) was not built; section 10 records
+what it needs.

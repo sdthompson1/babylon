@@ -8,7 +8,11 @@
 # - codegen, parser, renamer, typechecker: the compiler should succeed if
 #   the test has no .errors file, and fail if it does.
 # - verifier: the Isabelle compiler has no verifier yet, so it should
-#   succeed on every test.
+#   succeed on every test whose root module defines a main function. A
+#   test without one is expected to fail: the Isabelle compiler, like
+#   `bab compile`, requires main (the generated C program calls it), while
+#   the C test suite only verifies these programs and verification fails
+#   before main is checked.
 #
 # Tests that don't behave as expected are listed at the end.
 #
@@ -71,7 +75,15 @@ expected_result()
 {
     # $1 is the category (top-level directory name)
     # $2 is the root .b file path
-    if [ "$1" == "verifier" ] || ! [ -e "${2%.b}.errors" ]
+    if [ "$1" == "verifier" ]
+    then
+        if grep -q "function main" "$2"
+        then
+            echo pass
+        else
+            echo fail
+        fi
+    elif ! [ -e "${2%.b}.errors" ]
     then
         echo pass
     else
