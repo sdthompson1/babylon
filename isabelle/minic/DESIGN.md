@@ -297,7 +297,10 @@ anything a C compiler may miscompile and for anything implementation-defined
 that section 5 does not assume: out-of-range arithmetic (every arithmetic
 operator computes the mathematical result and requires it to fit the operand
 type, which is stricter than C for unsigned types), division or modulo by
-zero, shift counts outside `[0, width)`, out-of-range integer conversions
+zero, a modulo whose *quotient* does not fit the operand type (`INT_MIN %
+-1`: the remainder would fit, but C11 6.5.5p6 leaves `a % b` undefined
+when `a / b` is not representable, and the printer prints `CB_Mod` as `%`;
+section 10), shift counts outside `[0, width)`, out-of-range integer conversions
 (to signed *and* unsigned types; C would wrap for unsigned, but the generated
 code never relies on it), reads or writes outside a live block, null
 dereference, pointer arithmetic leaving `[0, size]` of a live block,
@@ -1804,7 +1807,9 @@ result. Non-termination, `TypeError`, `RuntimeError` and
 8. **Integer promotion and `int` width.** Mitigation: MiniC arithmetic is
    mathematical with a fits check, Core guarantees the fit, and the only
    promotion-sensitive operations (shifts) go through the helpers of
-   section 5.3 under A2/A5.
+   section 5.3 under A2/A5. (The fits check of `CB_Mod` is on the quotient
+   as well as on the remainder, at every width, so that it does not depend
+   on whether C promotes the operands; section 10.)
 9. **Default values are all-zero bytes.** The `Default` lowering relies on
    it. Mitigation: `valid_encoding` has the zero law, `encode_ptr` null is
    zero bytes, and `default_value_rep_zero` (`RepValDefault.thy`) is
@@ -1835,7 +1840,7 @@ result. Non-termination, `TypeError`, `RuntimeError` and
     -pedantic -Werror` at `-O0` and `-O2` under three standards and compared
     with the interpreter byte for byte (section 11.4); from stage 5 on the
     codegen tests in `test/cases/codegen` are an independent oracle (all
-    66 pass; section 11.5). Known gaps are listed in section 11.2 (reserved
+    67 pass; section 11.5). Known gaps are listed in section 11.2 (reserved
     identifiers) and 11.3. Reduced.
 12. **Zero-sized aggregates** (`{}`, `T[0]`). C forbids zero-length arrays.
     Mitigation: every buffer declaration uses `max 1 |ty|` (`buf_size`,
@@ -1961,7 +1966,7 @@ could not change in that stage) and fixed afterwards:
 
 Fixed between stages 5 and 6 (before the simulation proof, so that the
 interpreter is the semantics we want and both compilers implement it; the
-first is a change to Core's semantics, the second is not):
+first and the third are changes to Core's semantics, the second is not):
 
 - **An assignment from a call evaluates the right-hand side first.** For
   `lv = f(args);` where the call has side effects (in Core,
@@ -2021,6 +2026,40 @@ first is a change to Core's semantics, the second is not):
   (not a lazy reference), whose address cannot change; when exactly one
   operand is a plain variable it is taken as `A`. Tests:
   `test/cases/codegen/SwapOrder.b` and `test/cases/verifier/SwapOrder.b`.
+- **`%` is defined only when `/` is.** For `a % b` at a finite integer
+  type the verifier uses the precondition of `/` (`$can_div_<ty>`: `b` is
+  not zero, and at a signed type not both `a = MIN` and `b = -1`; the
+  comment in `test/cases/verifier/Division.b` says why). `eval_binop`
+  required only a non-zero divisor and a result that fits, so `MIN % -1`
+  was a normal Core run with the value 0; MiniC's `CB_Mod` agreed with
+  Core; and the printer prints `CB_Mod` as C's `%`, which C11 6.5.5p6
+  leaves undefined when the quotient is not representable (on x86 the
+  division instruction traps: the output of the Isabelle compiler for `x %
+  y` with `x = INT32_MIN` and `y = -1` died with `SIGFPE` at `-O0` and
+  printed 0 at `-O2`). So the claim of section 2.5, that C defines
+  everything MiniC defines and in the same way, was false for this one
+  operation, at `int32_t` and `int64_t` (C promotes narrower operands to
+  `int`, where the result is 0). No verified program was affected. The
+  rule, decided by the project owner on 2026-11-12, is the verifier's.
+  `CoreBinop_Modulo` is a `RuntimeError` whenever the quotient does not
+  fit (its equation applies `generic_integer_binop tdiv` first and keeps
+  the error; the mathematical `int` is unaffected), and `eval_int_binop`
+  gives `None` for `CB_Mod` when `c_tdiv i1 i2` does not fit the type; the
+  generated C is unchanged. The rule is the same at every width, so at
+  `int8_t` and `int16_t` MiniC is stricter than C. In `CoreInterp.thy`,
+  `tdiv_fits_iff` proves that for operands of the type and a non-zero
+  divisor the quotient fails to fit only for `MIN / -1` at a signed type,
+  `tmod_fits` that the remainder always fits, and
+  `eval_binop_Modulo_finite` restates the new equation in the verifier's
+  terms. Type soundness (`eval_binop_sound_finite`) was re-proved; no
+  theorem statement changed. Compile-time constants follow the rule: the
+  elaborator evaluates them with `eval_binop` (`ConstFold.thy`), and
+  `src/eval_const.c`, which rejected `INT64_MIN % -1` but folded the
+  narrower cases to 0, now checks the quotient against the type of the
+  term (`modulo_quotient_overflows`). Tests:
+  `test/cases/typechecker/ConstModOverflow.b`, and
+  `test/cases/codegen/ModBoundary.b` for the operand pairs next to the
+  forbidden one, at run time.
 
 Still proposed / deferred:
 
@@ -2312,7 +2351,7 @@ have always been for `codegen.c`'s output.
 
 `test/isabelle_codegen_test.sh`, run from the root of the repository, is
 the end-to-end oracle of the generator: for every test program in
-`test/cases/codegen` (60 single `.b` files and the `multi.txt`
+`test/cases/codegen` (61 single `.b` files and the `multi.txt`
 directories with `Main.b` as root, exactly as `isabelle_test.sh`
 enumerates them) and for each `MS_Uninit` mode (`memset`, `omit`) it
 compiles the program together with `test/test-support-0.1/src/Test.b` to
@@ -2323,14 +2362,15 @@ to the test's `.output` file with the `//` comments stripped (as
 `run_test` in `test/run_tests.sh` does). The files are left in
 `$TMPDIR/isabelle-codegen-test`.
 
-Outcome (gcc 13.3, x86-64 Linux): all 66 tests pass in both modes and at
+Outcome (gcc 13.3, x86-64 Linux): all 67 tests pass in both modes and at
 both optimisation levels. (At the end of stage 5 there were 64 tests and
 `Bitwise.b` failed: its constants `imp_by_left_assoc` and `imp_by_4` came
 out `false` because the elaborator associated `<==` chains the wrong way;
 that has since been fixed in the elaborator. The 65th test,
 `AssignCallOrder.b`, was added with the evaluation-order fix for an
-assignment from a call, and the 66th, `SwapOrder.b`, with the fix of
-`swap`. See section 10 for all three.) What the tests found and
+assignment from a call, the 66th, `SwapOrder.b`, with the fix of `swap`,
+and the 67th, `ModBoundary.b`, with the rule for `%`. See section 10 for
+all four.) What the tests found and
 changed on the way:
 
 1. **Unique names per function** (section 3.1): `Let.b` declares two
@@ -2354,9 +2394,10 @@ changed on the way:
    verified by the C test suite); `isabelle_test.sh` expects this, and the
    three formerly unexpected typechecker results (`ExternName.b`,
    `MainWrongType.b`, `MissingMain.b`) are now rejected as expected, so it
-   reports 349 of 349 (353 of 353 with the `AssignCallOrder.b` and
-   `SwapOrder.b` tests added since, one of each in `codegen` and one in
-   `verifier`).
+   reports 349 of 349 (355 of 355 with the tests added since:
+   `AssignCallOrder.b` and `SwapOrder.b`, one of each in `codegen` and
+   one in `verifier`, `ModBoundary.b` in `codegen` and
+   `ConstModOverflow.b` in `typechecker`).
 
 The optional second oracle (running the generated MiniC in the
 interpreter, deliverable 6 of stage 5) was not built; section 10 records

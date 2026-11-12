@@ -504,6 +504,12 @@ provable, then a verifier error will result. Note that this check is
 range, but it is (usually) required for the finite-sized integer
 types.
 
+(Also note that for division operations, if `a` is the most negative
+value of a signed finite-integer type, and `b` is -1 of the same type,
+then *both* `a / b` *and* `a % b` are considered to overflow, even
+though, mathematically speaking, only `a / b` is outside the range of
+the type in this case.)
+
 In addition, for the division operations (`/` and `%`), the verifier
 will try to prove that the right-hand side (the divisor) is non-zero;
 if this proof fails, verification will not succeed.

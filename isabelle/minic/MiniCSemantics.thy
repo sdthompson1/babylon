@@ -93,7 +93,15 @@ definition c_compl :: "Signedness \<Rightarrow> IntBits \<Rightarrow> int \<Righ
 
 (* The mathematical result of an arithmetic or bitwise binop on two integers
    of the type (s, b), or None for undefined behaviour (division by zero,
-   shift count out of range). The caller checks that the result fits. *)
+   shift count out of range). The caller checks that the result fits.
+
+   CB_Mod is also undefined when the *quotient* does not fit the type,
+   although the remainder would: C11 6.5.5p6 leaves a % b undefined when
+   a / b is not representable (INT_MIN % -1 traps on x86), and the printer
+   prints CB_Mod as %. Core's modulo has the same rule (CoreInterp.thy). At
+   the types narrower than int this is stricter than C, where the operands
+   are promoted to int first; the model does not depend on the width of
+   int. *)
 definition eval_int_binop :: "CBinop \<Rightarrow> Signedness \<Rightarrow> IntBits \<Rightarrow> int \<Rightarrow> int \<Rightarrow> int option" where
   "eval_int_binop op s b i1 i2 =
     (case op of
@@ -101,7 +109,7 @@ definition eval_int_binop :: "CBinop \<Rightarrow> Signedness \<Rightarrow> IntB
      | CB_Sub \<Rightarrow> Some (i1 - i2)
      | CB_Mul \<Rightarrow> Some (i1 * i2)
      | CB_Div \<Rightarrow> if i2 = 0 then None else Some (c_tdiv i1 i2)
-     | CB_Mod \<Rightarrow> if i2 = 0 then None else Some (c_tmod i1 i2)
+     | CB_Mod \<Rightarrow> if i2 = 0 \<or> \<not> int_fits s b (c_tdiv i1 i2) then None else Some (c_tmod i1 i2)
      | CB_BitAnd \<Rightarrow> Some (and i1 i2)
      | CB_BitOr \<Rightarrow> Some (or i1 i2)
      | CB_BitXor \<Rightarrow> Some (xor i1 i2)
@@ -148,6 +156,16 @@ definition eval_binop :: "CBinop \<Rightarrow> MVal \<Rightarrow> MVal \<Rightar
                       None \<Rightarrow> None
                     | Some r \<Rightarrow> if int_fits s1 b1 r then Some (MV_Int s1 b1 r) else None))
      | _ \<Rightarrow> None)"
+
+(* INT32_MIN % -1 is undefined, as INT32_MIN / -1 is; its neighbours are not. *)
+lemma
+  "eval_binop CB_Mod (MV_Int Signed IntBits_32 (- 2147483648)) (MV_Int Signed IntBits_32 (- 1)) = None"
+  "eval_binop CB_Div (MV_Int Signed IntBits_32 (- 2147483648)) (MV_Int Signed IntBits_32 (- 1)) = None"
+  "eval_binop CB_Mod (MV_Int Signed IntBits_32 (- 2147483647)) (MV_Int Signed IntBits_32 (- 1))
+     = Some (MV_Int Signed IntBits_32 0)"
+  "eval_binop CB_Mod (MV_Int Signed IntBits_32 (- 2147483648)) (MV_Int Signed IntBits_32 (- 2))
+     = Some (MV_Int Signed IntBits_32 0)"
+  by (simp_all add: eval_binop_def eval_cmp_binop_def eval_int_binop_def c_tdiv_def c_tmod_def)
 
 definition eval_unop :: "CUnop \<Rightarrow> MVal \<Rightarrow> MVal option" where
   "eval_unop op v =
