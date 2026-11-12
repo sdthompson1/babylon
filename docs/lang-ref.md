@@ -1374,14 +1374,22 @@ statement `f(x);` is valid, but the statement `foo(f(x));` is not.
 
 If `e1` and `e2` are two writable lvalue expressions (i.e. expressions
 which could validly appear on the left-hand-side of an assignment
-statement), then the expression `swap e1, e2;` is valid. This simply
-"swaps" the values of `e1` and `e2`, i.e. it is similar to the
-sequence:
+statement), then the statement `swap e1, e2;` is valid. This exchanges
+the values of `e1` and `e2`.
+
+Both `e1` and `e2` are resolved first (that is, it is decided which
+variables, array elements, etc. are to be exchanged, and any array
+indexes are evaluated), and only then are the two values exchanged.
+For example, if `i` is 2, then `swap i, a[i];` exchanges `i` with
+`a[2]`, even though `i` itself is changed by the swap. In other words,
+the statement is similar to the sequence:
 
 ```
-var tmp = e1;
-e1 = e2;
-e2 = tmp;
+ref r1 = e1;
+ref r2 = e2;
+var tmp = r1;
+r1 = r2;
+r2 = tmp;
 ```
 
 except that the `tmp` variable is not actually constructed; instead
