@@ -1,0 +1,4 @@
+src/ConstModOverflow.b:14:12: Overflow in compile-time constant
+src/ConstModOverflow.b:15:12: Overflow in compile-time constant
+src/ConstModOverflow.b:16:12: Overflow in compile-time constant
+src/ConstModOverflow.b:17:12: Overflow in compile-time constant
