@@ -2700,6 +2700,16 @@ static bool is_call_under_casts(struct Term *term)
     return term->tag == TM_CALL;
 }
 
+// Is this term a plain variable (not a "lazy" reference)? If so, its
+// address cannot be changed by executing code: it is the address of a
+// local, or the pointer held by a parameter or a reference. (The address
+// of any other lvalue may depend on the values of array indexes, or on
+// the data pointer of an allocatable array.)
+static bool is_plain_var(struct CGContext *cxt, struct Term *term)
+{
+    return term->tag == TM_VAR && !lookup_lazy_ref(cxt, term->var.name);
+}
+
 static void codegen_assign_stmt(struct CGContext *cxt,
                                 struct Statement *stmt)
 {
@@ -2725,13 +2735,9 @@ static void codegen_assign_stmt(struct CGContext *cxt,
     // (for an aggregate result, which is already in a buffer of its own;
     // this avoids copying it twice). Only then is the lhs generated.
     //
-    // The exception is when the lhs is a plain variable (not a "lazy"
-    // reference): then there is nothing to evaluate on the lhs (the
-    // address of a local, or the pointer held by a reference, does not
-    // change), so the simpler code can be used.
-    bool lhs_is_simple = lhs->tag == TM_VAR && !lookup_lazy_ref(cxt, lhs->var.name);
-
-    if (!is_call_under_casts(rhs) || lhs_is_simple) {
+    // The exception is when the lhs is a plain variable: then there is
+    // nothing to evaluate on the lhs, so the simpler code can be used.
+    if (!is_call_under_casts(rhs) || is_plain_var(cxt, lhs)) {
         copy_term_to_term(cxt, lhs, rhs);
 
     } else if (is_scalar_type(cxt, rhs->type)) {
@@ -2767,13 +2773,76 @@ static void codegen_assign_stmt(struct CGContext *cxt,
 static void codegen_swap_stmt(struct CGContext *cxt,
                               struct Statement *stmt)
 {
-    char name[TEMP_NAME_LEN];
-    make_temporary(cxt, name, stmt->swap.lhs->type);
+    // A swap first resolves both of its operands to places (evaluating
+    // any array indexes), and only then exchanges the contents of the
+    // two places (this is what the verifier assumes). So "swap i, a[i]"
+    // exchanges i with the element selected by the value that i had
+    // before the swap.
+    //
+    // The code generated is "temp = B; B = A; A = temp;" where A and B
+    // are the two operands. Both uses of B, and the read of A, come
+    // before anything is written. But A is written after B has been,
+    // and the address of A might depend on the contents of B (as in the
+    // example, where A is a[i] and B is i). So the address of A is
+    // computed beforehand, into a pointer temporary, and A is read and
+    // written through that pointer; unless A is a plain variable, whose
+    // address cannot change.
+    //
+    // The statement is symmetric, so if exactly one of the operands is
+    // a plain variable, we let that one be A.
+    struct Term *a = stmt->swap.lhs;
+    struct Term *b = stmt->swap.rhs;
+    if (!is_plain_var(cxt, a) && is_plain_var(cxt, b)) {
+        a = stmt->swap.rhs;
+        b = stmt->swap.lhs;
+    }
 
-    // temp = rhs; rhs = lhs; lhs = temp;
-    copy_term_to_variable(cxt, name, false, stmt->swap.rhs);
-    copy_term_to_term(cxt, stmt->swap.rhs, stmt->swap.lhs);
-    copy_variable_to_term(cxt, stmt->swap.lhs, name);
+    char name[TEMP_NAME_LEN];
+    make_temporary(cxt, name, a->type);
+
+    if (is_plain_var(cxt, a)) {
+        // temp = B; B = A; A = temp;
+        copy_term_to_variable(cxt, name, false, b);
+        copy_term_to_term(cxt, b, a);
+        copy_variable_to_term(cxt, a, name);
+
+    } else {
+        char addr_name[TEMP_NAME_LEN];
+        get_temp_name(cxt, addr_name);
+
+        // char *addr = &A;
+        begin_item(cxt->pr);
+        print_token(cxt->pr, "char");
+        print_token(cxt->pr, "*");
+        print_token(cxt->pr, addr_name);
+        print_token(cxt->pr, "=");
+        codegen_term(cxt, ASSIGN_EXPR, MODE_ADDR, a);
+        print_token(cxt->pr, ";");
+        new_line(cxt->pr);
+        end_item(cxt->pr);
+
+        // temp = B;
+        copy_term_to_variable(cxt, name, false, b);
+
+        // B = *addr;
+        begin_item(cxt->pr);
+        memmove_begin(cxt);
+        codegen_term(cxt, ASSIGN_EXPR, MODE_ADDR, b);
+        print_token(cxt->pr, ",");
+        print_token(cxt->pr, addr_name);
+        memmove_end(cxt, a->type);
+        end_item(cxt->pr);
+
+        // *addr = temp;
+        begin_item(cxt->pr);
+        memmove_begin(cxt);
+        print_token(cxt->pr, addr_name);
+        print_token(cxt->pr, ",");
+        if (is_scalar_type(cxt, a->type)) print_token(cxt->pr, "&");
+        print_token(cxt->pr, name);
+        memmove_end(cxt, a->type);
+        end_item(cxt->pr);
+    }
 }
 
 static void codegen_return_stmt(struct CGContext *cxt,

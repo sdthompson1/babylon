@@ -1043,6 +1043,25 @@ proof (intro allI impI)
     unfolding cg' env' using lo cg_ok_mono[OF lowered_ok_env_le'[OF lo] ok] by blast
 qed
 
+(* An address bound to a fresh pointer variable (the operands of a swap). *)
+lemma bind_addr_ok:
+  assumes "bind_addr cg a st = Inr ((P, p), st')"
+    and "scope_ok prog (E, ds) st" and "expr_ok E a CTy_CharPtr"
+  shows "\<exists>E' ds'. lowered_ok prog rt (E, ds) st P st' (E', ds') \<and> expr_ok E' p CTy_CharPtr"
+proof -
+  from assms(1) obtain n where fr: "fresh_name (CG_Fun cg) ''addr'' st = Inr (n, st')"
+    and P: "P = [MS_DeclScalar n CTy_CharPtr, MS_Assign n a]" and p: "p = ME_Var n"
+    unfolding bind_addr_def by (auto elim!: cg_bind_InrE)
+  let ?E1 = "fmupd n (VT_Scalar CTy_CharPtr) E"
+  have d: "lowered_ok prog rt (E, ds) st [MS_DeclScalar n CTy_CharPtr] st' (?E1, n # ds)"
+    by (rule fresh_scalar_ok[OF assms(2) fr])
+  have as: "lowered_ok prog rt (?E1, n # ds) st' [MS_Assign n a] st' (?E1, n # ds)"
+    using lowered_ok_scope[OF d] expr_ok_mono[OF lowered_ok_env_le'[OF d] assms(3)]
+    by (intro assign_ok[where cty' = CTy_CharPtr]) (auto simp: ty_compat_def)
+  have "expr_ok ?E1 (ME_Var n) CTy_CharPtr" by (intro expr_ok_Var) simp
+  then show ?thesis unfolding P p using lowered_ok_append[OF d as] by auto
+qed
+
 lemma ls_Swap: "ls_ok prog cg (CoreStmt_Swap NotGhost lv1 lv2)"
   unfolding ls_ok_def
 proof (intro allI impI)
@@ -1058,75 +1077,107 @@ proof (intro allI impI)
   note sfs = stmt_fits_Swap[OF sf]
   have wk: "is_well_kinded ?env ty" using term_type_wk(1)[OF ok t1] .
   have fty: "fits ?env ty" using term_fits_ty[OF sfs(1) t1] .
-  let ?body = "\<lambda>tmp a1 a2. (case scalar_ty ty of
-                    Some cty \<Rightarrow> [MS_Assign tmp (ME_Load cty a1), MS_Store cty a1 (ME_Load cty a2), MS_Store cty a2 (ME_Var tmp)]
-                  | None \<Rightarrow> [MS_Copy (ME_AddrOf tmp) a1 (cg_size cg ty), MS_Copy a1 a2 (cg_size cg ty), MS_Copy a2 (ME_AddrOf tmp) (cg_size cg ty)])"
+  let ?body = "\<lambda>tmp p1 p2. (case scalar_ty ty of
+                    Some cty \<Rightarrow> [MS_Assign tmp (ME_Load cty p1), MS_Store cty p1 (ME_Load cty p2), MS_Store cty p2 (ME_Var tmp)]
+                  | None \<Rightarrow> [MS_Copy (ME_AddrOf tmp) p1 (cg_size cg ty), MS_Copy p1 p2 (cg_size cg ty), MS_Copy p2 (ME_AddrOf tmp) (cg_size cg ty)])"
   have unf: "lower_stmt cg (CoreStmt_Swap NotGhost lv1 lv2) st =
       cg_bind (lower_addr cg lv1) (\<lambda>(S1, a1).
+      cg_bind (bind_addr cg a1) (\<lambda>(P1, p1).
       cg_bind (lower_addr cg lv2) (\<lambda>(S2, a2).
+      cg_bind (bind_addr cg a2) (\<lambda>(P2, p2).
       cg_bind (temp_for cg ''swap'' ty) (\<lambda>(tmp, decl).
-      cg_return (S1 @ S2 @ [decl] @ ?body tmp a1 a2, cg)))) st"
+      cg_return (S1 @ P1 @ S2 @ P2 @ [decl] @ ?body tmp p1 p2, cg)))))) st"
     unfolding lower_stmt.simps by (simp add: cg_bind_def ty_of_Some[OF t1] cg_return_def)
   from l[unfolded unf] obtain r1 st1 where la1': "lower_addr cg lv1 st = Inr (r1, st1)"
-    and k1: "(\<lambda>(S1, a1). cg_bind (lower_addr cg lv2) (\<lambda>(S2, a2).
+    and k1: "(\<lambda>(S1, a1). cg_bind (bind_addr cg a1) (\<lambda>(P1, p1).
+      cg_bind (lower_addr cg lv2) (\<lambda>(S2, a2).
+      cg_bind (bind_addr cg a2) (\<lambda>(P2, p2).
       cg_bind (temp_for cg ''swap'' ty) (\<lambda>(tmp, decl).
-      cg_return (S1 @ S2 @ [decl] @ ?body tmp a1 a2, cg)))) r1 st1 = Inr ((S, cg'), st')"
+      cg_return (S1 @ P1 @ S2 @ P2 @ [decl] @ ?body tmp p1 p2, cg)))))) r1 st1 = Inr ((S, cg'), st')"
     by (rule cg_bind_InrE)
   obtain S1 a1 where r1: "r1 = (S1, a1)" by (cases r1)
   have la1: "lower_addr cg lv1 st = Inr ((S1, a1), st1)" using la1' r1 by simp
-  from k1[unfolded r1 case_prod_conv] obtain r2 st2 where la2': "lower_addr cg lv2 st1 = Inr (r2, st2)"
-    and k2: "(\<lambda>(S2, a2). cg_bind (temp_for cg ''swap'' ty) (\<lambda>(tmp, decl).
-      cg_return (S1 @ S2 @ [decl] @ ?body tmp a1 a2, cg))) r2 st2 = Inr ((S, cg'), st')"
+  from k1[unfolded r1 case_prod_conv] obtain q1 st1b where ba1': "bind_addr cg a1 st1 = Inr (q1, st1b)"
+    and k1b: "(\<lambda>(P1, p1). cg_bind (lower_addr cg lv2) (\<lambda>(S2, a2).
+      cg_bind (bind_addr cg a2) (\<lambda>(P2, p2).
+      cg_bind (temp_for cg ''swap'' ty) (\<lambda>(tmp, decl).
+      cg_return (S1 @ P1 @ S2 @ P2 @ [decl] @ ?body tmp p1 p2, cg))))) q1 st1b = Inr ((S, cg'), st')"
+    by (rule cg_bind_InrE)
+  obtain P1 p1 where q1: "q1 = (P1, p1)" by (cases q1)
+  have ba1: "bind_addr cg a1 st1 = Inr ((P1, p1), st1b)" using ba1' q1 by simp
+  from k1b[unfolded q1 case_prod_conv] obtain r2 st2 where la2': "lower_addr cg lv2 st1b = Inr (r2, st2)"
+    and k2: "(\<lambda>(S2, a2). cg_bind (bind_addr cg a2) (\<lambda>(P2, p2).
+      cg_bind (temp_for cg ''swap'' ty) (\<lambda>(tmp, decl).
+      cg_return (S1 @ P1 @ S2 @ P2 @ [decl] @ ?body tmp p1 p2, cg)))) r2 st2 = Inr ((S, cg'), st')"
     by (rule cg_bind_InrE)
   obtain S2 a2 where r2: "r2 = (S2, a2)" by (cases r2)
-  have la2: "lower_addr cg lv2 st1 = Inr ((S2, a2), st2)" using la2' r2 by simp
-  from k2[unfolded r2 case_prod_conv] obtain r3 st3 where tf': "temp_for cg ''swap'' ty st2 = Inr (r3, st3)"
-    and k3: "(\<lambda>(tmp, decl). cg_return (S1 @ S2 @ [decl] @ ?body tmp a1 a2, cg)) r3 st3 = Inr ((S, cg'), st')"
+  have la2: "lower_addr cg lv2 st1b = Inr ((S2, a2), st2)" using la2' r2 by simp
+  from k2[unfolded r2 case_prod_conv] obtain q2 st2b where ba2': "bind_addr cg a2 st2 = Inr (q2, st2b)"
+    and k2b: "(\<lambda>(P2, p2). cg_bind (temp_for cg ''swap'' ty) (\<lambda>(tmp, decl).
+      cg_return (S1 @ P1 @ S2 @ P2 @ [decl] @ ?body tmp p1 p2, cg))) q2 st2b = Inr ((S, cg'), st')"
+    by (rule cg_bind_InrE)
+  obtain P2 p2 where q2: "q2 = (P2, p2)" by (cases q2)
+  have ba2: "bind_addr cg a2 st2 = Inr ((P2, p2), st2b)" using ba2' q2 by simp
+  from k2b[unfolded q2 case_prod_conv] obtain r3 st3 where tf': "temp_for cg ''swap'' ty st2b = Inr (r3, st3)"
+    and k3: "(\<lambda>(tmp, decl). cg_return (S1 @ P1 @ S2 @ P2 @ [decl] @ ?body tmp p1 p2, cg)) r3 st3 = Inr ((S, cg'), st')"
     by (rule cg_bind_InrE)
   obtain tmp decl where r3: "r3 = (tmp, decl)" by (cases r3)
-  have tfr: "temp_for cg ''swap'' ty st2 = Inr ((tmp, decl), st3)" using tf' r3 by simp
-  from k3 have S: "S = S1 @ S2 @ [decl] @ ?body tmp a1 a2" and cg': "cg' = cg" and st': "st' = st3"
+  have tfr: "temp_for cg ''swap'' ty st2b = Inr ((tmp, decl), st3)" using tf' r3 by simp
+  from k3 have S: "S = S1 @ P1 @ S2 @ P2 @ [decl] @ ?body tmp p1 p2" and cg': "cg' = cg" and st': "st' = st3"
     unfolding r3 by (auto simp: cg_return_def)
+  (* the first address, and its pointer variable *)
   obtain E1 ds1 where lo1: "lowered_ok prog ?rt (E, ds) st S1 st1 (E1, ds1)" and a1: "expr_ok E1 a1 CTy_CharPtr"
     by (rule lower_addr_ok[OF la1 ok sc sfs(1)])
-  have ok1: "cg_ok prog E1 cg" using cg_ok_mono[OF lowered_ok_env_le'[OF lo1] ok] .
-  obtain E2 ds2 where lo2: "lowered_ok prog ?rt (E1, ds1) st1 S2 st2 (E2, ds2)" and a2: "expr_ok E2 a2 CTy_CharPtr"
-    by (rule lower_addr_ok[OF la2 ok1 lowered_ok_scope[OF lo1] sfs(2)])
-  have ok2: "cg_ok prog E2 cg" using cg_ok_mono[OF lowered_ok_env_le'[OF lo2] ok1] .
-  from temp_for_ok[OF tfr ok2 lowered_ok_scope[OF lo2] wk fty] obtain E3 where
-    d: "lowered_ok prog ?rt (E2, ds2) st2 [decl] st3 (E3, tmp # ds2)"
+  obtain E1b ds1b where lo1b: "lowered_ok prog ?rt (E1, ds1) st1 P1 st1b (E1b, ds1b)" and p1: "expr_ok E1b p1 CTy_CharPtr"
+    using bind_addr_ok[OF ba1 lowered_ok_scope[OF lo1] a1] by blast
+  have ok1: "cg_ok prog E1b cg"
+    using cg_ok_mono[OF lowered_ok_env_le'[OF lo1b] cg_ok_mono[OF lowered_ok_env_le'[OF lo1] ok]] .
+  (* the second *)
+  obtain E2 ds2 where lo2: "lowered_ok prog ?rt (E1b, ds1b) st1b S2 st2 (E2, ds2)" and a2: "expr_ok E2 a2 CTy_CharPtr"
+    by (rule lower_addr_ok[OF la2 ok1 lowered_ok_scope[OF lo1b] sfs(2)])
+  obtain E2b ds2b where lo2b: "lowered_ok prog ?rt (E2, ds2) st2 P2 st2b (E2b, ds2b)" and p2: "expr_ok E2b p2 CTy_CharPtr"
+    using bind_addr_ok[OF ba2 lowered_ok_scope[OF lo2] a2] by blast
+  have le2: "env_le E1b E2b" using env_le_trans[OF lowered_ok_env_le'[OF lo2] lowered_ok_env_le'[OF lo2b]] .
+  have ok2: "cg_ok prog E2b cg" using cg_ok_mono[OF le2 ok1] .
+  (* the temporary *)
+  from temp_for_ok[OF tfr ok2 lowered_ok_scope[OF lo2b] wk fty] obtain E3 where
+    d: "lowered_ok prog ?rt (E2b, ds2b) st2b [decl] st3 (E3, tmp # ds2b)"
     and lk: "fmlookup E3 tmp = Some (case scalar_ty ty of Some cty \<Rightarrow> VT_Scalar cty | None \<Rightarrow> VT_Buf)"
     by blast
-  have le3: "env_le E2 E3" by (rule lowered_ok_env_le'[OF d])
+  have le3: "env_le E2b E3" by (rule lowered_ok_env_le'[OF d])
   have ok3: "cg_ok prog E3 cg" using cg_ok_mono[OF le3 ok2] .
-  have a1: "expr_ok E3 a1 CTy_CharPtr" using expr_ok_mono[OF le3 expr_ok_mono[OF lowered_ok_env_le'[OF lo2] a1]] .
-  have a2: "expr_ok E3 a2 CTy_CharPtr" using expr_ok_mono[OF le3 a2] .
-  have sc3: "scope_ok prog (E3, tmp # ds2) st3" by (rule lowered_ok_scope[OF d])
-  have body: "lowered_ok prog ?rt (E3, tmp # ds2) st3 (?body tmp a1 a2) st3 (E3, tmp # ds2)"
+  have p1: "expr_ok E3 p1 CTy_CharPtr" using expr_ok_mono[OF le3 expr_ok_mono[OF le2 p1]] .
+  have p2: "expr_ok E3 p2 CTy_CharPtr" using expr_ok_mono[OF le3 p2] .
+  have sc3: "scope_ok prog (E3, tmp # ds2b) st3" by (rule lowered_ok_scope[OF d])
+  (* the exchange, through the two pointers *)
+  have body: "lowered_ok prog ?rt (E3, tmp # ds2b) st3 (?body tmp p1 p2) st3 (E3, tmp # ds2b)"
   proof (cases "scalar_ty ty")
     case (Some cty)
     have tmpv: "expr_ok E3 (ME_Var tmp) cty" using lk Some by (intro expr_ok_Var) simp
-    have s1: "lowered_ok prog ?rt (E3, tmp # ds2) st3 [MS_Assign tmp (ME_Load cty a1)] st3 (E3, tmp # ds2)"
-      using sc3 lk Some expr_ok_Load[OF a1] by (intro assign_ok[where cty' = cty]) (auto simp: ty_compat_def)
-    have s2: "lowered_ok prog ?rt (E3, tmp # ds2) st3 [MS_Store cty a1 (ME_Load cty a2)] st3 (E3, tmp # ds2)"
-      using sc3 a1 expr_ok_Load[OF a2] by (intro store_ok[where cty' = cty]) (auto simp: ty_compat_def)
-    have s3: "lowered_ok prog ?rt (E3, tmp # ds2) st3 [MS_Store cty a2 (ME_Var tmp)] st3 (E3, tmp # ds2)"
-      using sc3 a2 tmpv by (intro store_ok[where cty' = cty]) (auto simp: ty_compat_def)
+    have s1: "lowered_ok prog ?rt (E3, tmp # ds2b) st3 [MS_Assign tmp (ME_Load cty p1)] st3 (E3, tmp # ds2b)"
+      using sc3 lk Some expr_ok_Load[OF p1] by (intro assign_ok[where cty' = cty]) (auto simp: ty_compat_def)
+    have s2: "lowered_ok prog ?rt (E3, tmp # ds2b) st3 [MS_Store cty p1 (ME_Load cty p2)] st3 (E3, tmp # ds2b)"
+      using sc3 p1 expr_ok_Load[OF p2] by (intro store_ok[where cty' = cty]) (auto simp: ty_compat_def)
+    have s3: "lowered_ok prog ?rt (E3, tmp # ds2b) st3 [MS_Store cty p2 (ME_Var tmp)] st3 (E3, tmp # ds2b)"
+      using sc3 p2 tmpv by (intro store_ok[where cty' = cty]) (auto simp: ty_compat_def)
     show ?thesis unfolding Some option.case using lowered_ok_append[OF lowered_ok_append[OF s1 s2] s3] by simp
   next
     case None
     have tmpa: "expr_ok E3 (ME_AddrOf tmp) CTy_CharPtr" using lk None by (intro expr_ok_AddrOf) simp
     have sz: "u64_ok E3 (cg_size cg ty)" using cg_size_ok[OF ok3 wk fty] .
-    have s1: "lowered_ok prog ?rt (E3, tmp # ds2) st3 [MS_Copy (ME_AddrOf tmp) a1 (cg_size cg ty)] st3 (E3, tmp # ds2)"
-      using sc3 tmpa a1 sz by (intro copy_ok[where dty = CTy_CharPtr and sty = CTy_CharPtr]) auto
-    have s2: "lowered_ok prog ?rt (E3, tmp # ds2) st3 [MS_Copy a1 a2 (cg_size cg ty)] st3 (E3, tmp # ds2)"
-      using sc3 a1 a2 sz by (intro copy_ok[where dty = CTy_CharPtr and sty = CTy_CharPtr]) auto
-    have s3: "lowered_ok prog ?rt (E3, tmp # ds2) st3 [MS_Copy a2 (ME_AddrOf tmp) (cg_size cg ty)] st3 (E3, tmp # ds2)"
-      using sc3 a2 tmpa sz by (intro copy_ok[where dty = CTy_CharPtr and sty = CTy_CharPtr]) auto
+    have s1: "lowered_ok prog ?rt (E3, tmp # ds2b) st3 [MS_Copy (ME_AddrOf tmp) p1 (cg_size cg ty)] st3 (E3, tmp # ds2b)"
+      using sc3 tmpa p1 sz by (intro copy_ok[where dty = CTy_CharPtr and sty = CTy_CharPtr]) auto
+    have s2: "lowered_ok prog ?rt (E3, tmp # ds2b) st3 [MS_Copy p1 p2 (cg_size cg ty)] st3 (E3, tmp # ds2b)"
+      using sc3 p1 p2 sz by (intro copy_ok[where dty = CTy_CharPtr and sty = CTy_CharPtr]) auto
+    have s3: "lowered_ok prog ?rt (E3, tmp # ds2b) st3 [MS_Copy p2 (ME_AddrOf tmp) (cg_size cg ty)] st3 (E3, tmp # ds2b)"
+      using sc3 p2 tmpa sz by (intro copy_ok[where dty = CTy_CharPtr and sty = CTy_CharPtr]) auto
     show ?thesis unfolding None option.case using lowered_ok_append[OF lowered_ok_append[OF s1 s2] s3] by simp
   qed
-  have lo: "lowered_ok prog ?rt (E, ds) st S st' (E3, tmp # ds2)"
-    unfolding S st' using lowered_ok_append[OF lowered_ok_append[OF lowered_ok_append[OF lo1 lo2] d] body] by simp
+  have lo: "lowered_ok prog ?rt (E, ds) st S st' (E3, tmp # ds2b)"
+    unfolding S st'
+    using lowered_ok_append[OF lowered_ok_append[OF lowered_ok_append[OF lowered_ok_append[OF
+            lowered_ok_append[OF lo1 lo1b] lo2] lo2b] d] body]
+    by simp
   show "\<exists>E' ds'. lowered_ok prog ?rt (E, ds) st S st' (E', ds') \<and> cg_ok prog E' cg' \<and> CG_TyEnv cg' = env' \<and> CG_Ret cg' = CG_Ret cg"
     unfolding cg' env' using lo ok3 by blast
 qed
