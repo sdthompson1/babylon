@@ -1,0 +1,3 @@
+src/SwapOrder.b:22:5: Assert might not hold
+src/SwapOrder.b:35:5: Assert might not hold
+src/SwapOrder.b:53:10: Array index might be out of bounds
