@@ -508,6 +508,14 @@ In addition, for the division operations (`/` and `%`), the verifier
 will try to prove that the right-hand side (the divisor) is non-zero;
 if this proof fails, verification will not succeed.
 
+For the finite-sized integer types, `a % b` is permitted only when `a
+/ b` is, i.e. the overflow check for `%` is applied to the quotient `a
+/ b` (the remainder itself can never overflow). Division overflows in
+just one case, namely when the most negative value of a signed type is
+divided by -1; so, for example, if `a` is an `i32` equal to
+-2147483648 and `b` is -1, then neither `a / b` nor `a % b` is
+allowed. (In C, both of these are undefined behaviour.)
+
 The following bitwise logical operators are also supported: `&`, `|`
 and `^`. Like in C, these represent bitwise "and", "or" and "xor"
 respectively. These work on the finite-sized integer types (`i8`
