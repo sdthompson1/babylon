@@ -454,6 +454,29 @@ static bool bad_shift_count(struct Type *type, enum BinOp op, uint64_t shift_cou
     }
 }
 
+// "a % b" is an error whenever "a / b" is. In particular, it is an
+// overflow if the quotient is out of range for the type (which happens
+// only when the minimum value of a signed type is divided by -1), even
+// though the remainder itself (zero) would be in range. This is the rule
+// that the verifier uses for "%" at runtime, and "INT_MIN % -1" is
+// undefined behaviour in C.
+//
+// This function is called when the 64-bit calculation of "a % b" has
+// succeeded (so b is nonzero, and the 64-bit quotient does not overflow);
+// it checks whether the quotient is out of range for the (possibly
+// narrower) type of the term.
+static bool modulo_quotient_overflows(struct Term *term,
+                                      bool is_signed,
+                                      uint64_t lhs_value,
+                                      uint64_t rhs_value)
+{
+    uint64_t quotient = lhs_value;
+    if (!compute_binop(term->location, BINOP_DIVIDE, is_signed, &quotient, rhs_value)) {
+        fatal_error("modulo_quotient_overflows: unexpected division failure");
+    }
+    return !is_value_in_range_for_type(term->type, quotient);
+}
+
 static struct Term * eval_binop(TypeEnv *env, struct Term *term)
 {
     if (term->binop.list->next) {
@@ -488,6 +511,7 @@ static struct Term * eval_binop(TypeEnv *env, struct Term *term)
     bool is_signed = term->binop.lhs->type->tag == TY_FINITE_INT ?
         term->binop.lhs->type->int_data.is_signed :
         false;
+    uint64_t orig_lhs_value = lhs_value;
     bool ok = compute_binop(term->location,
                             op,
                             is_signed,
@@ -501,6 +525,10 @@ static struct Term * eval_binop(TypeEnv *env, struct Term *term)
             report_compile_time_invalid_shift_amount(term->location);
             return NULL;
         } else if (!is_value_in_range_for_type(term->type, lhs_value)) {
+            report_compile_time_overflow(term->location);
+            return NULL;
+        } else if (op == BINOP_MODULO
+                   && modulo_quotient_overflows(term, is_signed, orig_lhs_value, rhs_value)) {
             report_compile_time_overflow(term->location);
             return NULL;
         } else {
