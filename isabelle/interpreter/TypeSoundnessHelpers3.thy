@@ -670,10 +670,22 @@ proof -
         then show ?thesis by simp
       next
         case False
-        then have "eval_binop op lhsVal rhsVal = generic_finite_int_binop tmod lhsVal rhsVal"
-          using op_eq lhs_fin rhs_fin by simp
-        with ty_eq lhsTy_def generic_finite_int_binop_sound[OF lhs_int rhs_int]
-        show ?thesis by simp
+        note nonzero = False
+        (* modulo is an error when the quotient does not fit, and otherwise
+           the remainder *)
+        show ?thesis
+        proof (cases "int_fits sign bits (tdiv i1 i2)")
+          case True
+          then have "eval_binop op lhsVal rhsVal = generic_finite_int_binop tmod lhsVal rhsVal"
+            using nonzero op_eq lhs_fin rhs_fin by (simp add: Let_def)
+          with ty_eq lhsTy_def generic_finite_int_binop_sound[OF lhs_int rhs_int]
+          show ?thesis by simp
+        next
+          case False
+          then have "eval_binop op lhsVal rhsVal = Inl RuntimeError"
+            using nonzero op_eq lhs_fin rhs_fin by (simp add: Let_def)
+          then show ?thesis by simp
+        qed
       qed
     next
       case False

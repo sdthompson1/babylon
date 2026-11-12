@@ -119,7 +119,16 @@ fun generic_bool_binop :: "(bool \<Rightarrow> bool \<Rightarrow> bool) \<Righta
 (* Evaluate a binop *)
 (* Arithmetic and ordering work on finite integers, ints and reals; modulo on
    finite integers and ints; the bitwise operators and shifts on finite
-   integers only. *)
+   integers only.
+
+   Modulo is defined exactly when division is: the divisor must be non-zero
+   and the quotient must be representable too, although the remainder
+   itself always is (tmod_fits). For finite integers the quotient fails to
+   fit in one case only, the most negative value of a signed type divided
+   by -1 (tdiv_fits_iff), so "MIN % -1" is a RuntimeError, like "MIN / -1".
+   This is the verifier's rule for % (it has one precondition for both
+   operators), and C leaves a % b undefined when a / b is not
+   representable (C11 6.5.5p6). See eval_binop_Modulo_finite below. *)
 fun eval_binop :: "CoreBinop \<Rightarrow> CoreValue \<Rightarrow> CoreValue \<Rightarrow> InterpError + CoreValue" where
   "eval_binop CoreBinop_Add v1 v2 = generic_numeric_binop (\<lambda>x y. x + y) (\<lambda>x y. x + y) v1 v2"
 | "eval_binop CoreBinop_Subtract v1 v2 = generic_numeric_binop (\<lambda>x y. x - y) (\<lambda>x y. x - y) v1 v2"
@@ -129,7 +138,9 @@ fun eval_binop :: "CoreBinop \<Rightarrow> CoreValue \<Rightarrow> CoreValue \<R
     else generic_numeric_binop tdiv (\<lambda>x y. x / y) v1 v2)"
 | "eval_binop CoreBinop_Modulo v1 v2 =
     (if is_zero v2 then Inl RuntimeError  \<comment> \<open>division by zero\<close>
-    else generic_integer_binop tmod v1 v2)"
+    else (case generic_integer_binop tdiv v1 v2 of
+            Inl err \<Rightarrow> Inl err  \<comment> \<open>the quotient overflows (or the operands are mistyped)\<close>
+          | Inr _ \<Rightarrow> generic_integer_binop tmod v1 v2))"
 | "eval_binop CoreBinop_BitAnd v1 v2 = generic_finite_int_binop (\<lambda>x y. and x y) v1 v2"
 | "eval_binop CoreBinop_BitOr v1 v2 = generic_finite_int_binop (\<lambda>x y. or x y) v1 v2"
 | "eval_binop CoreBinop_BitXor v1 v2 = generic_finite_int_binop (\<lambda>x y. xor x y) v1 v2"
@@ -153,6 +164,94 @@ fun eval_binop :: "CoreBinop \<Rightarrow> CoreValue \<Rightarrow> CoreValue \<R
 | "eval_binop CoreBinop_And v1 v2 = generic_bool_binop (\<lambda>x y. x \<and> y) v1 v2"
 | "eval_binop CoreBinop_Or v1 v2 = generic_bool_binop (\<lambda>x y. x \<or> y) v1 v2"
 | "eval_binop CoreBinop_Implies v1 v2 = generic_bool_binop (\<lambda>x y. x \<longrightarrow> y) v1 v2"
+
+(* The quotient and the remainder of finite integers. *)
+lemma tdiv_abs: "\<bar>tdiv i1 i2\<bar> = \<bar>i1\<bar> div \<bar>i2\<bar>"
+  by (cases "i1 = 0"; cases "i2 = 0") (simp_all add: abs_mult abs_sgn_eq pos_imp_zdiv_nonneg_iff)
+
+lemma tdiv_abs_le: "\<bar>tdiv i1 i2\<bar> \<le> \<bar>i1\<bar>"
+  unfolding tdiv_abs by (cases "i2 = 0") (simp_all add: zdiv_mono2[of "\<bar>i1\<bar>" 1 "\<bar>i2\<bar>", simplified])
+
+(* In a signed type with minimum -M, the quotient fits except in one case. *)
+lemma tdiv_fits_signed:
+  assumes "- M \<le> i1" "i1 < M" "- M \<le> i2" "i2 < M" "i2 \<noteq> 0"
+  shows "(- M \<le> tdiv i1 i2 \<and> tdiv i1 i2 < M) \<longleftrightarrow> \<not> (i1 = - M \<and> i2 = - 1)"
+proof (cases "i1 = - M")
+  case False
+  then have "\<bar>i1\<bar> < M" using assms by simp
+  then have "\<bar>tdiv i1 i2\<bar> < M" using tdiv_abs_le[of i1 i2] by simp
+  then show ?thesis using False by auto
+next
+  case True
+  have M: "0 < M" using assms by simp
+  show ?thesis
+  proof (cases "i2 = - 1")
+    case True
+    then show ?thesis using \<open>i1 = - M\<close> M by simp
+  next
+    case False
+    show ?thesis
+    proof (cases "i2 = 1")
+      case True
+      then show ?thesis using \<open>i1 = - M\<close> M by simp
+    next
+      case n1: False
+      have "2 \<le> \<bar>i2\<bar>" using False n1 assms(5) by simp
+      then have "\<bar>i1\<bar> div \<bar>i2\<bar> \<le> \<bar>i1\<bar> div 2" by (intro zdiv_mono2) simp_all
+      also have "\<dots> < M" using True M by simp
+      finally have "\<bar>tdiv i1 i2\<bar> < M" unfolding tdiv_abs .
+      then show ?thesis using False by auto
+    qed
+  qed
+qed
+
+(* For operands that fit a finite integer type, and a non-zero divisor, the
+   quotient fits too, except when the most negative value of a signed type
+   is divided by -1. *)
+lemma tdiv_fits_iff:
+  assumes "int_fits s b i1" "int_fits s b i2" "i2 \<noteq> 0"
+  shows "int_fits s b (tdiv i1 i2) \<longleftrightarrow> \<not> (s = Signed \<and> i1 = fst (int_range s b) \<and> i2 = - 1)"
+proof (cases s)
+  case Signed
+  show ?thesis
+    using assms tdiv_fits_signed[of "- fst (int_range s b)" i1 i2] unfolding Signed
+    by (cases b; simp del: tdiv.simps; arith)
+next
+  case Unsigned
+  have nn: "0 \<le> i1" "0 < i2" using assms unfolding Unsigned by (cases b; simp)+
+  have "tdiv i1 i2 = i1 div i2" using nn by (simp add: sgn_if)
+  moreover have "0 \<le> i1 div i2" "i1 div i2 \<le> i1"
+    using nn by (simp_all add: pos_imp_zdiv_nonneg_iff zdiv_mono2[of i1 1 i2, simplified])
+  ultimately show ?thesis using assms(1) unfolding Unsigned by (cases b) (simp_all del: tdiv.simps)
+qed
+
+(* The remainder always fits. *)
+lemma tmod_fits:
+  assumes "int_fits s b i1" "int_fits s b i2" "i2 \<noteq> 0"
+  shows "int_fits s b (tmod i1 i2)"
+proof -
+  have "\<bar>tmod i1 i2\<bar> < \<bar>i2\<bar>" using assms(3) by (simp add: abs_mult abs_sgn_eq)
+  moreover have "0 \<le> i1 \<Longrightarrow> 0 \<le> tmod i1 i2" using assms(3) by (simp add: sgn_if)
+  ultimately show ?thesis using assms(1,2) by (cases s; cases b) (auto simp del: tmod.simps)
+qed
+
+(* Modulo on two finite integers of one type, in the verifier's terms: an
+   error if the divisor is zero or if the operation is "MIN % -1" at a
+   signed type, and the remainder otherwise. *)
+lemma eval_binop_Modulo_finite:
+  assumes "int_fits s b i1" "int_fits s b i2"
+  shows "eval_binop CoreBinop_Modulo (CV_FiniteInt s b i1) (CV_FiniteInt s b i2) =
+          (if i2 = 0 \<or> (s = Signed \<and> i1 = fst (int_range s b) \<and> i2 = - 1) then Inl RuntimeError
+           else Inr (CV_FiniteInt s b (tmod i1 i2)))"
+proof (cases "i2 = 0")
+  case True
+  then show ?thesis by simp
+next
+  case False
+  show ?thesis
+    using tdiv_fits_iff[OF assms False] tmod_fits[OF assms False] False
+    by (simp add: Let_def del: tdiv.simps tmod.simps int_fits.simps)
+qed
 
 (* Short-circuit evaluation for the logical binops: if the lhs value alone
    determines the result, the rhs is not evaluated. *)
