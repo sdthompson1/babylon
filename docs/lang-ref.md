@@ -508,7 +508,7 @@ types.
 value of a signed finite-integer type, and `b` is -1 of the same type,
 then *both* `a / b` *and* `a % b` are considered to overflow, even
 though, mathematically speaking, only `a / b` is outside the range of
-the type.)
+the type in this case.)
 
 In addition, for the division operations (`/` and `%`), the verifier
 will try to prove that the right-hand side (the divisor) is non-zero;
