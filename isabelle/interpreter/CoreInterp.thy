@@ -120,15 +120,9 @@ fun generic_bool_binop :: "(bool \<Rightarrow> bool \<Rightarrow> bool) \<Righta
 (* Arithmetic and ordering work on finite integers, ints and reals; modulo on
    finite integers and ints; the bitwise operators and shifts on finite
    integers only.
-
-   Modulo is defined exactly when division is: the divisor must be non-zero
-   and the quotient must be representable too, although the remainder
-   itself always is (tmod_fits). For finite integers the quotient fails to
-   fit in one case only, the most negative value of a signed type divided
-   by -1 (tdiv_fits_iff), so "MIN % -1" is a RuntimeError, like "MIN / -1".
-   This is the verifier's rule for % (it has one precondition for both
-   operators), and C leaves a % b undefined when a / b is not
-   representable (C11 6.5.5p6). See eval_binop_Modulo_finite below. *)
+   The result is RuntimeError if the result would overflow, if a shift count is invalid,
+   or if we are dividing by zero. Modulo also requires that the corresponding division
+   would not overflow (as in C). *)
 fun eval_binop :: "CoreBinop \<Rightarrow> CoreValue \<Rightarrow> CoreValue \<Rightarrow> InterpError + CoreValue" where
   "eval_binop CoreBinop_Add v1 v2 = generic_numeric_binop (\<lambda>x y. x + y) (\<lambda>x y. x + y) v1 v2"
 | "eval_binop CoreBinop_Subtract v1 v2 = generic_numeric_binop (\<lambda>x y. x - y) (\<lambda>x y. x - y) v1 v2"
@@ -164,6 +158,15 @@ fun eval_binop :: "CoreBinop \<Rightarrow> CoreValue \<Rightarrow> CoreValue \<R
 | "eval_binop CoreBinop_And v1 v2 = generic_bool_binop (\<lambda>x y. x \<and> y) v1 v2"
 | "eval_binop CoreBinop_Or v1 v2 = generic_bool_binop (\<lambda>x y. x \<or> y) v1 v2"
 | "eval_binop CoreBinop_Implies v1 v2 = generic_bool_binop (\<lambda>x y. x \<longrightarrow> y) v1 v2"
+
+(* Short-circuit evaluation for the logical binops: if the lhs value alone
+   determines the result, the rhs is not evaluated. *)
+fun short_circuit :: "CoreBinop \<Rightarrow> CoreValue \<Rightarrow> CoreValue option" where
+  "short_circuit CoreBinop_And v = (if v = CV_Bool False then Some (CV_Bool False) else None)"
+| "short_circuit CoreBinop_Or v = (if v = CV_Bool True then Some (CV_Bool True) else None)"
+| "short_circuit CoreBinop_Implies v = (if v = CV_Bool False then Some (CV_Bool True) else None)"
+| "short_circuit _ _ = None"
+
 
 (* The quotient and the remainder of finite integers. *)
 lemma tdiv_abs: "\<bar>tdiv i1 i2\<bar> = \<bar>i1\<bar> div \<bar>i2\<bar>"
@@ -252,14 +255,6 @@ next
     using tdiv_fits_iff[OF assms False] tmod_fits[OF assms False] False
     by (simp add: Let_def del: tdiv.simps tmod.simps int_fits.simps)
 qed
-
-(* Short-circuit evaluation for the logical binops: if the lhs value alone
-   determines the result, the rhs is not evaluated. *)
-fun short_circuit :: "CoreBinop \<Rightarrow> CoreValue \<Rightarrow> CoreValue option" where
-  "short_circuit CoreBinop_And v = (if v = CV_Bool False then Some (CV_Bool False) else None)"
-| "short_circuit CoreBinop_Or v = (if v = CV_Bool True then Some (CV_Bool True) else None)"
-| "short_circuit CoreBinop_Implies v = (if v = CV_Bool False then Some (CV_Bool True) else None)"
-| "short_circuit _ _ = None"
 
 
 (* ========================================================================== *)
