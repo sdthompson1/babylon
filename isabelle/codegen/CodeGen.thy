@@ -78,6 +78,18 @@ definition lower_store :: "CGEnv \<Rightarrow> CoreTerm \<Rightarrow> CoreType \
           | _ \<Rightarrow> do { (S, a) \<leftarrow> lower_addr cg lv; cg_return (S @ [store_at cg ty a e]) })
      | _ \<Rightarrow> do { (S, a) \<leftarrow> lower_addr cg lv; cg_return (S @ [store_at cg ty a e]) })"
 
+(* Evaluate an address now, into a fresh char * variable. The expression
+   that lower_addr returns denotes the address of the lvalue only in the
+   state in which it is evaluated (it may read an index variable, or the
+   data pointer of a descriptor); the variable keeps denoting it after a
+   store. Used for the two operands of a swap, which Core resolves before
+   it writes either. *)
+definition bind_addr :: "CGEnv \<Rightarrow> MExpr \<Rightarrow> (MStmt list \<times> MExpr) CG" where
+  "bind_addr cg a = do {
+     p \<leftarrow> fresh_name (CG_Fun cg) ''addr'';
+     cg_return ([MS_DeclScalar p CTy_CharPtr, MS_Assign p a], ME_Var p)
+   }"
+
 (* The result of a call stored into a variable or lvalue of the given
    (instantiated) type: nothing for a void result. *)
 definition call_store :: "CGEnv \<Rightarrow> (MExpr \<Rightarrow> MStmt list CG) \<Rightarrow> CoreType \<Rightarrow> CallRes \<Rightarrow> MStmt list CG" where
@@ -185,19 +197,25 @@ where
 
 | "lower_stmt cg (CoreStmt_Swap Ghost _ _) = cg_fail (CGE_Ghost (CG_Fun cg))"
 
+  (* Swap: both addresses are computed, and held in pointer variables,
+     before anything is written, because Core resolves both lvalues in the
+     state before the swap (in "swap i, a[i]" the element is the one
+     selected by the old value of i). *)
 | "lower_stmt cg (CoreStmt_Swap NotGhost lv1 lv2) = do {
     ty \<leftarrow> ty_of cg lv1;
     (S1, a1) \<leftarrow> lower_addr cg lv1;
+    (P1, p1) \<leftarrow> bind_addr cg a1;
     (S2, a2) \<leftarrow> lower_addr cg lv2;
+    (P2, p2) \<leftarrow> bind_addr cg a2;
     (tmp, decl) \<leftarrow> temp_for cg ''swap'' ty;
-    cg_return (S1 @ S2 @ [decl]
+    cg_return (S1 @ P1 @ S2 @ P2 @ [decl]
                @ (case scalar_ty ty of
-                    Some cty \<Rightarrow> [MS_Assign tmp (ME_Load cty a1),
-                                  MS_Store cty a1 (ME_Load cty a2),
-                                  MS_Store cty a2 (ME_Var tmp)]
-                  | None \<Rightarrow> [MS_Copy (ME_AddrOf tmp) a1 (cg_size cg ty),
-                              MS_Copy a1 a2 (cg_size cg ty),
-                              MS_Copy a2 (ME_AddrOf tmp) (cg_size cg ty)]),
+                    Some cty \<Rightarrow> [MS_Assign tmp (ME_Load cty p1),
+                                  MS_Store cty p1 (ME_Load cty p2),
+                                  MS_Store cty p2 (ME_Var tmp)]
+                  | None \<Rightarrow> [MS_Copy (ME_AddrOf tmp) p1 (cg_size cg ty),
+                              MS_Copy p1 p2 (cg_size cg ty),
+                              MS_Copy p2 (ME_AddrOf tmp) (cg_size cg ty)]),
                cg)
    }"
 
