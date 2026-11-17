@@ -24,7 +24,7 @@ lemma process_one_arg_world:
   assumes "process_one_arg arg (Inr state) = Inr state'"
   shows "IS_World state' = IS_World state"
 proof -
-  obtain name vr refRes valRes where arg_eq: "arg = ((name, vr), refRes, valRes)"
+  obtain name vr gh refRes valRes where arg_eq: "arg = ((name, vr, gh), refRes, valRes)"
     by (cases arg) auto
   show ?thesis
   proof (cases vr)
@@ -306,7 +306,7 @@ next
         proof (cases vr)
           case Var
           from Var H CoreStmt_VarDecl obtain initVal where
-            iv: "interp_term d fuel state initTm = Inr initVal"
+            iv: "interp_term d fuel (state \<lparr>IS_Ghost := gd\<rparr>) initTm = Inr initVal"
             by (auto split: sum.splits)
           from Var H CoreStmt_VarDecl iv have
             cc: "copy_check gd state initVal = None"
@@ -325,14 +325,14 @@ next
                            \<and> fmlookup (IS_Refs state) baseName = None)")
             case True
             with Ref H CoreStmt_VarDecl base obtain val where
-              iv: "interp_term d fuel state initTm = Inr val"
+              iv: "interp_term d fuel (state \<lparr>IS_Ghost := gd\<rparr>) initTm = Inr val"
               by (auto split: sum.splits)
             from Ref H[symmetric] CoreStmt_VarDecl base True iv show ?thesis
               by (simp add: Let_def)
           next
             case False
             with Ref H CoreStmt_VarDecl base obtain addrPath where
-              lv: "interp_writable_lvalue d fuel state initTm = Inr addrPath"
+              lv: "interp_writable_lvalue d fuel (state \<lparr>IS_Ghost := gd\<rparr>) initTm = Inr addrPath"
               by (auto split: sum.splits)
             from Ref H[symmetric] CoreStmt_VarDecl base False lv show ?thesis
               by simp
@@ -352,9 +352,10 @@ next
           by auto
         \<comment> \<open>Run the call (giving newState), apply the cast, then alloc and bind. \<close>
         from H CoreStmt_VarDeclCall obtain newState retVal where
-          call: "interp_function_call d fuel state fnName argTys argTms = Inr (newState, retVal)"
+          call: "interp_function_call d fuel (state \<lparr>IS_Ghost := gd\<rparr>) fnName argTys argTms = Inr (newState, retVal)"
           by (auto split: sum.splits prod.splits)
-        note w1 = IH_call[OF funs_eq info np call]
+        have w1: "IS_World newState = IS_World state"
+          using IH_call[OF _ info np call] funs_eq by simp
         from H CoreStmt_VarDeclCall call obtain initVal where
           cast: "apply_cast_opt castOpt retVal = Inr initVal"
           by (auto split: sum.splits)
@@ -382,10 +383,10 @@ next
       next
         case (CoreStmt_Assign ga ty lhsLv rhsTm)
         from H CoreStmt_Assign obtain addr path where
-          wl: "interp_writable_lvalue d fuel state lhsLv = Inr (addr, path)"
+          wl: "interp_writable_lvalue d fuel (state \<lparr>IS_Ghost := ga\<rparr>) lhsLv = Inr (addr, path)"
           by (auto split: sum.splits)
         from H CoreStmt_Assign wl obtain rhsVal where
-          rv: "interp_term d fuel state rhsTm = Inr rhsVal"
+          rv: "interp_term d fuel (state \<lparr>IS_Ghost := ga\<rparr>) rhsTm = Inr rhsVal"
           by (auto split: sum.splits)
         from H CoreStmt_Assign wl rv have
           cc: "copy_check ga state rhsVal = None"
@@ -409,9 +410,10 @@ next
           by auto
         \<comment> \<open>Run the call (newState), apply cast, resolve lhs in newState, store. \<close>
         from H CoreStmt_AssignCall obtain newState retVal where
-          call: "interp_function_call d fuel state fnName argTys argTms = Inr (newState, retVal)"
+          call: "interp_function_call d fuel (state \<lparr>IS_Ghost := ga\<rparr>) fnName argTys argTms = Inr (newState, retVal)"
           by (auto split: sum.splits prod.splits)
-        note w1 = IH_call[OF funs_eq info np call]
+        have w1: "IS_World newState = IS_World state"
+          using IH_call[OF _ info np call] funs_eq by simp
         from H CoreStmt_AssignCall call obtain rhsVal where
           cast: "apply_cast_opt castOpt retVal = Inr rhsVal"
           by (auto split: sum.splits)
@@ -428,10 +430,10 @@ next
       next
         case (CoreStmt_Swap gs lhsTm rhsTm)
         from H CoreStmt_Swap obtain lhsLv where
-          lhs: "interp_writable_lvalue d fuel state lhsTm = Inr lhsLv"
+          lhs: "interp_writable_lvalue d fuel (state \<lparr>IS_Ghost := gs\<rparr>) lhsTm = Inr lhsLv"
           by (auto split: sum.splits)
         with H CoreStmt_Swap obtain rhsLv where
-          rhs: "interp_writable_lvalue d fuel state rhsTm = Inr rhsLv"
+          rhs: "interp_writable_lvalue d fuel (state \<lparr>IS_Ghost := gs\<rparr>) rhsTm = Inr rhsLv"
           by (auto split: sum.splits)
         with H CoreStmt_Swap lhs obtain newState where
           sw: "perform_swap state lhsLv rhsLv = Inr newState"
@@ -452,7 +454,7 @@ next
         next
           case (Some condTm)
           from H CoreStmt_Assert Some obtain condVal where
-            cv: "interp_term d fuel state condTm = Inr condVal"
+            cv: "interp_term d fuel (state \<lparr>IS_Ghost := Ghost\<rparr>) condTm = Inr condVal"
             by (auto split: sum.splits)
           show ?thesis
           proof (cases condVal)
@@ -478,12 +480,12 @@ next
         \<comment> \<open>The run succeeded, so the invariants were evaluated and all held.
             Evaluating them is evaluating terms, which cannot change the state. \<close>
         from H CoreStmt_While obtain invarVals where
-          iv: "interp_term_list d fuel state invars = Inr invarVals" and
+          iv: "interp_term_list d fuel (state \<lparr>IS_Ghost := Ghost\<rparr>) invars = Inr invarVals" and
           ie: "conditions_error invarVals = None"
           by (auto split: sum.splits option.splits)
         note [simp] = iv ie
         from H CoreStmt_While obtain condVal where
-          cv: "interp_term d fuel state condTm = Inr condVal"
+          cv: "interp_term d fuel (state \<lparr>IS_Ghost := gw\<rparr>) condTm = Inr condVal"
           by (auto split: sum.splits)
         show ?thesis
         proof (cases condVal)
@@ -499,7 +501,7 @@ next
             \<comment> \<open>The decreases-term (if any) was evaluated before the body. \<close>
             with CoreStmt_While H cv CV_Bool
             obtain decrVal where
-              dv: "eval_decreases (interp_term d fuel state) decr = Inr decrVal"
+              dv: "eval_decreases (interp_term d fuel (state \<lparr>IS_Ghost := Ghost\<rparr>)) decr = Inr decrVal"
               by (auto split: sum.splits)
             note [simp] = dv
             from CoreStmt_While H cv CV_Bool True
@@ -524,7 +526,7 @@ next
                   check passed. \<close>
               from CoreStmt_While H cv CV_Bool True body Continue
               obtain decrVal' where
-                dv': "eval_decreases (interp_term d fuel ?rs) decr = Inr decrVal'" and
+                dv': "eval_decreases (interp_term d fuel (?rs \<lparr>IS_Ghost := Ghost\<rparr>)) decr = Inr decrVal'" and
                 de: "decreases_error decrVal decrVal' = None"
                 by (auto split: sum.splits option.splits)
               \<comment> \<open>The loop runs again from the restored state. \<close>
@@ -546,7 +548,7 @@ next
         have okB: "gm = Ghost \<or> \<not> TE_FunctionImpure (env \<lparr> TE_ProofTopLevel := False \<rparr>)"
           using ok gm_ok by auto
         from H CoreStmt_Match obtain scrutVal where
-          sv: "interp_term d fuel state scrutTm = Inr scrutVal"
+          sv: "interp_term d fuel (state \<lparr>IS_Ghost := gm\<rparr>) scrutTm = Inr scrutVal"
           by (auto split: sum.splits)
         from H CoreStmt_Match sv obtain armStmts where
           arm: "find_matching_arm scrutVal arms = Inr armStmts"
@@ -662,20 +664,27 @@ next
       \<comment> \<open>Take the call apart: the function, the state with the arguments bound, and
           the body's result. The contract checks passed and did not change the world
           (or any of the state), so the body's result is the call's result. \<close>
-      let ?refResults = "map (interp_writable_lvalue d fuel state) argTms"
-      let ?valResults = "map (interp_term d fuel state) argTms"
       from interp_function_call_InrE[OF H0] obtain f preCallState where
         f_lookup: "fmlookup (IS_Functions state) fnName = Some f" and
         len_eq: "length argTms = length (IF_Args f)" and
         tyLen_eq: "length argTys = length (IF_TyArgs f)" and
-        fold_eq: "fold process_one_arg (zip (IF_Args f) (zip ?refResults ?valResults))
+        fold_eq: "fold process_one_arg
+                    (zip (IF_Args f)
+                         (zip (map_args (interp_writable_lvalue d fuel) state (IF_Args f) argTms)
+                              (map_args (interp_term d fuel) state (IF_Args f) argTms)))
                     (Inr (state \<lparr> IS_Locals := fmempty, IS_Refs := fmempty,
                                   IS_ConstLocals := {||},
                                   IS_TyArgs := fmap_of_list (zip (IF_TyArgs f)
-                                                 (map (apply_subst (IS_TyArgs state)) argTys)) \<rparr>))
+                                                 (map (apply_subst (IS_TyArgs state)) argTys)),
+                                  IS_Ghost := IF_Ghost f \<rparr>))
                   = Inr preCallState" and
-        body: "call_body (interp_statement_list d fuel) state f ?refResults ?valResults preCallState
-                 = Inr (state', retVal)" .
+        body: "call_body (interp_statement_list d fuel) state f
+                 (map_args (interp_writable_lvalue d fuel) state (IF_Args f) argTms)
+                 (map_args (interp_term d fuel) state (IF_Args f) argTms) preCallState
+                 = Inr (state', retVal)"
+        by blast
+      let ?refResults = "map_args (interp_writable_lvalue d fuel) state (IF_Args f) argTms"
+      let ?valResults = "map_args (interp_term d fuel) state (IF_Args f) argTms"
       have pre_w: "IS_World preCallState = IS_World state"
         using fold_process_one_arg_world[OF fold_eq] by simp
       have pre_funs: "IS_Functions preCallState = funs"
@@ -727,7 +736,7 @@ next
         case (Inr externFun)
         \<comment> \<open>Extern function: a pure one returns the world it was given. \<close>
         let ?vals = "rights ?valResults"
-        let ?refs = "rights (map (\<lambda>((_, vr), refResult).
+        let ?refs = "rights (map (\<lambda>((_, vr, _), refResult).
                                       if vr = Ref then refResult else Inl TypeError)
                                  (zip (IF_Args f) ?refResults))"
         obtain newWorld refUpdates externRetVal where
