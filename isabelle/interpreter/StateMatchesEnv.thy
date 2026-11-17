@@ -365,6 +365,22 @@ lemma state_matches_env_IS_World_irrelevant [simp]:
         local_var_in_state_with_type_def global_var_in_state_with_type_def
         split: option.splits)
 
+(* Lemma: state_matches_env does not depend on IS_Ghost. (The mode of a state
+   is related to the type environment separately, where it matters: see the
+   hypotheses of type_soundness.) *)
+lemma state_matches_env_IS_Ghost_irrelevant [simp]:
+  "state_matches_env (state \<lparr> IS_Ghost := g \<rparr>) env storeTyping
+     = state_matches_env state env storeTyping"
+  by (simp add: state_matches_env_def
+        local_vars_exist_in_state_def global_vars_exist_in_state_def
+        no_extra_local_vars_def no_extra_global_vars_def
+        funs_exist_in_state_def no_extra_funs_def
+        const_locals_match_def
+        store_well_typed_def ty_args_well_formed_def
+        tables_match_def
+        local_var_in_state_with_type_def global_var_in_state_with_type_def
+        split: option.splits)
+
 (* body_env_for preserves tyenv_well_formed, given that funInfo is one of env's
    functions, and that there is one name for each parameter.
    The assumption "abs_empty" is justified because body_env_for is only used by the

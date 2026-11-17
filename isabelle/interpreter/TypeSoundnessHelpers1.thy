@@ -48,6 +48,22 @@ fun sound_lvalue_result :: "'w InterpState \<Rightarrow> CoreTyEnv \<Rightarrow>
     (addr < length (IS_Store state) \<and>
      type_at_path env (storeTyping ! addr) path = Some (apply_subst (IS_TyArgs state) ty))"
 
+(* None of these depends on the mode of the state. *)
+lemma sound_term_result_IS_Ghost [simp]:
+  "sound_term_result (state \<lparr> IS_Ghost := g \<rparr>) env ty r = sound_term_result state env ty r"
+  by (cases r) simp_all
+
+lemma sound_term_results_IS_Ghost [simp]:
+  "sound_term_results (state \<lparr> IS_Ghost := g \<rparr>) env tys r = sound_term_results state env tys r"
+  by (cases r) simp_all
+
+lemma sound_lvalue_result_IS_Ghost [simp]:
+  "sound_lvalue_result (state \<lparr> IS_Ghost := g \<rparr>) env storeTyping ty r
+     = sound_lvalue_result state env storeTyping ty r"
+proof (cases r)
+  case (Inr ap) then show ?thesis by (cases ap) simp
+qed simp
+
 (* The second store typing extends the first: every address present in the
    first typing retains the same type in the second, and the second may have
    additional entries appended. This captures the fact that executing a single
