@@ -1520,7 +1520,7 @@ qed
      - interp_function_call runs the body of f with IS_Ghost := IF_Ghost f, and
        hands back a state with the caller's IS_Ghost (restore_scope);
      - each argument of a call is evaluated with IS_Ghost := param_mode (IS_Ghost
-       state) g, where g is the ghost flag of its parameter (see arg_state);
+       state) g, where g is the ghost flag of its parameter (see map_args);
      - a statement with a ghost flag evaluates its own terms with IS_Ghost := that
        flag, but builds its result state from the state it was given, so the mode
        is unchanged for the statements that follow, and loop bodies and match arms
@@ -1533,6 +1533,75 @@ qed
 (* The state in which the actual for the parameter `arg` is evaluated. *)
 abbreviation arg_state :: "'w InterpState \<Rightarrow> string \<times> VarOrRef \<times> GhostOrNot \<Rightarrow> 'w InterpState" where
   "arg_state state arg \<equiv> state \<lparr> IS_Ghost := param_mode (IS_Ghost state) (snd (snd arg)) \<rparr>"
+
+(* When the mode of a state is already g, setting it to g changes nothing. This
+   is how the override of a NotGhost statement, or of the argument for a
+   NotGhost parameter, disappears in executable code. *)
+lemma IS_Ghost_update_same:
+  "IS_Ghost state = g \<Longrightarrow> state \<lparr> IS_Ghost := g \<rparr> = state"
+  by auto
+
+lemma arg_state_NotGhost_param [simp]:
+  "arg_state state (n, vr, NotGhost) = state"
+  by (simp add: param_mode_def)
+
+(* Evaluate the arguments of a call with the evaluator `ev`, each in the state
+   for its parameter (arg_state). `args` are the parameters (IF_Args) and `tms`
+   the actuals. *)
+definition map_args ::
+    "('w InterpState \<Rightarrow> CoreTerm \<Rightarrow> 'a) \<Rightarrow> 'w InterpState
+     \<Rightarrow> (string \<times> VarOrRef \<times> GhostOrNot) list \<Rightarrow> CoreTerm list \<Rightarrow> 'a list" where
+  "map_args ev state args tms = map (\<lambda>(arg, tm). ev (arg_state state arg) tm) (zip args tms)"
+
+(* The evaluator is only ever applied to the actuals, each in the state for its
+   parameter. This congruence rule lets the interpreter below pass itself,
+   partially applied, to map_args. *)
+lemma map_args_cong [fundef_cong]:
+  assumes "state = state'" and "args = args'" and "tms = tms'"
+    and "\<And>arg tm. (arg, tm) \<in> set (zip args' tms')
+                   \<Longrightarrow> ev (arg_state state' arg) tm = ev' (arg_state state' arg) tm"
+  shows "map_args ev state args tms = map_args ev' state' args' tms'"
+  using assms unfolding map_args_def by (auto intro: map_cong)
+
+lemma length_map_args [simp]:
+  "length (map_args ev state args tms) = min (length args) (length tms)"
+  by (simp add: map_args_def)
+
+lemma nth_map_args [simp]:
+  "i < length args \<Longrightarrow> i < length tms
+   \<Longrightarrow> map_args ev state args tms ! i = ev (arg_state state (args ! i)) (tms ! i)"
+  by (simp add: map_args_def)
+
+lemma map_args_Nil [simp]:
+  "map_args ev state [] tms = []"
+  "map_args ev state args [] = []"
+  by (simp_all add: map_args_def)
+
+lemma map_args_Cons [simp]:
+  "map_args ev state (arg # args) (tm # tms)
+   = ev (arg_state state arg) tm # map_args ev state args tms"
+  by (simp add: map_args_def)
+
+(* Two evaluations of the arguments agree if they agree on each argument. *)
+lemma map_args_eqI:
+  assumes "length args = length tms"
+    and "\<And>i. i < length tms
+              \<Longrightarrow> ev (arg_state state (args ! i)) (tms ! i) = ev' (arg_state state' (args ! i)) (tms ! i)"
+  shows "map_args ev state args tms = map_args ev' state' args tms"
+  using assms by (intro nth_equalityI) simp_all
+
+(* When no parameter is ghost, every argument is evaluated in the state itself. *)
+lemma map_args_no_ghost:
+  assumes "length args = length tms"
+    and "\<And>arg. arg \<in> set args \<Longrightarrow> snd (snd arg) = NotGhost"
+  shows "map_args ev state args tms = map (ev state) tms"
+  using assms by (intro nth_equalityI) (simp_all add: param_mode_def)
+
+(* In ghost code, every argument is evaluated in the state itself. *)
+lemma map_args_Ghost:
+  assumes "length args = length tms" and "IS_Ghost state = Ghost"
+  shows "map_args ev state args tms = map (ev state) tms"
+  using assms by (intro nth_equalityI) (simp_all add: param_mode_def IS_Ghost_update_same)
 
 function interp_term :: "nat \<Rightarrow> nat \<Rightarrow> 'w InterpState \<Rightarrow> CoreTerm \<Rightarrow> InterpError + CoreValue"
   and interp_term_list :: "nat \<Rightarrow> nat \<Rightarrow> 'w InterpState \<Rightarrow> CoreTerm list \<Rightarrow> InterpError + CoreValue list"
@@ -1998,12 +2067,10 @@ where
             \<comment> \<open>Evaluate each argument, both as an lvalue and as an rvalue.\<close>
             \<comment> \<open>(Both are needed, because, e.g., `a[10]` might evaluate successfully as an
                 lvalue, but fail as an rvalue, if 10 was out of bounds for the array.)\<close>
-            \<comment> \<open>Each argument is evaluated in the mode of its parameter (arg_state): the
-                actual for a ghost parameter is ghost code.\<close>
-            let refResults = map (\<lambda>(arg, tm). interp_lvalue d fuel True (arg_state state arg) tm)
-                                 (zip (IF_Args f) argTms);
-                valResults = map (\<lambda>(arg, tm). interp_term d fuel (arg_state state arg) tm)
-                                 (zip (IF_Args f) argTms);
+            \<comment> \<open>Each argument is evaluated in the mode of its parameter (map_args,
+                arg_state): the actual for a ghost parameter is ghost code.\<close>
+            let refResults = map_args (interp_lvalue d fuel True) state (IF_Args f) argTms;
+                valResults = map_args (interp_term d fuel) state (IF_Args f) argTms;
                 argTuples = zip (IF_Args f) (zip refResults valResults);
                 \<comment> \<open>Resolve each argTy against the caller's IS_TyArgs (which is
                     ground by the well-formedness invariant) before binding it.
@@ -2030,8 +2097,7 @@ where
                       another call to interp_lvalue, this time with writable = False, for each
                       argument.)\<close>
                   (case call_args_alias (IF_Args f)
-                          (map (\<lambda>(arg, tm). interp_lvalue d fuel False (arg_state state arg) tm)
-                               (zip (IF_Args f) argTms)) of
+                          (map_args (interp_lvalue d fuel False) state (IF_Args f) argTms) of
                     Some err \<Rightarrow> Inl err
                   | None \<Rightarrow>
                   \<comment> \<open>Now delegate to 'checked_call' to run the pre- and post-condition checks,
@@ -2094,20 +2160,16 @@ lemma interp_function_call_InrE:
     and "length argTys = length (IF_TyArgs f)"
     and "fold process_one_arg
            (zip (IF_Args f)
-                (zip (map (\<lambda>(arg, tm). interp_writable_lvalue d fuel (arg_state state arg) tm)
-                          (zip (IF_Args f) argTms))
-                     (map (\<lambda>(arg, tm). interp_term d fuel (arg_state state arg) tm)
-                          (zip (IF_Args f) argTms))))
+                (zip (map_args (interp_writable_lvalue d fuel) state (IF_Args f) argTms)
+                     (map_args (interp_term d fuel) state (IF_Args f) argTms)))
            (Inr (state \<lparr> IS_Locals := fmempty, IS_Refs := fmempty, IS_ConstLocals := {||},
                          IS_TyArgs := fmap_of_list (zip (IF_TyArgs f)
                                         (map (apply_subst (IS_TyArgs state)) argTys)),
                          IS_Ghost := IF_Ghost f \<rparr>))
          = Inr preCallState"
     and "call_body (interp_statement_list d fuel) state f
-           (map (\<lambda>(arg, tm). interp_writable_lvalue d fuel (arg_state state arg) tm)
-                (zip (IF_Args f) argTms))
-           (map (\<lambda>(arg, tm). interp_term d fuel (arg_state state arg) tm)
-                (zip (IF_Args f) argTms)) preCallState = Inr r"
+           (map_args (interp_writable_lvalue d fuel) state (IF_Args f) argTms)
+           (map_args (interp_term d fuel) state (IF_Args f) argTms) preCallState = Inr r"
     and "IS_Ghost state = NotGhost \<Longrightarrow> IF_Ghost f = NotGhost"
 proof (cases "fmlookup (IS_Functions state) fnName")
   case None
@@ -2126,10 +2188,8 @@ next
       and ngh: "\<not> (IS_Ghost state = NotGhost \<and> IF_Ghost f = Ghost)" by auto
     from ngh have gh: "IS_Ghost state = NotGhost \<Longrightarrow> IF_Ghost f = NotGhost"
       by (cases "IF_Ghost f") auto
-    let ?refResults = "map (\<lambda>(arg, tm). interp_writable_lvalue d fuel (arg_state state arg) tm)
-                           (zip (IF_Args f) argTms)"
-    let ?valResults = "map (\<lambda>(arg, tm). interp_term d fuel (arg_state state arg) tm)
-                           (zip (IF_Args f) argTms)"
+    let ?refResults = "map_args (interp_writable_lvalue d fuel) state (IF_Args f) argTms"
+    let ?valResults = "map_args (interp_term d fuel) state (IF_Args f) argTms"
     let ?calleeTyArgs = "fmap_of_list (zip (IF_TyArgs f) (map (apply_subst (IS_TyArgs state)) argTys))"
     let ?clearedState = "state \<lparr> IS_Locals := fmempty, IS_Refs := fmempty,
                                   IS_ConstLocals := {||},
@@ -2144,8 +2204,7 @@ next
       case fold: (Inr preCallState)
       from H lk len_args len_tys ngh fold
       have "(case call_args_alias (IF_Args f)
-                    (map (\<lambda>(arg, tm). interp_lvalue d fuel False (arg_state state arg) tm)
-                         (zip (IF_Args f) argTms)) of
+                    (map_args (interp_lvalue d fuel False) state (IF_Args f) argTms) of
                Some err \<Rightarrow> Inl err
              | None \<Rightarrow> checked_call (interp_term_list d fuel) f ?refResults ?valResults
                          ?calleeTyArgs ?clearedState
@@ -2170,8 +2229,7 @@ lemma interp_function_call_Inr_no_alias:
   assumes H: "interp_function_call d (Suc fuel) state fnName argTys argTms = Inr r"
     and lk: "fmlookup (IS_Functions state) fnName = Some f"
   shows "call_args_alias (IF_Args f)
-           (map (\<lambda>(arg, tm). interp_lvalue d fuel False (arg_state state arg) tm)
-                (zip (IF_Args f) argTms)) = None"
+           (map_args (interp_lvalue d fuel False) state (IF_Args f) argTms) = None"
   using H lk by (auto simp: Let_def split: if_split_asm sum.splits option.splits)
 
 (* A call of a ghost function from executable code is a TypeError. *)
@@ -2180,17 +2238,6 @@ lemma interp_function_call_ghost_from_exec:
     and "IS_Ghost state = NotGhost" and "IF_Ghost f = Ghost"
   shows "interp_function_call d (Suc fuel) state fnName argTys argTms = Inl TypeError"
   using assms by simp
-
-(* When the mode of a state is already g, setting it to g changes nothing. This
-   is how the override of a NotGhost statement, or of the argument for a
-   NotGhost parameter, disappears in executable code. *)
-lemma IS_Ghost_update_same:
-  "IS_Ghost state = g \<Longrightarrow> state \<lparr> IS_Ghost := g \<rparr> = state"
-  by auto
-
-lemma arg_state_NotGhost_param [simp]:
-  "arg_state state (n, vr, NotGhost) = state"
-  by (simp add: param_mode_def)
 
 
 end
