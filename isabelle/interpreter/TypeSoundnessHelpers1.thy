@@ -265,7 +265,7 @@ next
   next
     case (CoreTy_Array elemTy dims)
     then show ?thesis
-      by (cases step) (simp_all add: Cons.IH)
+      by (cases step) (auto simp: Cons.IH)
   next
     case CoreTy_Bool then show ?thesis by (cases step) simp_all
   next
@@ -340,7 +340,7 @@ next
     qed
   qed auto
 next
-  case (CV_Array sizes valuesMap)
+  case (CV_Array al sizes valuesMap)
   have val_eq: "\<And>v t. v \<in> fmran' valuesMap \<Longrightarrow>
                   value_has_type env' v t = value_has_type env v t"
     using CV_Array.IH by auto
@@ -1113,7 +1113,7 @@ next
       then show ?thesis using CV_Variant by simp
     qed
   next
-    case (CV_Array sizes elementMap)
+    case (CV_Array al sizes elementMap)
     then show ?thesis
     proof (cases step)
       case (LVPath_RecordProj x1)
@@ -1249,7 +1249,7 @@ next
       with CV_Variant Cons.prems show ?thesis by simp
     qed
   next
-    case (CV_Array sizes elementMap)
+    case (CV_Array al sizes elementMap)
     then show ?thesis
     proof (cases step)
       case (LVPath_RecordProj x)
@@ -1262,6 +1262,7 @@ next
       (* Extract array type *)
       from Cons.prems(1) CV_Array obtain elemTy dims where
         ty_eq: "ty = CoreTy_Array elemTy dims" and
+        al_eq: "al = allocatable_dims dims" and
         elem_wk: "is_well_kinded env elemTy" and
         elem_ground: "type_tyvars elemTy = {}" and
         elems_typed: "\<forall>idx val. fmlookup elementMap idx = Some val \<longrightarrow>
@@ -1274,7 +1275,7 @@ next
       from Cons.prems(2) CV_Array LVPath_ArrayProj obtain elemVal updatedElem where
         elem_lookup: "fmlookup elementMap indices = Some elemVal" and
         update_rest: "update_value_at_path elemVal rest newVal = Inr updatedElem" and
-        updatedVal_eq: "updatedVal = CV_Array sizes (fmupd indices updatedElem elementMap)"
+        updatedVal_eq: "updatedVal = CV_Array al sizes (fmupd indices updatedElem elementMap)"
         by (auto split: option.splits sum.splits)
       (* The old element has type elemTy *)
       from elems_typed elem_lookup have elem_typed: "value_has_type env elemVal elemTy" by simp
@@ -1307,7 +1308,7 @@ next
       moreover have "fmap_matches_sizes sizes (fmupd indices updatedElem elementMap)"
         using sizes_match elem_lookup
         unfolding fmap_matches_sizes_def by force
-      ultimately show ?thesis using updatedVal_eq ty_eq elem_wk elem_ground
+      ultimately show ?thesis using updatedVal_eq ty_eq al_eq elem_wk elem_ground
           dims_wk dims_match
         by simp
     next
@@ -1315,6 +1316,7 @@ next
       (* Extract array type *)
       from Cons.prems(1) CV_Array obtain elemTy dims where
         ty_eq: "ty = CoreTy_Array elemTy dims" and
+        al_eq: "al = allocatable_dims dims" and
         dims_wk: "array_dims_well_kinded dims" and
         dims_match: "sizes_match_dims sizes dims"
         by (cases ty) auto
@@ -1323,23 +1325,27 @@ next
         path_ty_rest: "type_at_path env (CoreTy_Array elemTy dims') rest = Some pathTy"
         by (auto split: if_splits)
       (* Extract from update_value_at_path: the size check passed, the update
-         below the cast produced an array with the same sizes, and that is the
-         result. *)
-      from Cons.prems(2) CV_Array LVPath_ArrayCast obtain elementMap' where
+         below the cast (of the array as the cast shows it) produced an array
+         with the same sizes, and the result is that array with the stored
+         flag. *)
+      from Cons.prems(2) CV_Array LVPath_ArrayCast obtain al' elementMap' where
         smd: "sizes_match_dims sizes dims'" and
-        update_rest: "update_value_at_path (CV_Array sizes elementMap) rest newVal
-                        = Inr (CV_Array sizes elementMap')" and
-        updatedVal_eq: "updatedVal = CV_Array sizes elementMap'"
+        update_rest: "update_value_at_path (CV_Array (allocatable_dims dims') sizes elementMap)
+                        rest newVal
+                        = Inr (CV_Array al' sizes elementMap')" and
+        updatedVal_eq: "updatedVal = CV_Array al sizes elementMap'"
         by (auto split: if_splits sum.splits CoreValue.splits)
-      (* The old array is typed at the retyped array type *)
-      have typed_tgt: "value_has_type env (CV_Array sizes elementMap) (CoreTy_Array elemTy dims')"
+      (* The old array, as the cast shows it, is typed at the retyped array type *)
+      have typed_tgt: "value_has_type env (CV_Array (allocatable_dims dims') sizes elementMap)
+                         (CoreTy_Array elemTy dims')"
         using value_has_type_array_redim[OF Cons.prems(1)[unfolded CV_Array ty_eq] smd dims'_wk] .
       (* By IH the updated array is typed at the retyped array type; since its
-         sizes are unchanged it is also typed at the original type. *)
-      have "value_has_type env (CV_Array sizes elementMap') (CoreTy_Array elemTy dims')"
+         sizes are unchanged it is, with the stored flag, also typed at the
+         original type. *)
+      have "value_has_type env (CV_Array al' sizes elementMap') (CoreTy_Array elemTy dims')"
         using Cons.IH[OF typed_tgt update_rest path_ty_rest Cons.prems(4)] .
-      hence "value_has_type env (CV_Array sizes elementMap') (CoreTy_Array elemTy dims)"
-        using dims_wk dims_match by simp
+      hence "value_has_type env (CV_Array al sizes elementMap') (CoreTy_Array elemTy dims)"
+        using dims_wk dims_match al_eq by simp
       then show ?thesis using updatedVal_eq ty_eq by simp
     qed
   next
@@ -1428,7 +1434,7 @@ next
       case (LVPath_ArrayCast x) with CV_Variant Cons.prems ty_eq show ?thesis by simp
     qed
   next
-    case (CV_Array sizes elementMap)
+    case (CV_Array al sizes elementMap)
     from Cons.prems(1) CV_Array obtain elemTy dims where
       ty_eq: "ty = CoreTy_Array elemTy dims" and
       elems_typed: "\<forall>idx val. fmlookup elementMap idx = Some val \<longrightarrow>
@@ -1450,18 +1456,21 @@ next
       from Cons.IH[OF elem_typed rest_ty get_rest] show ?thesis .
     next
       case (LVPath_ArrayCast dims')
-      \<comment> \<open>The cast step retypes the (unchanged) array at dims'. The runtime size
-          check together with the well-kindedness of dims' (from type_at_path)
-          gives value_has_type at the retyped array (value_has_type_array_redim).\<close>
+      \<comment> \<open>The cast step retypes the array at dims', with its flag set from dims'.
+          The runtime size check together with the well-kindedness of dims' (from
+          type_at_path) gives value_has_type at the retyped array
+          (value_has_type_array_redim).\<close>
       from Cons.prems(2) ty_eq LVPath_ArrayCast have
         dims'_wk: "array_dims_well_kinded dims'" and
         rest_ty: "type_at_path env (CoreTy_Array elemTy dims') rest = Some pathTy"
         by (auto split: if_splits)
       from Cons.prems(3) CV_Array LVPath_ArrayCast have
         smd: "sizes_match_dims sizes dims'" and
-        get_rest: "get_value_at_path (CV_Array sizes elementMap) rest = Inr v"
+        get_rest: "get_value_at_path (CV_Array (allocatable_dims dims') sizes elementMap) rest
+                     = Inr v"
         by (auto split: if_splits)
-      have typed_tgt: "value_has_type env (CV_Array sizes elementMap) (CoreTy_Array elemTy dims')"
+      have typed_tgt: "value_has_type env (CV_Array (allocatable_dims dims') sizes elementMap)
+                         (CoreTy_Array elemTy dims')"
         using value_has_type_array_redim[OF Cons.prems(1)[unfolded CV_Array ty_eq] smd dims'_wk] .
       from Cons.IH[OF typed_tgt rest_ty get_rest] show ?thesis .
     qed
@@ -1563,7 +1572,7 @@ next
       case (LVPath_ArrayCast x) with CV_Variant Cons.prems slotTy_eq show ?thesis by simp
     qed
   next
-    case (CV_Array sizes elementMap)
+    case (CV_Array al sizes elementMap)
     from Cons.prems(1) CV_Array obtain elemTy dims where
       slotTy_eq: "slotTy = CoreTy_Array elemTy dims" and
       elems_typed: "\<forall>idx v. fmlookup elementMap idx = Some v \<longrightarrow> value_has_type env v elemTy"
@@ -1594,21 +1603,28 @@ next
       case (LVPath_ArrayCast dims')
       from Cons.prems(2) slotTy_eq LVPath_ArrayCast have
         dims'_wk: "array_dims_well_kinded dims'" and
+        alloc_ok: "allocatable_dims dims' \<longrightarrow> allocatable_dims dims" and
         rest_ty: "type_at_path env (CoreTy_Array elemTy dims') rest = Some ty"
         by (auto split: if_splits)
+      \<comment> \<open>The cast is not one to allocatable dims of an array that is not
+          allocatable (type_at_path accepted it), so no TypeError from the cast.\<close>
+      from alloc_ok value_has_type_array_flag[OF Cons.prems(1)[unfolded CV_Array slotTy_eq]]
+      have no_te: "\<not> (allocatable_dims dims' \<and> \<not> al)" by simp
       show ?thesis
       proof (cases "sizes_match_dims sizes dims'")
         case False
         \<comment> \<open>Size check failed: RuntimeError directly.\<close>
-        from Cons.prems(3) CV_Array LVPath_ArrayCast False
+        from Cons.prems(3) CV_Array LVPath_ArrayCast False no_te
         have "err = RuntimeError" by simp
         then show ?thesis .
       next
         case True
-        have typed_tgt: "value_has_type env (CV_Array sizes elementMap) (CoreTy_Array elemTy dims')"
+        have typed_tgt: "value_has_type env (CV_Array (allocatable_dims dims') sizes elementMap)
+                           (CoreTy_Array elemTy dims')"
           using value_has_type_array_redim[OF Cons.prems(1)[unfolded CV_Array slotTy_eq] True dims'_wk] .
-        from Cons.prems(3) CV_Array LVPath_ArrayCast True
-        have "get_value_at_path (CV_Array sizes elementMap) rest = Inl err" by simp
+        from Cons.prems(3) CV_Array LVPath_ArrayCast True no_te
+        have "get_value_at_path (CV_Array (allocatable_dims dims') sizes elementMap) rest = Inl err"
+          by simp
         from Cons.IH[OF typed_tgt rest_ty this] show ?thesis .
       qed
     qed
@@ -1720,7 +1736,7 @@ next
       case (LVPath_ArrayCast x) with CV_Variant Cons.prems slotTy_eq show ?thesis by simp
     qed
   next
-    case (CV_Array sizes elementMap)
+    case (CV_Array al sizes elementMap)
     from Cons.prems(1) CV_Array obtain elemTy dims where
       slotTy_eq: "slotTy = CoreTy_Array elemTy dims" and
       elems_typed: "\<forall>idx v. fmlookup elementMap idx = Some v \<longrightarrow> value_has_type env v elemTy"
@@ -1757,23 +1773,30 @@ next
       case (LVPath_ArrayCast dims')
       from Cons.prems(2) slotTy_eq LVPath_ArrayCast have
         dims'_wk: "array_dims_well_kinded dims'" and
+        alloc_ok: "allocatable_dims dims' \<longrightarrow> allocatable_dims dims" and
         rest_ty: "type_at_path env (CoreTy_Array elemTy dims') rest = Some ty"
         by (auto split: if_splits)
+      \<comment> \<open>The cast is not one to allocatable dims of an array that is not
+          allocatable (type_at_path accepted it), so no TypeError from the cast.\<close>
+      from alloc_ok value_has_type_array_flag[OF Cons.prems(1)[unfolded CV_Array slotTy_eq]]
+      have no_te: "\<not> (allocatable_dims dims' \<and> \<not> al)" by simp
       show ?thesis
       proof (cases "sizes_match_dims sizes dims'")
         case False
         \<comment> \<open>Size check failed: RuntimeError directly.\<close>
-        from Cons.prems(3) CV_Array LVPath_ArrayCast False
+        from Cons.prems(3) CV_Array LVPath_ArrayCast False no_te
         have "err = RuntimeError" by simp
         then show ?thesis .
       next
         case True
-        have typed_tgt: "value_has_type env (CV_Array sizes elementMap) (CoreTy_Array elemTy dims')"
+        have typed_tgt: "value_has_type env (CV_Array (allocatable_dims dims') sizes elementMap)
+                           (CoreTy_Array elemTy dims')"
           using value_has_type_array_redim[OF Cons.prems(1)[unfolded CV_Array slotTy_eq] True dims'_wk] .
         show ?thesis
-        proof (cases "update_value_at_path (CV_Array sizes elementMap) rest newVal")
+        proof (cases "update_value_at_path (CV_Array (allocatable_dims dims') sizes elementMap)
+                        rest newVal")
           case (Inl err2)
-          with Cons.prems(3) CV_Array LVPath_ArrayCast True have err_eq: "err = err2" by simp
+          with Cons.prems(3) CV_Array LVPath_ArrayCast True no_te have err_eq: "err = err2" by simp
           show ?thesis using Cons.IH Inl err_eq new_typed rest_ty typed_tgt by blast 
         next
           case (Inr updated_val)
@@ -1782,9 +1805,10 @@ next
               check, which is a RuntimeError.\<close>
           from update_value_at_path_preserves_type[OF typed_tgt Inr rest_ty Cons.prems(4)]
           have "value_has_type env updated_val (CoreTy_Array elemTy dims')" .
-          then obtain sizes' elementMap' where upd_eq: "updated_val = CV_Array sizes' elementMap'"
+          then obtain al' sizes' elementMap' where
+            upd_eq: "updated_val = CV_Array al' sizes' elementMap'"
             using value_has_type_Array by blast
-          from Cons.prems(3) CV_Array LVPath_ArrayCast True Inr upd_eq
+          from Cons.prems(3) CV_Array LVPath_ArrayCast True Inr upd_eq no_te
           show ?thesis by (auto split: if_splits)
         qed
       qed
@@ -2311,7 +2335,7 @@ lemma make_1d_array_typed:
 proof -
   define n where "n = int (length vs)"
   define fm where "fm = fmap_of_list (zip (map (\<lambda>i. [int i]) [0..<length vs]) vs)"
-  have make_eq: "make_1d_array vs = CV_Array [n] fm"
+  have make_eq: "make_1d_array vs = CV_Array False [n] fm"
     by (simp add: n_def fm_def)
 
   (* sizes_valid *)
@@ -2367,9 +2391,9 @@ proof -
       using elems_typed by simp
   qed
 
-  have "value_has_type env (CV_Array [n] fm)
+  have "value_has_type env (CV_Array False [n] fm)
           (CoreTy_Array elemTy [CoreDim_Fixed (int (length vs))])"
-    using wk ground fm_vals_typed adwk fms smd by simp
+    using wk ground fm_vals_typed adwk fms smd by (simp add: allocatable_dims_def)
   then show ?thesis using make_eq by auto
 qed
 

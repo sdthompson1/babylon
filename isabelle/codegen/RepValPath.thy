@@ -25,20 +25,23 @@ section \<open>One step of a path, on the Core side\<close>
 fun step_get :: "CoreValue \<Rightarrow> LValuePath \<Rightarrow> CoreValue option" where
   "step_get (CV_Record flds) (LVPath_RecordProj f) = map_of flds f"
 | "step_get (CV_Variant ctor payload) (LVPath_VariantProj c) = (if ctor = c then Some payload else None)"
-| "step_get (CV_Array sizes elems) (LVPath_ArrayProj idx) = fmlookup elems idx"
-| "step_get (CV_Array sizes elems) (LVPath_ArrayCast dims) =
-    (if sizes_match_dims sizes dims then Some (CV_Array sizes elems) else None)"
+| "step_get (CV_Array al sizes elems) (LVPath_ArrayProj idx) = fmlookup elems idx"
+| "step_get (CV_Array al sizes elems) (LVPath_ArrayCast dims) =
+    (if (allocatable_dims dims \<longrightarrow> al) \<and> sizes_match_dims sizes dims
+     then Some (CV_Array (allocatable_dims dims) sizes elems) else None)"
 | "step_get _ _ = None"
 
 fun step_put :: "CoreValue \<Rightarrow> LValuePath \<Rightarrow> CoreValue \<Rightarrow> CoreValue option" where
   "step_put (CV_Record flds) (LVPath_RecordProj f) w =
     (if map_of flds f = None then None else Some (CV_Record (AList.update f w flds)))"
 | "step_put (CV_Variant ctor payload) (LVPath_VariantProj c) w = (if ctor = c then Some (CV_Variant ctor w) else None)"
-| "step_put (CV_Array sizes elems) (LVPath_ArrayProj idx) w =
-    (if fmlookup elems idx = None then None else Some (CV_Array sizes (fmupd idx w elems)))"
-| "step_put (CV_Array sizes elems) (LVPath_ArrayCast dims) w =
-    (if sizes_match_dims sizes dims then
-       (case w of CV_Array sizes' elems' \<Rightarrow> if sizes' = sizes then Some w else None | _ \<Rightarrow> None)
+| "step_put (CV_Array al sizes elems) (LVPath_ArrayProj idx) w =
+    (if fmlookup elems idx = None then None else Some (CV_Array al sizes (fmupd idx w elems)))"
+| "step_put (CV_Array al sizes elems) (LVPath_ArrayCast dims) w =
+    (if (allocatable_dims dims \<longrightarrow> al) \<and> sizes_match_dims sizes dims then
+       (case w of
+          CV_Array al' sizes' elems' \<Rightarrow> if sizes' = sizes then Some (CV_Array al sizes' elems') else None
+        | _ \<Rightarrow> None)
      else None)"
 | "step_put _ _ _ = None"
 
@@ -235,13 +238,14 @@ proof (induction sizes dims rule: sizes_match_dims.induct)
 qed (auto simp: dims_all_fixed_def dims_sizes_def)
 
 (* Weakening: the same bytes at a type with the same category, the same
-   number of dimensions, and no more ownership. *)
+   number of dimensions, and no more ownership. (rep_val does not look at the
+   allocatable flag of an array value, so the flag may change too.) *)
 lemma rep_val_Array_weaken:
-  assumes "rep_val env enc hmap mem (CoreTy_Array elemTy dims) (CV_Array sizes elems) bs"
+  assumes "rep_val env enc hmap mem (CoreTy_Array elemTy dims) (CV_Array al sizes elems) bs"
     and "sizes_match_dims sizes dims'"
     and "dims_all_fixed dims' = dims_all_fixed dims"
     and "allocatable_dims dims' \<longrightarrow> allocatable_dims dims"
-  shows "rep_val env enc hmap mem (CoreTy_Array elemTy dims') (CV_Array sizes elems) bs"
+  shows "rep_val env enc hmap mem (CoreTy_Array elemTy dims') (CV_Array al' sizes elems) bs"
 proof (cases "dims_all_fixed dims")
   case True
   with assms show ?thesis by simp
@@ -284,7 +288,7 @@ qed
 
 (* The owning direction needs the data block to be exactly the data. *)
 lemma rep_val_Array_strengthen:
-  assumes "rep_val env enc hmap mem (CoreTy_Array elemTy dims') (CV_Array sizes elems) bs"
+  assumes "rep_val env enc hmap mem (CoreTy_Array elemTy dims') (CV_Array al sizes elems) bs"
     and "sizes_match_dims sizes dims"
     and "dims_all_fixed dims' = dims_all_fixed dims"
     and "\<not> dims_all_fixed dims"
@@ -292,7 +296,7 @@ lemma rep_val_Array_strengthen:
          (\<forall>p. take (enc_ptr_size enc) bs = encode_ptr enc p \<longrightarrow>
             (\<exists>blk data. p = MP_Addr blk 0 \<and> fmlookup (MM_Blocks mem) blk = Some data
                      \<and> length data = gsz env enc elemTy * sizes_count sizes))"
-  shows "rep_val env enc hmap mem (CoreTy_Array elemTy dims) (CV_Array sizes elems) bs"
+  shows "rep_val env enc hmap mem (CoreTy_Array elemTy dims) (CV_Array al' sizes elems) bs"
 proof (cases "allocatable_dims dims \<and> \<not> allocatable_dims dims'")
   case False
   hence "allocatable_dims dims \<longrightarrow> allocatable_dims dims'" by blast
@@ -427,8 +431,8 @@ next
   show ?thesis using rep1 sub inside l1 bs1 ty1 by simp
 next
   case (LVPath_ArrayProj idx)
-  from assms(3,4) obtain elemTy dims sizes elems where ty: "ty = CoreTy_Array elemTy dims"
-    and v: "v = CV_Array sizes elems"
+  from assms(3,4) obtain elemTy dims al sizes elems where ty: "ty = CoreTy_Array elemTy dims"
+    and v: "v = CV_Array al sizes elems"
     unfolding LVPath_ArrayProj by (cases ty; cases v) (auto split: option.splits)
   from assms(4) have lk: "fmlookup elems idx = Some v1" unfolding LVPath_ArrayProj v by simp
   let ?esz = "gsz env enc elemTy"
@@ -488,10 +492,11 @@ next
   qed
 next
   case (LVPath_ArrayCast dims')
-  from assms(3,4) obtain elemTy dims sizes elems where ty: "ty = CoreTy_Array elemTy dims"
-    and v: "v = CV_Array sizes elems"
+  from assms(3,4) obtain elemTy dims al sizes elems where ty: "ty = CoreTy_Array elemTy dims"
+    and v: "v = CV_Array al sizes elems"
     unfolding LVPath_ArrayCast by (cases ty; cases v) (auto split: option.splits)
-  from assms(4) have match: "sizes_match_dims sizes dims'" and v1: "v1 = v"
+  from assms(4) have match: "sizes_match_dims sizes dims'"
+    and v1: "v1 = CV_Array (allocatable_dims dims') sizes elems"
     unfolding LVPath_ArrayCast v by (auto split: if_splits)
   from assms(3) have cat: "dims_all_fixed dims' = dims_all_fixed dims"
     and alloc: "allocatable_dims dims' \<longrightarrow> allocatable_dims dims"
@@ -821,7 +826,7 @@ function val_owned :: "CoreTyEnv \<Rightarrow> MEncoding \<Rightarrow> MMem \<Ri
                 (slice (tag_size env dt) (gsz env enc (apply_subst (fmap_of_list (zip tyvars args)) payloadTy)) bs)
           | None \<Rightarrow> True)
      | _ \<Rightarrow> True)"
-| "val_owned env enc mem ty (CV_Array sizes elems) bs =
+| "val_owned env enc mem ty (CV_Array _ sizes elems) bs =
     (case ty of
        CoreTy_Array elemTy dims \<Rightarrow>
          (if dims_all_fixed dims then
@@ -909,8 +914,8 @@ next
   from assms(3) show ?thesis unfolding ty v ty1 bs1 v1 c using lk by simp
 next
   case (LVPath_ArrayProj idx)
-  from assms(4,5) obtain elemTy dims sizes elems where ty: "ty = CoreTy_Array elemTy dims"
-    and v: "v = CV_Array sizes elems"
+  from assms(4,5) obtain elemTy dims al sizes elems where ty: "ty = CoreTy_Array elemTy dims"
+    and v: "v = CV_Array al sizes elems"
     unfolding LVPath_ArrayProj by (cases ty; cases v) (auto split: option.splits)
   from assms(5) have lk: "fmlookup elems idx = Some v1" unfolding LVPath_ArrayProj v by simp
   let ?esz = "gsz env enc elemTy"
@@ -956,10 +961,11 @@ next
   qed
 next
   case (LVPath_ArrayCast dims')
-  from assms(4,5) obtain elemTy dims sizes elems where ty: "ty = CoreTy_Array elemTy dims"
-    and v: "v = CV_Array sizes elems"
+  from assms(4,5) obtain elemTy dims al sizes elems where ty: "ty = CoreTy_Array elemTy dims"
+    and v: "v = CV_Array al sizes elems"
     unfolding LVPath_ArrayCast by (cases ty; cases v) (auto split: option.splits)
-  from assms(5) have v1: "v1 = v" unfolding LVPath_ArrayCast v by (auto split: if_splits)
+  from assms(5) have v1: "v1 = CV_Array (allocatable_dims dims') sizes elems"
+    unfolding LVPath_ArrayCast v by (auto split: if_splits)
   from assms(4) have cat: "dims_all_fixed dims' = dims_all_fixed dims"
     and ty1: "ty1 = CoreTy_Array elemTy dims'" and bs1: "bs1 = bs"
     unfolding LVPath_ArrayCast ty by (auto split: if_splits)
@@ -1058,14 +1064,14 @@ lemma rep_val_Variant_update:
 
 (* A fixed array with element idx replaced. *)
 lemma rep_val_FixedArray_update:
-  assumes old: "rep_val env enc hmap mem (CoreTy_Array elemTy dims) (CV_Array sizes elems) bs"
+  assumes old: "rep_val env enc hmap mem (CoreTy_Array elemTy dims) (CV_Array al sizes elems) bs"
     and fixed: "dims_all_fixed dims"
     and lk: "fmlookup elems idx = Some v0"
     and len: "length bs'' = length bs"
     and sib: "\<And>idx' v. idx' \<noteq> idx \<Longrightarrow> fmlookup elems idx' = Some v \<Longrightarrow>
                 rep_val env enc hmap mem' elemTy v (slice (elem_offset (gsz env enc elemTy) sizes idx') (gsz env enc elemTy) bs'')"
     and new: "rep_val env enc hmap mem' elemTy w1 (slice (elem_offset (gsz env enc elemTy) sizes idx) (gsz env enc elemTy) bs'')"
-  shows "rep_val env enc hmap mem' (CoreTy_Array elemTy dims) (CV_Array sizes (fmupd idx w1 elems)) bs''"
+  shows "rep_val env enc hmap mem' (CoreTy_Array elemTy dims) (CV_Array al sizes (fmupd idx w1 elems)) bs''"
 proof -
   note E = rep_val_FixedArray_E[OF old fixed]
   have dom: "fmdom (fmupd idx w1 elems) = fset_of_list (all_indices sizes)"
@@ -1078,7 +1084,7 @@ qed
 
 (* A descriptor whose data region now holds data'. *)
 lemma rep_val_Desc_update:
-  assumes old: "rep_val env enc hmap mem (CoreTy_Array elemTy dims) (CV_Array sizes elems) bs"
+  assumes old: "rep_val env enc hmap mem (CoreTy_Array elemTy dims) (CV_Array al sizes elems) bs"
     and nf: "\<not> dims_all_fixed dims"
     and ptr: "take (enc_ptr_size enc) bs = encode_ptr enc p"
     and lk: "fmlookup elems idx = Some v0"
@@ -1086,7 +1092,7 @@ lemma rep_val_Desc_update:
     and sib: "\<And>idx' v. idx' \<noteq> idx \<Longrightarrow> fmlookup elems idx' = Some v \<Longrightarrow>
                 rep_val env enc hmap mem' elemTy v (slice (elem_offset (gsz env enc elemTy) sizes idx') (gsz env enc elemTy) data')"
     and new: "rep_val env enc hmap mem' elemTy w1 (slice (elem_offset (gsz env enc elemTy) sizes idx) (gsz env enc elemTy) data')"
-  shows "rep_val env enc hmap mem' (CoreTy_Array elemTy dims) (CV_Array sizes (fmupd idx w1 elems)) bs"
+  shows "rep_val env enc hmap mem' (CoreTy_Array elemTy dims) (CV_Array al sizes (fmupd idx w1 elems)) bs"
 proof -
   from rep_val_Desc_E[OF old nf] obtain p0 where
     D: "sizes_match_dims sizes dims" "fmdom elems = fset_of_list (all_indices sizes)"
@@ -1455,11 +1461,11 @@ next
     qed
   next
     case (LVPath_ArrayProj idx)
-    from st sg obtain elemTy dims sizes elems where ty: "ty = CoreTy_Array elemTy dims"
-      and v: "v = CV_Array sizes elems"
+    from st sg obtain elemTy dims al sizes elems where ty: "ty = CoreTy_Array elemTy dims"
+      and v: "v = CV_Array al sizes elems"
       unfolding LVPath_ArrayProj by (cases ty; cases v) (auto split: option.splits)
     from sg have lk: "fmlookup elems idx = Some v1" unfolding LVPath_ArrayProj v by simp
-    from sp have w: "w = CV_Array sizes (fmupd idx w1 elems)" unfolding LVPath_ArrayProj v using lk by simp
+    from sp have w: "w = CV_Array al sizes (fmupd idx w1 elems)" unfolding LVPath_ArrayProj v using lk by simp
     let ?esz = "gsz env enc elemTy"
     show ?thesis
     proof (cases "dims_all_fixed dims")
@@ -1639,16 +1645,18 @@ next
     qed
   next
     case (LVPath_ArrayCast dims')
-    from st sg obtain elemTy dims sizes elems where ty: "ty = CoreTy_Array elemTy dims"
-      and v: "v = CV_Array sizes elems"
+    from st sg obtain elemTy dims al sizes elems where ty: "ty = CoreTy_Array elemTy dims"
+      and v: "v = CV_Array al sizes elems"
       unfolding LVPath_ArrayCast by (cases ty; cases v) (auto split: option.splits)
-    from sg have match: "sizes_match_dims sizes dims'" and v1: "v1 = v"
+    from sg have match: "sizes_match_dims sizes dims'"
+      and v1: "v1 = CV_Array (allocatable_dims dims') sizes elems"
       unfolding LVPath_ArrayCast v by (auto split: if_splits)
     from st have cat: "dims_all_fixed dims' = dims_all_fixed dims"
       and alloc: "allocatable_dims dims' \<longrightarrow> allocatable_dims dims"
       and ty1: "ty1 = CoreTy_Array elemTy dims'" and bs1: "bs1 = bs" and l1: "l1 = PL_Here 0"
       unfolding LVPath_ArrayCast ty by (auto split: if_splits)
-    from sp obtain elems' where w1: "w1 = CV_Array sizes elems'" and w: "w = w1"
+    from sp obtain al1 elems' where w1: "w1 = CV_Array al1 sizes elems'"
+      and w: "w = CV_Array al sizes elems'"
       unfolding LVPath_ArrayCast v using match by (auto split: CoreValue.splits if_splits)
     note I = inplace[OF l1]
     have lenbs: "length bs = gsz env enc ty1" using len1 unfolding bs1 .
@@ -1665,7 +1673,7 @@ next
     proof (cases "allocatable_dims dims \<and> \<not> allocatable_dims dims'")
       case False
       hence "allocatable_dims dims \<longrightarrow> allocatable_dims dims'" by blast
-      from rep_val_Array_weaken[OF repw[unfolded ty1 w1] match0 cat[symmetric] this] show ?thesis unfolding w w1 ty .
+      from rep_val_Array_weaken[OF repw[unfolded ty1 w1] match0 cat[symmetric] this] show ?thesis unfolding w ty .
     next
       case True
       \<comment> \<open>The cast drops ownership: the update must have gone into the heap data.\<close>
@@ -1697,7 +1705,7 @@ next
                            \<and> (\<forall>idx v. fmlookup elems idx = Some v \<longrightarrow>
                                 rep_val env enc hmap mem elemTy v (slice (elem_offset (gsz env enc elemTy) sizes idx) (gsz env enc elemTy) data))"
         by blast
-      show ?thesis unfolding w w1 ty bs''
+      show ?thesis unfolding w ty bs''
       proof (rule rep_val_Array_strengthen[OF repw[unfolded ty1 w1 bs''] match0 cat nf])
         assume "allocatable_dims dims" "\<not> allocatable_dims dims'" and nz: "sizes_count sizes \<noteq> 0"
         show "\<forall>p. take (enc_ptr_size enc) bs = encode_ptr enc p \<longrightarrow>

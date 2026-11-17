@@ -243,7 +243,7 @@ where
   (* Array projection (indexing) *)
 | "eval_const vals (CoreTm_ArrayProj arrayTm idxTms) =
     (case eval_const vals arrayTm of
-      Inr (CV_Array _ elementMap) \<Rightarrow>
+      Inr (CV_Array _ _ elementMap) \<Rightarrow>
         (case eval_const_list vals idxTms of
           Inr indexVals \<Rightarrow>
             (case interpret_index_vals indexVals of
@@ -268,7 +268,7 @@ where
   (* Sizeof *)
 | "eval_const vals (CoreTm_Sizeof tm) =
     (case eval_const vals tm of
-      Inr (CV_Array sizes _) \<Rightarrow> Inr (array_size_to_value sizes)
+      Inr (CV_Array _ sizes _) \<Rightarrow> Inr (array_size_to_value sizes)
     | Inr _ \<Rightarrow> Inl TypeError
     | Inl err \<Rightarrow> Inl err)"
 

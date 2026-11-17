@@ -342,7 +342,7 @@ function init_value :: "CoreTyEnv \<Rightarrow> string \<Rightarrow> CoreType \<
           | None \<Rightarrow> cg_fail (CGE_Internal g ''unknown constructor in a global value''))
      | _ \<Rightarrow> cg_fail (CGE_Internal g ''variant value at a non-datatype type''))"
 
-| "init_value env g ty (CV_Array sizes elems) base =
+| "init_value env g ty (CV_Array _ sizes elems) base =
     (case ty of
        CoreTy_Array elemTy dims \<Rightarrow>
          let esz = size_of env elemTy;

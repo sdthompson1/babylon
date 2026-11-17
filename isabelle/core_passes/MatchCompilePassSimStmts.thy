@@ -188,7 +188,7 @@ next
   from typing g have t: "core_term_type env NotGhost initTm = Some ty" by (auto split: if_splits)
   from ok have ok': "core_term_match_scrutinees_ok initTm" by simp
   from ev obtain v where v: "interp_term d fuel full initTm = Inr v"
-    and cc: "copy_check g full ty v = None"
+    and cc: "copy_check g full v = None"
     and res_eq: "res = Continue (bind_mutable_local x v full)"
     by (auto split: sum.splits option.splits)
   from term_simD[OF IH fe fs sme wf t ok' v] obtain f1 where
@@ -378,7 +378,7 @@ next
   from ev obtain addr path v newVal where
     ap: "interp_writable_lvalue d fuel full lhs = Inr (addr, path)" and
     v: "interp_term d fuel full rhs = Inr v" and
-    cc: "copy_check g full ty v = None" and
+    cc: "copy_check g full v = None" and
     upd: "update_value_at_path (IS_Store full ! addr) path v = Inr newVal" and
     res_eq: "res = Continue (full \<lparr> IS_Store := (IS_Store full)[addr := newVal] \<rparr>)"
     by (auto simp: Let_def split: sum.splits option.splits)

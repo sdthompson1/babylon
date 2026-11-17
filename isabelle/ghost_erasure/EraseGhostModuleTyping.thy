@@ -585,9 +585,10 @@ next
   note tysE = tyenv_erased_runtime_type_list[OF rel args_wk rts]
   show ?case using ty_eq lkE len tysE args_ground pvE by simp
 next
-  case (CV_Array sizes valuesMap)
+  case (CV_Array al sizes valuesMap)
   from CV_Array.prems(1) obtain elemTy dims where
       ty_eq: "ty = CoreTy_Array elemTy dims" and
+      al_eq: "al = allocatable_dims dims" and
       elem_wk: "is_well_kinded env elemTy" and
       elem_ground: "type_tyvars elemTy = {}" and
       elems: "\<forall>idx val. fmlookup valuesMap idx = Some val
@@ -607,7 +608,7 @@ next
     thus "value_has_type envE val elemTy"
       by (rule CV_Array.IH[OF _ vt rt])
   qed
-  show ?case using ty_eq tt elem_ground elemsE dims_wk matches sizes_ok by simp
+  show ?case using ty_eq al_eq tt elem_ground elemsE dims_wk matches sizes_ok by simp
 next
   case (CV_Int i)
   then show ?case by simp

@@ -117,7 +117,7 @@ lemma is_pure_fun_mc [simp]:
   by (simp split: option.splits)
 
 lemma copy_check_mc [simp]:
-  "copy_check g (mc_state s) ty v = copy_check g s ty v"
+  "copy_check g (mc_state s) v = copy_check g s v"
   by (rule copy_check_cong_state) simp_all
 
 lemma default_value_mc [simp]:

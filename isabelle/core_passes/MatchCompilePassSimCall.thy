@@ -414,7 +414,7 @@ proof (rule call_simI)
     \<comment> \<open>A Babylon body: run the compiled body in the compiled frame.\<close>
     from bodyF Inl obtain postF where
       bodyEval: "interp_statement_list d fuel preF body = Inr (Return postF retVal)" and
-      cc: "copy_check (IF_Ghost f) preF (IF_ReturnType f) retVal = None" and
+      cc: "copy_check (IF_Ghost f) preF retVal = None" and
       newFull_eq: "newFull = restore_scope full postF"
       by (auto simp: call_body_def split: sum.splits ExecResult.splits option.splits)
     from fi_match Inl have "core_statement_list_type ?envB (FI_Ghost funInfo) body \<noteq> None"

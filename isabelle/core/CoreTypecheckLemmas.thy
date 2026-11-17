@@ -55,6 +55,25 @@ lemma cast_ok_array:
   "array_cast_ok srcTy tgtTy \<Longrightarrow> is_well_kinded env tgtTy \<Longrightarrow> cast_ok env srcTy tgtTy"
   by (simp add: cast_ok_def)
 
+(* An admissible array cast never goes to allocatable dims from dims that are
+   not allocatable. (cast_value, CoreInterp.thy, gives TypeError for a cast that
+   does.) *)
+lemma dim_cast_ok_Allocatable: "dim_cast_ok d CoreDim_Allocatable \<Longrightarrow> d = CoreDim_Allocatable"
+  by (cases d) auto
+
+lemma dim_cast_ok_allocatable_dims:
+  assumes "list_all2 dim_cast_ok dims dims'" and "allocatable_dims dims'"
+  shows "allocatable_dims dims"
+proof -
+  from assms(2) obtain i where i: "i < length dims'" and di: "dims' ! i = CoreDim_Allocatable"
+    by (auto simp: allocatable_dims_def list_ex_iff in_set_conv_nth)
+  from assms(1) i have "dim_cast_ok (dims ! i) (dims' ! i)" and "i < length dims"
+    by (auto simp: list_all2_conv_all_nth)
+  with di have "dims ! i = CoreDim_Allocatable" and "i < length dims"
+    by (auto dest: dim_cast_ok_Allocatable)
+  thus ?thesis by (auto simp: allocatable_dims_def list_ex_iff in_set_conv_nth)
+qed
+
 lemma cast_ok_cases:
   assumes "cast_ok env srcTy tgtTy"
   obtains (Num) "is_numeric_type srcTy" "is_numeric_type tgtTy"

@@ -261,10 +261,11 @@ qed
 (* Array helpers *)
 (* ========================================================================== *)
 
-(* Make a one-dimensional CV_Array of values *)
+(* Make a one-dimensional CV_Array of values. It is a fixed-size array, so its
+   allocatable flag is clear. *)
 fun make_1d_array :: "CoreValue list \<Rightarrow> CoreValue" where
   "make_1d_array vals = 
-    CV_Array [int (length vals)] 
+    CV_Array False [int (length vals)] 
              (fmap_of_list (zip (map (\<lambda>i.[int i]) [0..<length vals]) vals))"
 
 (* Convert a list of CV_FiniteInt u64 values to a list of ints, or return a type error *)
@@ -330,12 +331,17 @@ fun get_value_at_path :: "CoreValue \<Rightarrow> LValuePath list \<Rightarrow> 
 | "get_value_at_path (CV_Variant ctorName payload) (LVPath_VariantProj expectedCtor # rest) =
     (if ctorName = expectedCtor then get_value_at_path payload rest
     else Inl RuntimeError)"   (* variant projection from wrong ctor *)
-| "get_value_at_path (CV_Array _ elementMap) (LVPath_ArrayProj indices # rest) =
+| "get_value_at_path (CV_Array _ _ elementMap) (LVPath_ArrayProj indices # rest) =
     (case fmlookup elementMap indices of
       Some val \<Rightarrow> get_value_at_path val rest
     | None \<Rightarrow> Inl RuntimeError)"    (* array index out of bounds *)
-| "get_value_at_path (CV_Array sizes elementMap) (LVPath_ArrayCast dims # rest) =
-    (if sizes_match_dims sizes dims then get_value_at_path (CV_Array sizes elementMap) rest
+| "get_value_at_path (CV_Array allocatable sizes elementMap) (LVPath_ArrayCast dims # rest) =
+    \<comment> \<open>A read through an array cast sees the array as cast_value would return it:
+        with the allocatable flag that the cast's dims give. As in cast_value, a cast
+        to allocatable dims of an array that is not allocatable is a TypeError.\<close>
+    (if allocatable_dims dims \<and> \<not> allocatable then Inl TypeError
+     else if sizes_match_dims sizes dims then
+       get_value_at_path (CV_Array (allocatable_dims dims) sizes elementMap) rest
      else Inl RuntimeError)"    (* array's runtime sizes don't match the cast's dims *)
 | "get_value_at_path _ _ = Inl TypeError"   (* wrong kind of projection for value *)
 
@@ -355,25 +361,33 @@ fun update_value_at_path :: "CoreValue \<Rightarrow> LValuePath list \<Rightarro
         Inr updated_val \<Rightarrow> Inr (CV_Variant ctor_name updated_val)
       | Inl err \<Rightarrow> Inl err)
     else Inl RuntimeError)"  (* ctor name didn't match *)
-| "update_value_at_path (CV_Array sizes elementMap) (LVPath_ArrayProj indices # rest) new_val =
+| "update_value_at_path (CV_Array allocatable sizes elementMap) (LVPath_ArrayProj indices # rest) new_val =
     (case fmlookup elementMap indices of
       Some old_val \<Rightarrow>
         (case update_value_at_path old_val rest new_val of
-          Inr updated_val \<Rightarrow> Inr (CV_Array sizes (fmupd indices updated_val elementMap))
+          Inr updated_val \<Rightarrow>
+            Inr (CV_Array allocatable sizes (fmupd indices updated_val elementMap))
         | Inl err \<Rightarrow> Inl err)
     | None \<Rightarrow> Inl RuntimeError)"  (* array index out of bounds *)
-| "update_value_at_path (CV_Array sizes elementMap) (LVPath_ArrayCast dims # rest) new_val =
-    \<comment> \<open>The runtime array size must match the cast's dims, as for reads.
+| "update_value_at_path (CV_Array allocatable sizes elementMap) (LVPath_ArrayCast dims # rest) new_val =
+    \<comment> \<open>The cast is checked as for reads (the TypeError for a cast to allocatable
+        dims of an array that is not allocatable; the runtime array size must match
+        the cast's dims), and the rest of the path updates the array as the cast
+        shows it, i.e. with the allocatable flag that the cast's dims give.
         In addition, writing through an LVPath_ArrayCast is not allowed to change the
         runtime size of the array (e.g., if you have a `T[]` ref to a size-3 array, you
         are not allowed to overwrite it with a size-5 array, because the original array
-        might not have been resizable).\<close>
-    (if sizes_match_dims sizes dims then
-      (case update_value_at_path (CV_Array sizes elementMap) rest new_val of
+        might not have been resizable). Nor does it change the stored allocatable
+        flag: the array that is written back keeps the flag it had, whatever the
+        flag of the array written through the cast.\<close>
+    (if allocatable_dims dims \<and> \<not> allocatable then Inl TypeError
+     else if sizes_match_dims sizes dims then
+      (case update_value_at_path (CV_Array (allocatable_dims dims) sizes elementMap) rest new_val of
         Inr updated_val \<Rightarrow>
           (case updated_val of
-            CV_Array sizes' elementMap' \<Rightarrow>
-              if sizes' = sizes then Inr (CV_Array sizes' elementMap') else Inl RuntimeError
+            CV_Array _ sizes' elementMap' \<Rightarrow>
+              if sizes' = sizes then Inr (CV_Array allocatable sizes' elementMap')
+              else Inl RuntimeError
           | _ \<Rightarrow> Inl TypeError)   \<comment> \<open>non-array written through an array cast\<close>
       | Inl err \<Rightarrow> Inl err)
      else Inl RuntimeError)"
@@ -399,10 +413,13 @@ fun type_at_path :: "CoreTyEnv \<Rightarrow> CoreType \<Rightarrow> LValuePath l
     type_at_path env elemTy rest"
   \<comment> \<open>An array cast step retypes the array at the cast's dims (same element
       type). The dims must be well-kinded so that the value is well-typed at
-      the new type. (Whether the cast direction is admissible, dim_cast_ok, isn't
-      checked here; we rely on the typechecker for that.)\<close>
+      the new type, and the cast must not be one to allocatable dims of an
+      array type that is not allocatable (get_value_at_path and
+      update_value_at_path give TypeError for that cast). (Whether the cast
+      direction is otherwise admissible, dim_cast_ok, isn't checked here; we
+      rely on the typechecker for that.)\<close>
 | "type_at_path env (CoreTy_Array elemTy dims) (LVPath_ArrayCast dims' # rest) =
-    (if array_dims_well_kinded dims'
+    (if array_dims_well_kinded dims' \<and> (allocatable_dims dims' \<longrightarrow> allocatable_dims dims)
      then type_at_path env (CoreTy_Array elemTy dims') rest
      else None)"
 | "type_at_path _ _ (_ # _) = None"
@@ -415,7 +432,7 @@ proof (induction p arbitrary: ty)
 next
   case (Cons step rest)
   show ?case
-    by (cases ty; cases step) (simp_all add: Cons.IH split: option.splits)
+    by (cases ty; cases step) (auto simp: Cons.IH split: option.splits)
 qed
 
 (* Lemma: type_at_path does not depend on TE_ProofTopLevel. *)
@@ -426,7 +443,7 @@ proof (induction p arbitrary: ty)
 next
   case (Cons step rest)
   show ?case
-    by (cases ty; cases step) (simp_all add: Cons.IH split: option.splits)
+    by (cases ty; cases step) (auto simp: Cons.IH split: option.splits)
 qed
 
 
@@ -578,7 +595,8 @@ fun fixed_dim_sizes :: "CoreDimension list \<Rightarrow> int list" where
 | "fixed_dim_sizes (CoreDim_Fixed n # ds) = n # fixed_dim_sizes ds"
 | "fixed_dim_sizes (_ # ds) = fixed_dim_sizes ds"
 
-(* Compute the default value of a (ground) CoreType. Fuel is required
+(* Compute the default value of a (ground) CoreType. The allocatable flag of an
+   array value is set from the type. Fuel is required
    because the recursion goes through datatype payload types substituted by
    the datatype's tyArgs, which need not be syntactically smaller than the
    input. Runs out-of-fuel with InsufficientFuel; encounters a CoreTy_Var
@@ -613,9 +631,10 @@ where
        (case default_value fuel state elemTy of
          Inl err \<Rightarrow> Inl err
        | Inr ev \<Rightarrow>
-           Inr (CV_Array sizes (fmap_of_list (map (\<lambda>idx. (idx, ev)) (all_indices sizes)))))
+           Inr (CV_Array (allocatable_dims dims) sizes
+                  (fmap_of_list (map (\<lambda>idx. (idx, ev)) (all_indices sizes)))))
      else
-       Inr (CV_Array (replicate (length dims) 0) fmempty))"
+       Inr (CV_Array (allocatable_dims dims) (replicate (length dims) 0) fmempty))"
 | "default_value (Suc _) _ CoreTy_MathInt = Inr (CV_Int 0)"
 | "default_value (Suc _) _ CoreTy_MathReal = Inr (CV_Real 0)"
 | "default_value (Suc _) _ (CoreTy_Var _) = Inl TypeError"
@@ -643,128 +662,91 @@ termination by lexicographic_order
 (* Allocated *)
 (* ========================================================================== *)
 
-(* Combine the results of checking each component: an error if any component
-   errored, otherwise true iff any component was true. *)
-fun any_allocated :: "(InterpError + bool) list \<Rightarrow> InterpError + bool" where
-  "any_allocated [] = Inr False"
-| "any_allocated (Inl err # _) = Inl err"
-| "any_allocated (Inr b # rest) =
-    (case any_allocated rest of
-      Inl err \<Rightarrow> Inl err
-    | Inr b' \<Rightarrow> Inr (b \<or> b'))"
-
-(* Does a value of the given (ground) type currently hold allocated storage?
-   The type is needed because a CoreValue does not record whether an array is
-   allocatable or fixed-size: an allocatable array and a fixed-size array of
-   the same size are the same CoreValue.
-     - An allocatable array is allocated iff all of its sizes are non-zero.
-     - Any other array, a record or a variant is allocated iff some component
-       (element, field or payload) is.
-        - Note: technically this is incorrect for incomplete-typed ("T[]") arrays,
-          as "allocated" is undefined on these. But a well-typed program will never
-          evaluate "allocated" at an incomplete type, so this does not matter.
+(* Does a value currently hold allocated storage?
+   The answer depends on the value alone (and the allocation oracle for extern
+   values): an array value records whether it is allocatable (the flag of
+   CV_Array), so no type is needed.
+     - An allocatable array (flag set) is allocated iff all of its sizes are
+       non-zero.
+     - Any other array (flag clear) is allocated iff some element at an index
+       within its sizes is. (A well-typed array has an element at every such
+       index; a missing element counts as not allocated.)
+        - Note: the flag is also clear for an incomplete-typed ("T[]") view of an
+          allocatable array (see cast_value), so such a view is allocated only if
+          an element is. "allocated" is not meaningful at an incomplete type, and
+          a well-typed program never evaluates it at one.
+     - A record is allocated iff some field is, and a variant iff its payload is.
      - Scalars are never allocated.
      - A value CV_Extern n l k of an extern type is decided by the allocation
        oracle, except in cases where the type already implies that the value
        is unallocated (l = CoreAlloc_Never, or l = CoreAlloc_IfNotDefault and k = 0);
        in such cases the oracle is "overruled" and we directly return False.
-   Recursion is on the value, so no fuel is needed. TypeError arises only for
-   a type variable or an unknown data constructor, neither of which can happen
-   for a well-typed value of a ground type. *)
-function is_allocated :: "(string, string \<times> string list \<times> CoreType) fmap
-    \<Rightarrow> (string \<Rightarrow> CoreAllocLevel \<Rightarrow> nat \<Rightarrow> bool)
-    \<Rightarrow> CoreValue \<Rightarrow> CoreType \<Rightarrow> InterpError + bool" where
-  "is_allocated ctors extAlloc (CV_Bool _) _ = Inr False"
-| "is_allocated ctors extAlloc (CV_FiniteInt _ _ _) _ = Inr False"
-| "is_allocated ctors extAlloc (CV_Int _) _ = Inr False"
-| "is_allocated ctors extAlloc (CV_Real _) _ = Inr False"
-| "is_allocated ctors extAlloc (CV_Record fieldValues) ty =
-    (case ty of
-      CoreTy_Record fieldTypes \<Rightarrow>
-        any_allocated
-          (map (\<lambda>p. is_allocated ctors extAlloc (snd (fst p)) (snd (snd p)))
-               (zip fieldValues fieldTypes))
-    | _ \<Rightarrow> Inl TypeError)"
-| "is_allocated ctors extAlloc (CV_Variant ctor payload) ty =
-    (case ty of
-      CoreTy_Datatype _ argTypes \<Rightarrow>
-        (case fmlookup ctors ctor of
-          Some (_, tyvars, payloadTy) \<Rightarrow>
-            if length tyvars = length argTypes then
-              is_allocated ctors extAlloc payload
-                (apply_subst (fmap_of_list (zip tyvars argTypes)) payloadTy)
-            else Inl TypeError
-        | None \<Rightarrow> Inl TypeError)
-    | _ \<Rightarrow> Inl TypeError)"
-| "is_allocated ctors extAlloc (CV_Array sizes valuesMap) ty =
-    (case ty of
-      CoreTy_Array elemTy dims \<Rightarrow>
-        if list_ex (\<lambda>d. d = CoreDim_Allocatable) dims
-        then Inr (list_all (\<lambda>s. s \<noteq> 0) sizes)
-        else any_allocated
-               (map (\<lambda>idx. case fmlookup valuesMap idx of
-                              Some v \<Rightarrow> is_allocated ctors extAlloc v elemTy
-                            | None \<Rightarrow> Inl TypeError)
-                    (all_indices sizes))
-    | _ \<Rightarrow> Inl TypeError)"
-| "is_allocated ctors extAlloc (CV_Extern n l k) _ =
-    Inr (case l of
-           CoreAlloc_Never \<Rightarrow> False
-         | CoreAlloc_IfNotDefault \<Rightarrow> k \<noteq> 0 \<and> extAlloc n l k
-         | CoreAlloc_Unknown \<Rightarrow> extAlloc n l k)"
+   Recursion is on the value, so no fuel is needed. *)
+function is_allocated :: "(string \<Rightarrow> CoreAllocLevel \<Rightarrow> nat \<Rightarrow> bool) \<Rightarrow> CoreValue \<Rightarrow> bool" where
+  "is_allocated extAlloc (CV_Bool _) = False"
+| "is_allocated extAlloc (CV_FiniteInt _ _ _) = False"
+| "is_allocated extAlloc (CV_Int _) = False"
+| "is_allocated extAlloc (CV_Real _) = False"
+| "is_allocated extAlloc (CV_Record fieldValues) =
+    list_ex (\<lambda>fld. is_allocated extAlloc (snd fld)) fieldValues"
+| "is_allocated extAlloc (CV_Variant ctor payload) = is_allocated extAlloc payload"
+| "is_allocated extAlloc (CV_Array allocatable sizes valuesMap) =
+    (if allocatable
+     then list_all (\<lambda>s. s \<noteq> 0) sizes
+     else list_ex (\<lambda>idx. case fmlookup valuesMap idx of
+                            Some v \<Rightarrow> is_allocated extAlloc v
+                          | None \<Rightarrow> False)
+                  (all_indices sizes))"
+| "is_allocated extAlloc (CV_Extern n l k) =
+    (case l of
+       CoreAlloc_Never \<Rightarrow> False
+     | CoreAlloc_IfNotDefault \<Rightarrow> k \<noteq> 0 \<and> extAlloc n l k
+     | CoreAlloc_Unknown \<Rightarrow> extAlloc n l k)"
   by pat_completeness auto
 
 termination is_allocated
-proof (relation "measure (\<lambda>(ctors, extAlloc, val, ty). size val)")
-  show "wf (measure (\<lambda>(ctors, extAlloc, val, ty). size val))" by simp
+proof (relation "measure (\<lambda>(extAlloc, val). size val)")
+  show "wf (measure (\<lambda>(extAlloc, val). size val))" by simp
 next
-  \<comment> \<open>Record case: p is a (value, type) pair from the zip, so fst p is a field.\<close>
-  fix ctors :: "(string, string \<times> string list \<times> CoreType) fmap"
+  \<comment> \<open>Record case: fld is a (name, value) pair of the record.\<close>
   fix extAlloc :: "string \<Rightarrow> CoreAllocLevel \<Rightarrow> nat \<Rightarrow> bool"
   fix fieldValues :: "(string \<times> CoreValue) list"
-  fix ty :: CoreType
-  fix fieldTypes :: "(string \<times> CoreType) list"
-  fix p :: "(string \<times> CoreValue) \<times> (string \<times> CoreType)"
-  assume "p \<in> set (zip fieldValues fieldTypes)"
-  hence "fst p \<in> set fieldValues" by (metis set_zip_leftD prod.collapse)
-  hence "(fst (fst p), snd (fst p)) \<in> set fieldValues" by simp
-  hence "size (snd (fst p)) < size (CV_Record fieldValues)"
+  fix fld :: "string \<times> CoreValue"
+  assume "fld \<in> set fieldValues"
+  hence "(fst fld, snd fld) \<in> set fieldValues" by simp
+  hence "size (snd fld) < size (CV_Record fieldValues)"
     by (rule size_record_field)
-  thus "((ctors, extAlloc, snd (fst p), snd (snd p)), ctors, extAlloc, CV_Record fieldValues, ty)
-        \<in> measure (\<lambda>(ctors, extAlloc, val, ty). size val)"
+  thus "((extAlloc, snd fld), extAlloc, CV_Record fieldValues)
+        \<in> measure (\<lambda>(extAlloc, val). size val)"
     by simp
 next
   \<comment> \<open>Variant case: payload is a direct subterm.\<close>
-  fix ctors :: "(string, string \<times> string list \<times> CoreType) fmap"
   fix extAlloc :: "string \<Rightarrow> CoreAllocLevel \<Rightarrow> nat \<Rightarrow> bool"
   fix ctor :: string
   fix payload :: CoreValue
-  fix ty :: CoreType
-  fix x11 :: string
-  fix x12 :: "CoreType list"
-  fix x2 x y xa ya
-  show "((ctors, extAlloc, payload, apply_subst (fmap_of_list (zip xa x12)) ya),
-         ctors, extAlloc, CV_Variant ctor payload, ty)
-        \<in> measure (\<lambda>(ctors, extAlloc, val, ty). size val)"
+  show "((extAlloc, payload), extAlloc, CV_Variant ctor payload)
+        \<in> measure (\<lambda>(extAlloc, val). size val)"
     by simp
 next
   \<comment> \<open>Array case: element found by lookup.\<close>
-  fix ctors :: "(string, string \<times> string list \<times> CoreType) fmap"
   fix extAlloc :: "string \<Rightarrow> CoreAllocLevel \<Rightarrow> nat \<Rightarrow> bool"
+  fix allocatable :: bool
   fix sizes :: "int list"
   fix valuesMap :: "(int list, CoreValue) fmap"
-  fix ty :: CoreType
-  fix x71 :: CoreType
-  fix x72 :: "CoreDimension list"
   fix x :: "int list"
   fix x2 :: CoreValue
   assume "fmlookup valuesMap x = Some x2"
-  hence "size x2 < size (CV_Array sizes valuesMap)"
+  hence "size x2 < size (CV_Array allocatable sizes valuesMap)"
     by (rule size_array_lookup)
-  thus "((ctors, extAlloc, x2, x71), ctors, extAlloc, CV_Array sizes valuesMap, ty)
-        \<in> measure (\<lambda>(ctors, extAlloc, val, ty). size val)"
+  thus "((extAlloc, x2), extAlloc, CV_Array allocatable sizes valuesMap)
+        \<in> measure (\<lambda>(extAlloc, val). size val)"
     by simp
 qed
+
+(* A record is allocated iff one of its field values is. *)
+lemma is_allocated_Record:
+  "is_allocated extAlloc (CV_Record flds) \<longleftrightarrow> (\<exists>v \<in> snd ` set flds. is_allocated extAlloc v)"
+  by (auto simp: list_ex_iff)
 
 (* ========================================================================== *)
 (* Improper copies of allocated values *)
@@ -792,36 +774,29 @@ qed
    This will be addressed as future work.
 *)
 
-(* copy_check returns None if the given value (of the given type) may be copied, or
-   Some RuntimeError if it is an allocated value (and we are in NotGhost mode).
-
-   `ty` is the static type of the given value, possibly mentioning the current
-   function's type variables (which are resolved using IS_TyArgs state).
-
-   In non-well-typed programs, is_allocated might fail with a TypeError - if so,
-   the error is passed back to the caller.
+(* copy_check returns None if the given value may be copied, or Some RuntimeError
+   if it is an allocated value (and we are in NotGhost mode). Whether a value is
+   allocated is decided from the value alone (is_allocated), so no type is needed
+   and the check cannot give a TypeError.
 *)
-fun copy_check :: "GhostOrNot \<Rightarrow> 'w InterpState \<Rightarrow> CoreType \<Rightarrow> CoreValue
-                   \<Rightarrow> InterpError option" where
-  "copy_check Ghost state ty val = None"
-| "copy_check NotGhost state ty val =
-    (case is_allocated (IS_DataCtors state) (IS_ExternAlloc state) val
-                       (apply_subst (IS_TyArgs state) ty) of
-       Inr True \<Rightarrow> Some RuntimeError
-     | Inr False \<Rightarrow> None
-     | Inl err \<Rightarrow> Some err)"
+fun copy_check :: "GhostOrNot \<Rightarrow> 'w InterpState \<Rightarrow> CoreValue \<Rightarrow> InterpError option" where
+  "copy_check Ghost state val = None"
+| "copy_check NotGhost state val =
+    (if is_allocated (IS_ExternAlloc state) val then Some RuntimeError else None)"
 
-(* copy_check only looks at the datatype table, the allocation oracle and the
-   type arguments of the state. *)
+(* copy_check only looks at the allocation oracle of the state. *)
 lemma copy_check_cong_state:
-  assumes "IS_DataCtors state' = IS_DataCtors state"
-      and "IS_ExternAlloc state' = IS_ExternAlloc state"
-      and "IS_TyArgs state' = IS_TyArgs state"
-  shows "copy_check ghost state' ty val = copy_check ghost state ty val"
+  assumes "IS_ExternAlloc state' = IS_ExternAlloc state"
+  shows "copy_check ghost state' val = copy_check ghost state val"
   using assms by (cases ghost) simp_all
 
-lemma copy_check_Ghost [simp]: "copy_check Ghost state ty val = None"
+lemma copy_check_Ghost [simp]: "copy_check Ghost state val = None"
   by simp
+
+(* The only error copy_check gives is RuntimeError. *)
+lemma copy_check_cases:
+  "copy_check ghost state val = None \<or> copy_check ghost state val = Some RuntimeError"
+  by (cases ghost) simp_all
 
 
 (* ========================================================================== *)
@@ -831,8 +806,18 @@ lemma copy_check_Ghost [simp]: "copy_check Ghost state ty val = None"
 (* Apply a cast to a value.
     - RuntimeError if the cast fails (overflow for casts to a finite integer type;
       array's runtime size doesn't match for array casts to CoreDim_Fixed).
-    - TypeError if the cast itself is invalid (only array or numeric targets are allowed).
+    - TypeError if the cast itself is invalid (only array or numeric targets are allowed;
+      an array that is not allocatable cannot be cast to allocatable dims).
     - Otherwise: successful cast, returns the new value.
+   An array cast leaves the sizes and elements alone, and sets the array's
+   allocatable flag from the target dims: clear for a cast to "T[]" or "T[n]", and
+   set only for the identity cast "T[*]" to "T[*]". (Only the flag of the array
+   that is cast changes; its elements keep theirs.) So two arrays of the same
+   incomplete or fixed-size type with the same sizes and elements are equal values
+   whatever they are views of, as "==" (HOL equality on values) requires. The casts
+   that would set the flag on an array that has it clear ("T[n]" or "T[]" to "T[*]")
+   are the ones that typing rejects (dim_cast_ok, CoreTypecheck.thy); they are a
+   TypeError here.
    A real cast to an integer type (finite or int) rounds downwards (towards minus
    infinity), i.e. takes the floor, before any range check. All other numeric
    casts leave the numerical value unchanged. *)
@@ -855,8 +840,9 @@ fun cast_value :: "CoreType \<Rightarrow> CoreValue \<Rightarrow> InterpError + 
 | "cast_value CoreTy_MathReal (CV_Int i) = Inr (CV_Real (of_int i))"
 | "cast_value CoreTy_MathReal (CV_Real r) = Inr (CV_Real r)"
 | "cast_value CoreTy_MathReal _ = Inl TypeError"
-| "cast_value (CoreTy_Array _ dims) (CV_Array sizes elems) =
-     (if sizes_match_dims sizes dims then Inr (CV_Array sizes elems)
+| "cast_value (CoreTy_Array _ dims) (CV_Array allocatable sizes elems) =
+     (if allocatable_dims dims \<and> \<not> allocatable then Inl TypeError
+      else if sizes_match_dims sizes dims then Inr (CV_Array (allocatable_dims dims) sizes elems)
       else Inl RuntimeError)"
 | "cast_value (CoreTy_Array _ _) _ = Inl TypeError"
 | "cast_value _ _ = Inl TypeError"
@@ -993,7 +979,7 @@ and decreases_fields_error :: "(string \<times> CoreValue) list \<Rightarrow> In
 | "decreases_value_error (CV_Int i) = (if i < 0 then Some RuntimeError else None)"
 | "decreases_value_error (CV_Record flds) = decreases_fields_error flds"
 | "decreases_value_error (CV_Variant _ _) = Some TypeError"
-| "decreases_value_error (CV_Array _ _) = Some TypeError"
+| "decreases_value_error (CV_Array _ _ _) = Some TypeError"
 | "decreases_value_error (CV_Real _) = Some TypeError"
 
 | "decreases_fields_error [] = None"
@@ -1272,10 +1258,8 @@ definition call_body ::
         (case run preCallState bodyStmts of
           Inr (Return postCallState retVal) \<Rightarrow>
             \<comment> \<open>A non-ghost function must not return an allocated value (rule 3 of
-               copy_check). The return type is instantiated at the callee's type
-               arguments, which are IS_TyArgs preCallState (and also of
-               postCallState: the body cannot change them).\<close>
-            (case copy_check (IF_Ghost f) preCallState (IF_ReturnType f) retVal of
+               copy_check).\<close>
+            (case copy_check (IF_Ghost f) preCallState retVal of
                Some err \<Rightarrow> Inl err
              | None \<Rightarrow>
                  \<comment> \<open>Restore the state how it was before the call (keeping ref updates)
@@ -1627,7 +1611,7 @@ where
   (* Array projection (indexing) *)
 | "interp_term d (Suc fuel) state (CoreTm_ArrayProj arrayTm idxTms) =
     (case interp_term d fuel state arrayTm of
-      Inr (CV_Array _ elementMap) \<Rightarrow>
+      Inr (CV_Array _ _ elementMap) \<Rightarrow>
         (case interp_term_list d fuel state idxTms of
           Inr indexVals \<Rightarrow>
             (case interpret_index_vals indexVals of
@@ -1652,7 +1636,7 @@ where
   (* Sizeof *)
 | "interp_term d (Suc fuel) state (CoreTm_Sizeof tm) =
     (case interp_term d fuel state tm of
-      Inr (CV_Array sizes _) \<Rightarrow> Inr (array_size_to_value sizes)
+      Inr (CV_Array _ sizes _) \<Rightarrow> Inr (array_size_to_value sizes)
     | Inr _ \<Rightarrow> Inl TypeError
     | Inl err \<Rightarrow> Inl err)"
 
@@ -1665,16 +1649,12 @@ where
       (values_of_type state (apply_subst (IS_TyArgs state) varTy))
       (\<lambda>v. converged (\<lambda>m. interp_term d m (bind_const_local varName v state) bodyTm))"
 
-  (* Allocated: evaluate the operand, apply the current type subst (IS_TyArgs state)
-     to the type annotation, then delegate to is_allocated. *)
-| "interp_term d (Suc fuel) state (CoreTm_Allocated ty tm) =
+  (* Allocated: evaluate the operand, then delegate to is_allocated. The type
+     annotation is not read: is_allocated decides from the value alone. *)
+| "interp_term d (Suc fuel) state (CoreTm_Allocated _ tm) =
     (case interp_term d fuel state tm of
       Inl err \<Rightarrow> Inl err
-    | Inr v \<Rightarrow>
-        (case is_allocated (IS_DataCtors state) (IS_ExternAlloc state) v
-                           (apply_subst (IS_TyArgs state) ty) of
-          Inl err \<Rightarrow> Inl err
-        | Inr b \<Rightarrow> Inr (CV_Bool b)))"
+    | Inr v \<Rightarrow> Inr (CV_Bool (is_allocated (IS_ExternAlloc state) v)))"
 
   (* Default value: resolve any current-frame tyvars via IS_TyArgs, then
      delegate to the recursive default_value helper. *)
@@ -1759,7 +1739,7 @@ where
         copy_check).\<close>
     (case interp_term d fuel state initialTm of
        Inr initialVal \<Rightarrow>
-         (case copy_check declGhost state varTy initialVal of
+         (case copy_check declGhost state initialVal of
             Some err \<Rightarrow> Inl err
           | None \<Rightarrow> Inr (Continue (bind_mutable_local varName initialVal state)))
      | Inl err \<Rightarrow> Inl err)"
@@ -1799,16 +1779,16 @@ where
     | None \<Rightarrow> Inl TypeError)"
 
   (* Assignment *)
-| "interp_statement d (Suc fuel) state (CoreStmt_Assign assignGhost ty lhsLvalue rhsTm) =
+| "interp_statement d (Suc fuel) state (CoreStmt_Assign assignGhost _ lhsLvalue rhsTm) =
     \<comment> \<open>Resolve the lhs to an address and path; the rhs is an ordinary (pure)
         term (impure-call rhs's use CoreStmt_AssignCall). State is unchanged by
         evaluating it. A non-ghost assignment must not copy an allocated value
-        (rule 2 of copy_check).\<close>
+        (rule 2 of copy_check). The type annotation is not read.\<close>
     (case interp_lvalue d fuel True state lhsLvalue of
       Inr (addr, path) \<Rightarrow>
         (case interp_term d fuel state rhsTm of
           Inr rhsVal \<Rightarrow>
-            (case copy_check assignGhost state ty rhsVal of
+            (case copy_check assignGhost state rhsVal of
                Some err \<Rightarrow> Inl err
              | None \<Rightarrow>
                  (let oldVal = IS_Store state ! addr in

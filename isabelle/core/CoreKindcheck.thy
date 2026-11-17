@@ -12,6 +12,13 @@ fun dim_category :: "CoreDimension \<Rightarrow> DimCategory" where
 | "dim_category CoreDim_Allocatable = DimCat_Allocatable"
 | "dim_category (CoreDim_Fixed _) = DimCat_Fixed"
 
+(* True if there is an allocatable dimension. For well-kinded dimensions
+   (array_dims_well_kinded below) this is the same as every dimension being
+   allocatable. An array value records this about itself (the flag of
+   CV_Array, CoreValue.thy). *)
+definition allocatable_dims :: "CoreDimension list \<Rightarrow> bool" where
+  "allocatable_dims dims = list_ex (\<lambda>d. d = CoreDim_Allocatable) dims"
+
 (* Helper: check if all dimensions have the same category
    (and that there is at least one dimension) *)
 fun dims_uniform :: "CoreDimension list \<Rightarrow> bool" where

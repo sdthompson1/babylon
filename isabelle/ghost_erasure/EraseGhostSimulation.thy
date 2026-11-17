@@ -429,7 +429,7 @@ next
         note sE = sub[OF W1 s]
         show ?thesis
         proof (cases x)
-          case (CV_Array sizes elementMap)
+          case (CV_Array al sizes elementMap)
           from H CoreTm_ArrayProj s CV_Array obtain ivs where
             l: "interp_term_list d fuel full idxs = Inr ivs"
             by (cases "interp_term_list d fuel full idxs") simp_all
@@ -660,13 +660,12 @@ next
               by (auto split: sum.splits)
             note ivE = sub[OF iW iv]
             \<comment> \<open>The copy check passed in the full run; it passes in the erased
-                run too, which has the same datatype table, allocation oracle
-                and type arguments. \<close>
+                run too, which has the same allocation oracle. \<close>
             from Var H CoreStmt_VarDecl NotGhost iv
-            have cc: "copy_check NotGhost full ty initVal = None"
+            have cc: "copy_check NotGhost full initVal = None"
               by (auto split: option.splits)
-            have ccE: "copy_check NotGhost erased ty initVal = None"
-              using cc copy_check_cong_state[OF D(9) D(10) D(6)] by simp
+            have ccE: "copy_check NotGhost erased initVal = None"
+              using cc copy_check_cong_state[OF D(10)] by simp
             from Var H[symmetric] CoreStmt_VarDecl NotGhost iv cc
             have cF: "is_continue res"
               and stepF: "fresh_binding_step varName initVal full (result_state res)"
@@ -881,12 +880,12 @@ next
             rv: "interp_term d fuel full rhsTm = Inr rhsVal"
             by (auto split: sum.splits)
           \<comment> \<open>The copy check passed in the full run; it passes in the erased
-              run too (same datatype table, allocation oracle and type arguments). \<close>
+              run too (same allocation oracle). \<close>
           from H CoreStmt_Assign NotGhost wl rv
-          have cc: "copy_check NotGhost full ty rhsVal = None"
+          have cc: "copy_check NotGhost full rhsVal = None"
             by (auto split: option.splits)
-          have ccE: "copy_check NotGhost erased ty rhsVal = None"
-            using cc copy_check_cong_state[OF D(9) D(10) D(6)] by simp
+          have ccE: "copy_check NotGhost erased rhsVal = None"
+            using cc copy_check_cong_state[OF D(10)] by simp
           from H CoreStmt_Assign NotGhost wl rv cc obtain newVal where
             upd: "update_value_at_path (IS_Store full ! addr) path rhsVal = Inr newVal"
             by (auto simp: Let_def split: sum.splits)
@@ -1697,15 +1696,14 @@ next
           case (Return postF bodyRetVal)
           \<comment> \<open>The copy check on the returned value passed in the full run; it
               passes in the erased run too, since the erased function has the
-              same ghost flag and return type and the related pre-call states
-              have the same datatype table, allocation oracle and type
-              arguments. \<close>
+              same ghost flag and the related pre-call states have the same
+              allocation oracle. \<close>
           from bodyF Inl bodyEval Return
-          have cc: "copy_check (IF_Ghost f) preF (IF_ReturnType f) bodyRetVal = None"
+          have cc: "copy_check (IF_Ghost f) preF bodyRetVal = None"
             by (auto simp: call_body_def split: option.splits)
           note DP = state_erasedD[OF relP]
-          have ccE: "copy_check (IF_Ghost f) preE (IF_ReturnType f) bodyRetVal = None"
-            using cc copy_check_cong_state[OF DP(9) DP(10) DP(6)] by simp
+          have ccE: "copy_check (IF_Ghost f) preE bodyRetVal = None"
+            using cc copy_check_cong_state[OF DP(10)] by simp
           from bodyF Inl bodyEval Return cc
           have newFull_eq: "newFull = restore_scope full postF"
             and ret_eq: "retVal = bodyRetVal"

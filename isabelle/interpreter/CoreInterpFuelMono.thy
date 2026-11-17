@@ -1117,7 +1117,7 @@ next
       case (Inr arrVal)
       show ?thesis
       proof (cases arrVal)
-        case (CV_Array sizes elemMap)
+        case (CV_Array al sizes elemMap)
         hence idx_noFuel: "interp_term_list d fuel state idxTms \<noteq> Inl InsufficientFuel"
           using noFuel Inr by (auto split: sum.splits)
         hence IH_idx: "\<forall>f'\<ge>fuel. interp_term_list d f' state idxTms = interp_term_list d fuel state idxTms"
@@ -1856,7 +1856,7 @@ next
             have "interp_term d f'' state condTm = Inr condVal" using IH_cond Inr f''_ge by metis
             thus ?thesis using f'_eq CV_Variant Inr by simp
           next
-            case (CV_Array x61 x62)
+            case (CV_Array al x61 x62)
             have "interp_term d f'' state condTm = Inr condVal" using IH_cond Inr f''_ge by metis
             thus ?thesis using f'_eq CV_Array Inr by simp
           next
@@ -2655,7 +2655,7 @@ next
       case (Inr arrVal)
       show ?thesis
       proof (cases arrVal)
-        case (CV_Array sizes elemMap)
+        case (CV_Array al sizes elemMap)
         hence "interp_term_list d fuel state idxTms \<noteq> Inl InsufficientFuel"
           using "15.prems" Inr by (auto split: sum.splits)
         hence "interp_term_list d' fuel state idxTms = interp_term_list d fuel state idxTms"

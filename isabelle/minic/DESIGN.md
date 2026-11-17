@@ -1158,10 +1158,12 @@ the slice of `bs` at its offset (`slice off n bs = take n (drop off bs)`,
   `ctor_tag C` at the tag type, and the payload is represented by the slice
   of `|payload[args]|` bytes after the tag (the bytes after that are
   unconstrained: `rep_val_variant_junk`);
-- `CV_Array sizes elems` at fixed dims: `sizes` match the dims, the element
+- `CV_Array al sizes elems` at fixed dims (`al` is the value's allocatable
+  flag, which `rep_val` does not read: the type decides): `sizes` match the
+  dims, the element
   map's domain is `all_indices sizes`, `|bs| = |T| · count`, and element
   `idx` is represented by the slice at `elem_offset`;
-- `CV_Array sizes elems` at allocatable/incomplete dims: `sizes` match the
+- `CV_Array al sizes elems` at allocatable/incomplete dims: `sizes` match the
   dims and are valid (each fits `uint64_t`), `count < 2^64` and
   `|T| · count < 2^64`, `|bs| = desc_size`, dimension `k` is the `uint64_t`
   `sizes ! k` at `desc_dim_offset k` (`desc_dims_ok`), and the first

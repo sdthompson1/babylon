@@ -441,13 +441,13 @@ next
     arr_typing: "core_term_type env NotGhost arr = Some (CoreTy_Array elemTy dims)" and
     ty_eq: "ty = elemTy"
     by (auto split: option.splits CoreType.splits if_splits)
-  from CoreTm_ArrayProj.prems(4) obtain sizes elementMap indexVals indices where
-    ev_arr: "eval_const vals arr = Inr (CV_Array sizes elementMap)" and
+  from CoreTm_ArrayProj.prems(4) obtain al sizes elementMap indexVals indices where
+    ev_arr: "eval_const vals arr = Inr (CV_Array al sizes elementMap)" and
     ev_idx: "eval_const_list vals idxTms = Inr indexVals" and
     idx_ok: "interpret_index_vals indexVals = Inr indices" and
     elem_lk: "fmlookup elementMap indices = Some v"
     by (auto split: sum.splits CoreValue.splits option.splits)
-  have arr_typed: "value_has_type env (CV_Array sizes elementMap)
+  have arr_typed: "value_has_type env (CV_Array al sizes elementMap)
                      (CoreTy_Array elemTy dims)"
     using CoreTm_ArrayProj.IH(1)[OF arr_typing _ CoreTm_ArrayProj.prems(3) ev_arr]
           CoreTm_ArrayProj.prems(2) by simp
@@ -484,11 +484,11 @@ next
     tm_typing: "core_term_type env NotGhost tm = Some (CoreTy_Array elemTy dims)" and
     ty_eq: "ty = sizeof_type dims"
     by (auto split: option.splits CoreType.splits if_splits)
-  from CoreTm_Sizeof.prems(4) obtain sizes vm where
-    ev_tm: "eval_const vals tm = Inr (CV_Array sizes vm)" and
+  from CoreTm_Sizeof.prems(4) obtain al sizes vm where
+    ev_tm: "eval_const vals tm = Inr (CV_Array al sizes vm)" and
     v_eq: "v = array_size_to_value sizes"
     by (auto split: sum.splits CoreValue.splits)
-  have arr_typed: "value_has_type env (CV_Array sizes vm) (CoreTy_Array elemTy dims)"
+  have arr_typed: "value_has_type env (CV_Array al sizes vm) (CoreTy_Array elemTy dims)"
     using CoreTm_Sizeof.IH[OF tm_typing _ CoreTm_Sizeof.prems(3) ev_tm]
           CoreTm_Sizeof.prems(2) by simp
   hence fms: "fmap_matches_sizes sizes vm" and smd: "sizes_match_dims sizes dims"

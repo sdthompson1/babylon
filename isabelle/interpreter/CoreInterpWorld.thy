@@ -309,7 +309,7 @@ next
             iv: "interp_term d fuel state initTm = Inr initVal"
             by (auto split: sum.splits)
           from Var H CoreStmt_VarDecl iv have
-            cc: "copy_check gd state ty initVal = None"
+            cc: "copy_check gd state initVal = None"
             by (auto split: option.splits)
           from Var H[symmetric] CoreStmt_VarDecl iv cc show ?thesis
             by (simp add: Let_def)
@@ -388,7 +388,7 @@ next
           rv: "interp_term d fuel state rhsTm = Inr rhsVal"
           by (auto split: sum.splits)
         from H CoreStmt_Assign wl rv have
-          cc: "copy_check ga state ty rhsVal = None"
+          cc: "copy_check ga state rhsVal = None"
           by (auto split: option.splits)
         from H CoreStmt_Assign wl rv cc obtain newVal where
           upd: "update_value_at_path (IS_Store state ! addr) path rhsVal = Inr newVal"

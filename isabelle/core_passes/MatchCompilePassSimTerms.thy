@@ -447,11 +447,11 @@ proof (rule term_simI)
     and ev: "interp_term d (Suc fuel) full (CoreTm_Sizeof tm) = Inr v"
   from typing obtain eTy dims where t: "core_term_type env NotGhost tm = Some (CoreTy_Array eTy dims)"
     by (auto split: option.splits CoreType.splits)
-  from ev obtain sizes m where w: "interp_term d fuel full tm = Inr (CV_Array sizes m)"
+  from ev obtain al sizes m where w: "interp_term d fuel full tm = Inr (CV_Array al sizes m)"
     and v_eq: "v = array_size_to_value sizes"
     by (auto split: sum.splits CoreValue.splits)
   from term_simD[OF IH fe fs sme wf t _ w] ok obtain f1 where
-    f1: "interp_term d f1 (mc_state full) (match_compile_term tm) = Inr (CV_Array sizes m)" by auto
+    f1: "interp_term d f1 (mc_state full) (match_compile_term tm) = Inr (CV_Array al sizes m)" by auto
   have "interp_term d (Suc f1) (mc_state full) (match_compile_term (CoreTm_Sizeof tm)) = Inr v"
     using f1 v_eq by simp
   thus "\<exists>fuel'. interp_term d fuel' (mc_state full) (match_compile_term (CoreTm_Sizeof tm)) = Inr v"
@@ -645,19 +645,19 @@ proof (rule term_simI)
     by (auto simp: list_all_iff split: option.splits CoreType.splits if_splits)
   from ok have ok1: "core_term_match_scrutinees_ok arr"
     and ok2: "list_all core_term_match_scrutinees_ok idxs" by simp_all
-  from ev obtain sizes m ivs where
-    w: "interp_term d fuel full arr = Inr (CV_Array sizes m)" and
+  from ev obtain al sizes m ivs where
+    w: "interp_term d fuel full arr = Inr (CV_Array al sizes m)" and
     ivs: "interp_term_list d fuel full idxs = Inr ivs" and
     rest: "(case interpret_index_vals ivs of
               Inr indices \<Rightarrow> (case fmlookup m indices of Some r \<Rightarrow> Inr r | None \<Rightarrow> Inl RuntimeError)
             | Inl err \<Rightarrow> Inl err) = Inr v"
     by (auto split: sum.splits CoreValue.splits)
   from term_simD[OF IH fe fs sme wf t ok1 w] obtain f1 where
-    f1: "interp_term d f1 (mc_state full) (match_compile_term arr) = Inr (CV_Array sizes m)" by auto
+    f1: "interp_term d f1 (mc_state full) (match_compile_term arr) = Inr (CV_Array al sizes m)" by auto
   from terms_simD[OF IHs fe fs sme wf ti ok2 ivs] obtain f2 where
     f2: "interp_term_list d f2 (mc_state full) (map match_compile_term idxs) = Inr ivs" by auto
   let ?F = "max f1 f2"
-  have f1': "interp_term d ?F (mc_state full) (match_compile_term arr) = Inr (CV_Array sizes m)"
+  have f1': "interp_term d ?F (mc_state full) (match_compile_term arr) = Inr (CV_Array al sizes m)"
     by (rule interp_term_Inr_more_fuel[OF f1]) simp
   have f2': "interp_term_list d ?F (mc_state full) (map match_compile_term idxs) = Inr ivs"
     by (rule interp_term_list_Inr_more_fuel[OF f2]) simp
