@@ -2438,6 +2438,19 @@ next
     by simp
 qed
 
+(* The same check, with the expected type and the mode of each argument read
+   off the parameter list directly. The interpreter evaluates each argument in
+   the mode param_mode ghost gh of its parameter, so this is the form that the
+   type soundness proof uses. *)
+lemma args_typed_param_modes:
+  assumes "list_all2 (\<lambda>tm (expectedTy, mode). core_term_type env mode tm = Some expectedTy) tmArgs
+             (zip (map (\<lambda>(ty, _). apply_subst tySubst ty) tmParams)
+                  (map (\<lambda>(_, _, gh). param_mode ghost gh) tmParams))"
+  shows "list_all2 (\<lambda>tm (ty, _, gh). core_term_type env (param_mode ghost gh) tm
+                                        = Some (apply_subst tySubst ty))
+           tmArgs tmParams"
+  using assms unfolding list_all2_conv_all_nth by (auto simp: case_prod_beta)
+
 (* Conversely, if a call's args all have their expected types, in either Ghost mode or the
    ambient mode, then the per-argument typecheck done while typing a CoreTm_FunctionCall
    will succeed. *)
@@ -2491,6 +2504,37 @@ proof -
     by (rule args_typed_imp_Ghost[OF la2]) simp
   show "ty = apply_subst (fmap_of_list (zip (FI_TyArgs funInfo) tyArgs)) (FI_ReturnType funInfo)"
     using ty_eq by simp
+qed
+
+
+(* If a CoreTm_FunctionCall typechecks in mode `ghost`, each argument typechecks
+   in the mode of its parameter, the type of the term is the function's return
+   type, and the function is not ghost if the mode is NotGhost. *)
+lemma core_term_type_FunctionCall_args_modes:
+  assumes typing: "core_term_type env ghost (CoreTm_FunctionCall fnName tyArgs tmArgs) = Some ty"
+    and fn_lookup: "fmlookup (TE_Functions env) fnName = Some funInfo"
+  shows "list_all2 (\<lambda>tm (pty, _, gh). core_term_type env (param_mode ghost gh) tm
+                      = Some (apply_subst (fmap_of_list (zip (FI_TyArgs funInfo) tyArgs)) pty))
+          tmArgs (FI_TmArgs funInfo)"
+    and "ty = apply_subst (fmap_of_list (zip (FI_TyArgs funInfo) tyArgs)) (FI_ReturnType funInfo)"
+    and "ghost = NotGhost \<longrightarrow> FI_Ghost funInfo = NotGhost"
+proof -
+  from typing fn_lookup have
+    la2: "list_all2 (\<lambda>tm (expectedTy, mode). core_term_type env mode tm = Some expectedTy) tmArgs
+            (zip (map (\<lambda>(ty, _). apply_subst (fmap_of_list (zip (FI_TyArgs funInfo) tyArgs)) ty)
+                      (FI_TmArgs funInfo))
+                 (map (\<lambda>(_, _, gh). param_mode ghost gh) (FI_TmArgs funInfo)))"
+    and ty_eq: "ty = apply_subst (fmap_of_list (zip (FI_TyArgs funInfo) tyArgs)) (FI_ReturnType funInfo)"
+    and ng: "ghost = NotGhost \<longrightarrow> FI_Ghost funInfo \<noteq> Ghost"
+    by (auto simp: Let_def split: option.splits if_splits)
+  show "list_all2 (\<lambda>tm (pty, _, gh). core_term_type env (param_mode ghost gh) tm
+                      = Some (apply_subst (fmap_of_list (zip (FI_TyArgs funInfo) tyArgs)) pty))
+          tmArgs (FI_TmArgs funInfo)"
+    by (rule args_typed_param_modes[OF la2])
+  show "ty = apply_subst (fmap_of_list (zip (FI_TyArgs funInfo) tyArgs)) (FI_ReturnType funInfo)"
+    using ty_eq by simp
+  show "ghost = NotGhost \<longrightarrow> FI_Ghost funInfo = NotGhost"
+    using ng by (cases "FI_Ghost funInfo") auto
 qed
 
 

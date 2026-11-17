@@ -97,6 +97,15 @@ fun sound_function_call_result :: "'w InterpState \<Rightarrow> CoreTyEnv \<Righ
      \<and> IS_TyArgs newState = IS_TyArgs state
      \<and> value_has_type env retVal (apply_subst (IS_TyArgs state) retTy))"
 
+(* A call made in another mode of the same state: the result is sound for the
+   state itself. (A call statement makes its call in the statement's mode.) *)
+lemma sound_function_call_result_IS_Ghost [simp]:
+  "sound_function_call_result (state \<lparr> IS_Ghost := g \<rparr>) env storeTyping retTy r
+     = sound_function_call_result state env storeTyping retTy r"
+proof (cases r)
+  case (Inr p) then show ?thesis by (cases p) simp
+qed simp
+
 (* env is the env the statement was typechecked in. For a Return inside a
    generic function body, TE_ReturnType env mentions that function's tyvars,
    which we resolve via IS_TyArgs state'. *)
