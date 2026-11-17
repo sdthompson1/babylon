@@ -107,17 +107,6 @@ definition cast_ok :: "CoreTyEnv \<Rightarrow> CoreType \<Rightarrow> CoreType \
 
 
 (* ========================================================================== *)
-(* Argument typing for function calls *)
-(* ========================================================================== *)
-
-(* The mode in which the actual for a parameter is typechecked, given the
-   ambient mode of the call and the parameter's ghost flag. The actual for a
-   ghost parameter is always ghost code; otherwise, the ambient mode applies. *)
-definition param_mode :: "GhostOrNot \<Rightarrow> GhostOrNot \<Rightarrow> GhostOrNot" where
-  "param_mode ghost gh = (if gh = Ghost then Ghost else ghost)"
-
-
-(* ========================================================================== *)
 (* Main type-checking function *)
 (* ========================================================================== *)
 

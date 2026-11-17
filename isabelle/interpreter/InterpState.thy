@@ -21,8 +21,10 @@ record 'w InterpFun =
   (* Type arguments *)
   IF_TyArgs :: "string list"
 
-  (* Term arguments (name, and whether passed by value or reference) *)
-  IF_Args :: "(string \<times> VarOrRef) list"
+  (* Term arguments (name, whether passed by value or reference, and whether
+     the parameter is ghost). The ghost flag is last, so that "fst" of an
+     element is the name and "fst (snd _)" is the VarOrRef. *)
+  IF_Args :: "(string \<times> VarOrRef \<times> GhostOrNot) list"
 
   (* The function body: Inl for a Babylon body (list of statements), or
      Inr for an external function. *)
@@ -70,6 +72,15 @@ record 'world InterpState =
   (* Runtime type-variable bindings for the current function frame.
      Maps each type parameter (by name) to a ground CoreType. *)
   IS_TyArgs :: "(string, CoreType) fmap"
+
+  (* Whether the code being run is ghost or executable. Terms carry no ghost
+     flag of their own, so the mode is kept here. It is the mode of the
+     function being run (IF_Ghost), except that the interpreter overrides it
+     temporarily while evaluating a term whose mode is fixed by its context:
+     the terms of a statement with a ghost flag, an argument for a ghost
+     parameter, and specification terms (assertions, invariants,
+     decreases-terms, contracts), which are always ghost. *)
+  IS_Ghost :: GhostOrNot
 
   (* The datatypes of the program (name to number of type parameters), their
      data constructors (constructor name to datatype name, type parameters and

@@ -498,13 +498,15 @@ fun bind_ref :: "string \<Rightarrow> (nat \<times> LValuePath list) \<Rightarro
 (* Restore scope after exiting a block:
    - old_state: the state before entering the scope
    - new_state: the state after executing the inner scope
-   Returns: new_state with locals/refs restored and store truncated *)
+   Returns: new_state with locals/refs restored and store truncated. The
+   type arguments and the ghost mode of the old state are put back too. *)
 fun restore_scope :: "'w InterpState \<Rightarrow> 'w InterpState \<Rightarrow> 'w InterpState" where
   "restore_scope old_state new_state =
     new_state \<lparr> IS_Locals := IS_Locals old_state,
                 IS_Refs := IS_Refs old_state,
                 IS_ConstLocals := IS_ConstLocals old_state,
                 IS_TyArgs := IS_TyArgs old_state,
+                IS_Ghost := IS_Ghost old_state,
                 IS_Store := take (length (IS_Store old_state)) (IS_Store new_state) \<rparr>"
 
 (* Exchange values at two lvalue locations *)
@@ -543,26 +545,27 @@ fun is_pure_fun :: "'w InterpState \<Rightarrow> string \<Rightarrow> bool" wher
   "is_pure_fun state fnName =
     (case fmlookup (IS_Functions state) fnName of
       Some funInfo \<Rightarrow> 
-        (\<not> list_ex (\<lambda>(_, vr). vr = Ref) (IF_Args funInfo))
+        (\<not> list_ex (\<lambda>(_, vr, _). vr = Ref) (IF_Args funInfo))
         \<and> (\<not> IF_Impure funInfo)
     | None \<Rightarrow> False)"
 
 (* Add a single function argument to the state. *)
 (* Takes: (parameter info, lvalue result, rvalue result) and current state
-   Returns: updated state, or error *)
-fun process_one_arg :: "((string \<times> VarOrRef)
+   Returns: updated state, or error
+   The parameter's ghost flag is not used here. *)
+fun process_one_arg :: "((string \<times> VarOrRef \<times> GhostOrNot)
                         \<times> (InterpError + (nat \<times> LValuePath list))
                         \<times> (InterpError + CoreValue))
                 \<Rightarrow> InterpError + 'w InterpState
                 \<Rightarrow> InterpError + 'w InterpState" where
   "process_one_arg _ (Inl err) = Inl err"
-| "process_one_arg ((name, Var), _, Inr val) (Inr state) =
+| "process_one_arg ((name, Var, _), _, Inr val) (Inr state) =
     Inr (bind_const_local name val state)"
-| "process_one_arg ((name, Var), _, Inl err) _ = Inl err"
-| "process_one_arg ((name, Ref), Inr (addr, path), Inr _) (Inr state) =
+| "process_one_arg ((name, Var, _), _, Inl err) _ = Inl err"
+| "process_one_arg ((name, Ref, _), Inr (addr, path), Inr _) (Inr state) =
     Inr (bind_ref name (addr, path) state)"
-| "process_one_arg ((name, Ref), Inl err, _) _ = Inl err"
-| "process_one_arg ((name, Ref), _, Inl err) _ = Inl err"
+| "process_one_arg ((name, Ref, _), Inl err, _) _ = Inl err"
+| "process_one_arg ((name, Ref, _), _, Inl err) _ = Inl err"
 
 (* Once an error has occurred, folding further arguments keeps it. *)
 lemma fold_process_one_arg_error:
@@ -1077,9 +1080,9 @@ lemma eval_decreases_Inl:
    that were used to generate the pre-call state; we just need to install them under different
    names (arg@@i, instead of the actual names from IF_Args). *)
 definition contract_pre_args ::
-    "(string \<times> VarOrRef) list \<Rightarrow> (InterpError + (nat \<times> LValuePath list)) list
+    "(string \<times> VarOrRef \<times> GhostOrNot) list \<Rightarrow> (InterpError + (nat \<times> LValuePath list)) list
      \<Rightarrow> (InterpError + CoreValue) list
-     \<Rightarrow> ((string \<times> VarOrRef) \<times> (InterpError + (nat \<times> LValuePath list))
+     \<Rightarrow> ((string \<times> VarOrRef \<times> GhostOrNot) \<times> (InterpError + (nat \<times> LValuePath list))
           \<times> (InterpError + CoreValue)) list" where
   "contract_pre_args args refResults valResults =
      zip (zip (contract_arg_names (length args)) (map snd args))
@@ -1089,17 +1092,18 @@ definition contract_pre_args ::
    for arg@@i (which now represents the value 'after' the call), but old@@i (the values before the
    call) and return (the function return value) as well. *)
 definition contract_post_args ::
-    "(string \<times> VarOrRef) list \<Rightarrow> (InterpError + (nat \<times> LValuePath list)) list
+    "(string \<times> VarOrRef \<times> GhostOrNot) list \<Rightarrow> (InterpError + (nat \<times> LValuePath list)) list
      \<Rightarrow> (InterpError + CoreValue) list \<Rightarrow> CoreValue
-     \<Rightarrow> ((string \<times> VarOrRef) \<times> (InterpError + (nat \<times> LValuePath list))
+     \<Rightarrow> ((string \<times> VarOrRef \<times> GhostOrNot) \<times> (InterpError + (nat \<times> LValuePath list))
           \<times> (InterpError + CoreValue)) list" where
   "contract_post_args args refResults valResults retVal =
      \<comment> \<open>First, we need the argument names (arg@@i, old@@i, return), which come from
         contract_post_names.\<close>
      zip (zip (contract_post_names (length args))
               \<comment> \<open>Next, we need the VarOrRef flag for each argument. arg@@i retains its flag
-                 from the original declaration; old@@i and return are always Var.\<close>
-              (map snd args @ replicate (Suc (length args)) Var))
+                 from the original declaration; old@@i and return are always Var. (Each
+                 comes with a ghost flag, which process_one_arg does not use.)\<close>
+              (map snd args @ replicate (Suc (length args)) (Var, Ghost)))
          \<comment> \<open>Now we pass the 'address and lvalue path' for each argument. This is only relevant for
             Ref arguments (process_one_arg ignores it for Var arguments), and it can be taken
             directly from refResults (this was computed before the call, but that's OK, because
@@ -1123,7 +1127,7 @@ definition contract_post_args ::
    if all conditions hold, or the error otherwise. *)
 definition check_conditions ::
     "('w InterpState \<Rightarrow> CoreTerm list \<Rightarrow> InterpError + CoreValue list) \<Rightarrow> CoreTerm list
-     \<Rightarrow> ((string \<times> VarOrRef) \<times> (InterpError + (nat \<times> LValuePath list))
+     \<Rightarrow> ((string \<times> VarOrRef \<times> GhostOrNot) \<times> (InterpError + (nat \<times> LValuePath list))
           \<times> (InterpError + CoreValue)) list
      \<Rightarrow> 'w InterpState \<Rightarrow> InterpError option" where
   "check_conditions ev tms args st =
@@ -1164,6 +1168,9 @@ lemma check_conditions_Nil [simp]: "check_conditions ev [] args st = None"
         calling frame's local variables removed)
     - bodyResult: the result of running the function body
 
+   Contracts are ghost code, so both checks below evaluate their terms in a state
+   with IS_Ghost := Ghost.
+
    We first check all the preconditions of f, in the cleared state. If any fail, the error is
    returned as the result, and bodyResult is not used.
 
@@ -1179,7 +1186,8 @@ definition checked_call ::
      \<Rightarrow> InterpError + ('w InterpState \<times> CoreValue)" where
   "checked_call ev f refResults valResults calleeTyArgs clearedState bodyResult =
     (case check_conditions ev (IF_Requires f)
-            (contract_pre_args (IF_Args f) refResults valResults) clearedState of
+            (contract_pre_args (IF_Args f) refResults valResults)
+            (clearedState \<lparr> IS_Ghost := Ghost \<rparr>) of
        Some err \<Rightarrow> Inl err
      | None \<Rightarrow>
          (case bodyResult of
@@ -1190,7 +1198,8 @@ definition checked_call ::
                       (newState \<lparr> IS_Locals := fmempty,
                                   IS_Refs := fmempty,
                                   IS_ConstLocals := {||},
-                                  IS_TyArgs := calleeTyArgs \<rparr>) of
+                                  IS_TyArgs := calleeTyArgs,
+                                  IS_Ghost := Ghost \<rparr>) of
                  Some err \<Rightarrow> Inl err
                | None \<Rightarrow> Inr (newState, retVal))))"
 
@@ -1273,7 +1282,7 @@ definition call_body ::
         \<comment> \<open>For an external function, we need to call the externFun and apply any ref updates
            that it gives us. The external 'world' might change as well.\<close>
         (let vals = rights valResults;
-             refs = rights (map (\<lambda>((_, vr), refResult).
+             refs = rights (map (\<lambda>((_, vr, _), refResult).
                                     if vr = Ref then refResult else Inl TypeError)
                                 (zip (IF_Args f) refResults));
              (newWorld, refUpdates, retVal) = externFun (IS_World state) vals;
@@ -1353,19 +1362,20 @@ lemma res_alias_iff:
    argument, and a pair (i,j), returns true if args i and j violate the aliasing rules.
    (In other words: i and j are different, at least one is a Ref arg, and both alias
    according to res_alias.) *)
-definition pair_alias :: "(string \<times> VarOrRef) list \<Rightarrow> (InterpError + nat \<times> LValuePath list) list
+definition pair_alias :: "(string \<times> VarOrRef \<times> GhostOrNot) list \<Rightarrow> (InterpError + nat \<times> LValuePath list) list
                             \<Rightarrow> nat \<Rightarrow> nat \<Rightarrow> bool" where
   "pair_alias args lvs i j =
-    (i \<noteq> j \<and> (snd (args ! i) = Ref \<or> snd (args ! j) = Ref) \<and> res_alias (lvs ! i) (lvs ! j))"
+    (i \<noteq> j \<and> (fst (snd (args ! i)) = Ref \<or> fst (snd (args ! j)) = Ref)
+     \<and> res_alias (lvs ! i) (lvs ! j))"
 
 lemma pair_alias_iff:
   "pair_alias args lvs i j \<longleftrightarrow>
-   (i \<noteq> j \<and> (snd (args ! i) = Ref \<or> snd (args ! j) = Ref)
+   (i \<noteq> j \<and> (fst (snd (args ! i)) = Ref \<or> fst (snd (args ! j)) = Ref)
     \<and> (\<exists>l1 l2. lvs ! i = Inr l1 \<and> lvs ! j = Inr l2 \<and> lvalues_alias l1 l2))"
   unfolding pair_alias_def res_alias_iff ..
 
 (* True if any pair of args (i,j) alias (according to pair_alias). *)
-definition args_alias :: "(string \<times> VarOrRef) list \<Rightarrow> (InterpError + nat \<times> LValuePath list) list \<Rightarrow> bool" where
+definition args_alias :: "(string \<times> VarOrRef \<times> GhostOrNot) list \<Rightarrow> (InterpError + nat \<times> LValuePath list) list \<Rightarrow> bool" where
   "args_alias args lvs = list_ex (\<lambda>i. list_ex (pair_alias args lvs i) [0..<length args]) [0..<length args]"
 
 lemma args_alias_iff:
@@ -1379,7 +1389,7 @@ lemma args_alias_iff:
     - None, otherwise.
    This is the main aliasing check invoked by interp_function_call.
 *)
-definition call_args_alias :: "(string \<times> VarOrRef) list \<Rightarrow> (InterpError + nat \<times> LValuePath list) list
+definition call_args_alias :: "(string \<times> VarOrRef \<times> GhostOrNot) list \<Rightarrow> (InterpError + nat \<times> LValuePath list) list
                                \<Rightarrow> InterpError option" where
   "call_args_alias args lvs =
     (if list_ex (\<lambda>r. r = Inl InsufficientFuel) lvs then Some InsufficientFuel
@@ -1420,7 +1430,7 @@ lemma args_alias_sublist_rel:
   assumes sel_lt: "\<And>k. k < length sel \<Longrightarrow> sel ! k < length args"
     and dist: "distinct sel"
     and len1: "length args' = length sel"
-    and flags: "\<And>k. k < length sel \<Longrightarrow> snd (args' ! k) = snd (args ! (sel ! k))"
+    and flags: "\<And>k. k < length sel \<Longrightarrow> fst (snd (args' ! k)) = fst (snd (args ! (sel ! k)))"
     and rel: "\<And>k k'. k < length sel \<Longrightarrow> k' < length sel \<Longrightarrow> res_alias (lvs' ! k) (lvs' ! k')
                \<Longrightarrow> res_alias (lvs ! (sel ! k)) (lvs ! (sel ! k'))"
     and no: "\<not> args_alias args lvs"
@@ -1429,7 +1439,7 @@ proof
   assume "args_alias args' lvs'"
   then obtain i j where ij: "i < length args'" "j < length args'" and pa: "pair_alias args' lvs' i j"
     unfolding args_alias_iff by blast
-  from pa have ne: "i \<noteq> j" and ref: "snd (args' ! i) = Ref \<or> snd (args' ! j) = Ref"
+  from pa have ne: "i \<noteq> j" and ref: "fst (snd (args' ! i)) = Ref \<or> fst (snd (args' ! j)) = Ref"
     and ra: "res_alias (lvs' ! i) (lvs' ! j)"
     unfolding pair_alias_def by simp_all
   have ne': "sel ! i \<noteq> sel ! j" using dist ne ij len1 by (simp add: distinct_conv_nth)
@@ -1444,7 +1454,7 @@ lemma call_args_alias_None_rel:
     and sel_lt: "\<And>k. k < length sel \<Longrightarrow> sel ! k < length args"
     and dist: "distinct sel"
     and len1: "length args' = length sel" and len2: "length lvs' = length sel"
-    and flags: "\<And>k. k < length sel \<Longrightarrow> snd (args' ! k) = snd (args ! (sel ! k))"
+    and flags: "\<And>k. k < length sel \<Longrightarrow> fst (snd (args' ! k)) = fst (snd (args ! (sel ! k)))"
     and nf: "\<And>k. k < length sel \<Longrightarrow> lvs' ! k \<noteq> Inl InsufficientFuel"
     and rel: "\<And>k k'. k < length sel \<Longrightarrow> k' < length sel \<Longrightarrow> res_alias (lvs' ! k) (lvs' ! k')
                \<Longrightarrow> res_alias (lvs ! (sel ! k)) (lvs ! (sel ! k'))"
@@ -1475,7 +1485,7 @@ next
   show "length lvs' = length [0..<length args]" using len2 by simp
 next
   fix k assume "k < length [0..<length args]"
-  thus "snd (args ! k) = snd (args ! ([0..<length args] ! k))" by simp
+  thus "fst (snd (args ! k)) = fst (snd (args ! ([0..<length args] ! k)))" by simp
 next
   fix k assume "k < length [0..<length args]"
   thus "lvs' ! k \<noteq> Inl InsufficientFuel" using nf by simp
@@ -1503,7 +1513,26 @@ qed
    "The program terminates with result r" is therefore "there are d and fuel at which
    the interpreter returns r". If this exists, it is independent of the precise
    amount of fuel used (so long as it is sufficient); see CoreInterpFuelMono.thy.
+
+   Ghost and executable code: the field IS_Ghost of the state says which of the
+   two is being run. A term is evaluated in the state it is given. The mode is
+   set in these places:
+     - interp_function_call runs the body of f with IS_Ghost := IF_Ghost f, and
+       hands back a state with the caller's IS_Ghost (restore_scope);
+     - each argument of a call is evaluated with IS_Ghost := param_mode (IS_Ghost
+       state) g, where g is the ghost flag of its parameter (see arg_state);
+     - a statement with a ghost flag evaluates its own terms with IS_Ghost := that
+       flag, but builds its result state from the state it was given, so the mode
+       is unchanged for the statements that follow, and loop bodies and match arms
+       run in the mode of the enclosing function;
+     - assert conditions, loop invariants, decreases-terms, obtain conditions and
+       contracts (checked_call) are evaluated with IS_Ghost := Ghost.
+   A ghost function cannot be called when IS_Ghost is NotGhost (TypeError).
 *)
+
+(* The state in which the actual for the parameter `arg` is evaluated. *)
+abbreviation arg_state :: "'w InterpState \<Rightarrow> string \<times> VarOrRef \<times> GhostOrNot \<Rightarrow> 'w InterpState" where
+  "arg_state state arg \<equiv> state \<lparr> IS_Ghost := param_mode (IS_Ghost state) (snd (snd arg)) \<rparr>"
 
 function interp_term :: "nat \<Rightarrow> nat \<Rightarrow> 'w InterpState \<Rightarrow> CoreTerm \<Rightarrow> InterpError + CoreValue"
   and interp_term_list :: "nat \<Rightarrow> nat \<Rightarrow> 'w InterpState \<Rightarrow> CoreTerm list \<Rightarrow> InterpError + CoreValue list"
@@ -1736,24 +1765,29 @@ where
     \<comment> \<open>The initializer is an ordinary (pure) term; impure-call initializers use
         CoreStmt_VarDeclCall. The state is unchanged by evaluating it.
         A non-ghost declaration must not copy an allocated value (rule 1 of
-        copy_check).\<close>
-    (case interp_term d fuel state initialTm of
+        copy_check). The initializer is evaluated in the declaration's mode.\<close>
+    (case interp_term d fuel (state \<lparr> IS_Ghost := declGhost \<rparr>) initialTm of
        Inr initialVal \<Rightarrow>
          (case copy_check declGhost state initialVal of
             Some err \<Rightarrow> Inl err
           | None \<Rightarrow> Inr (Continue (bind_mutable_local varName initialVal state)))
      | Inl err \<Rightarrow> Inl err)"
 
-| "interp_statement d (Suc fuel) state (CoreStmt_VarDeclCall _ varName _ castOpt fnName argTys argTms) =
+| "interp_statement d (Suc fuel) state (CoreStmt_VarDeclCall declGhost varName _ castOpt fnName argTys argTms) =
     \<comment> \<open>Run the (possibly impure) call, observing its state effect, then apply the
-        optional cast to the returned value before binding it.\<close>
-    (case interp_function_call d fuel state fnName argTys argTms of
+        optional cast to the returned value before binding it. The call is made in
+        the declaration's mode; the state that comes back carries that mode, so the
+        mode of the original state is put back.\<close>
+    (case interp_function_call d fuel (state \<lparr> IS_Ghost := declGhost \<rparr>) fnName argTys argTms of
        Inr (newState, retVal) \<Rightarrow>
          (case apply_cast_opt castOpt retVal of
-            Inr initialVal \<Rightarrow> Inr (Continue (bind_mutable_local varName initialVal newState))
+            Inr initialVal \<Rightarrow>
+              Inr (Continue (bind_mutable_local varName initialVal
+                               (newState \<lparr> IS_Ghost := IS_Ghost state \<rparr>)))
           | Inl err \<Rightarrow> Inl err)
      | Inl err \<Rightarrow> Inl err)"
-| "interp_statement d (Suc fuel) state (CoreStmt_VarDecl _ varName Ref _ lvalueTm) =
+| "interp_statement d (Suc fuel) state (CoreStmt_VarDecl declGhost varName Ref _ lvalueTm) =
+    \<comment> \<open>The lvalue term is evaluated in the declaration's mode.\<close>
     (case lvalue_base_name lvalueTm of
       Some baseName \<Rightarrow>
         \<comment> \<open>Determine whether the base is read-only. The base is read-only iff:
@@ -1767,13 +1801,13 @@ where
           \<comment> \<open>Base variable is read-only: copy the value instead of aliasing.
              A compiler would likely use a read-only pointer, but copying is
              semantically equivalent since the source is immutable.\<close>
-          (case interp_term d fuel state lvalueTm of
+          (case interp_term d fuel (state \<lparr> IS_Ghost := declGhost \<rparr>) lvalueTm of
             Inl err \<Rightarrow> Inl err
           | Inr val \<Rightarrow> Inr (Continue (bind_const_local varName val state)))
         else
           \<comment> \<open>Base variable is writable: use interp_lvalue (in writable mode) to
              get the address and path, and store those in IS_Refs. \<close>
-          (case interp_lvalue d fuel True state lvalueTm of
+          (case interp_lvalue d fuel True (state \<lparr> IS_Ghost := declGhost \<rparr>) lvalueTm of
             Inr addrAndPath \<Rightarrow> Inr (Continue (bind_ref varName addrAndPath state))
           | Inl err \<Rightarrow> Inl err)
     | None \<Rightarrow> Inl TypeError)"
@@ -1783,10 +1817,11 @@ where
     \<comment> \<open>Resolve the lhs to an address and path; the rhs is an ordinary (pure)
         term (impure-call rhs's use CoreStmt_AssignCall). State is unchanged by
         evaluating it. A non-ghost assignment must not copy an allocated value
-        (rule 2 of copy_check). The type annotation is not read.\<close>
-    (case interp_lvalue d fuel True state lhsLvalue of
+        (rule 2 of copy_check). The type annotation is not read. Both sides are
+        evaluated in the assignment's mode.\<close>
+    (case interp_lvalue d fuel True (state \<lparr> IS_Ghost := assignGhost \<rparr>) lhsLvalue of
       Inr (addr, path) \<Rightarrow>
-        (case interp_term d fuel state rhsTm of
+        (case interp_term d fuel (state \<lparr> IS_Ghost := assignGhost \<rparr>) rhsTm of
           Inr rhsVal \<Rightarrow>
             (case copy_check assignGhost state rhsVal of
                Some err \<Rightarrow> Inl err
@@ -1800,11 +1835,14 @@ where
     | Inl err \<Rightarrow> Inl err)"
 
   (* Assignment from an impure call *)
-| "interp_statement d (Suc fuel) state (CoreStmt_AssignCall _ lhsLvalue castOpt fnName argTys argTms) =
+| "interp_statement d (Suc fuel) state (CoreStmt_AssignCall assignGhost lhsLvalue castOpt fnName argTys argTms) =
     \<comment> \<open>Note the order of operations: evaluate the rhs first, then resolve the lhs to
         an address and path (in the new state). So in a[i] = f(i), where f modifies i,
-        the element written is determined by the new value of i, not the old.\<close>
-    (case interp_function_call d fuel state fnName argTys argTms of
+        the element written is determined by the new value of i, not the old.
+        The call is made in the assignment's mode. The state that comes back
+        carries that mode: the lhs is resolved in it, and the mode of the original
+        state is put back in the final state.\<close>
+    (case interp_function_call d fuel (state \<lparr> IS_Ghost := assignGhost \<rparr>) fnName argTys argTms of
       Inr (newState, retVal) \<Rightarrow>
         (case apply_cast_opt castOpt retVal of
           Inr rhsVal \<Rightarrow>
@@ -1813,25 +1851,28 @@ where
                 (let oldVal = IS_Store newState ! addr in
                 case update_value_at_path oldVal path rhsVal of
                   Inr newVal \<Rightarrow>
-                    Inr (Continue (newState \<lparr> IS_Store := (IS_Store newState)[addr := newVal] \<rparr>))
+                    Inr (Continue (newState \<lparr> IS_Store := (IS_Store newState)[addr := newVal],
+                                              IS_Ghost := IS_Ghost state \<rparr>))
                 | Inl err \<Rightarrow> Inl err)
             | Inl err \<Rightarrow> Inl err)
         | Inl err \<Rightarrow> Inl err)
     | Inl err \<Rightarrow> Inl err)"
 
   (* Swap *)
-| "interp_statement d (Suc fuel) state (CoreStmt_Swap _ lhsTm rhsTm) =
-    (case interp_lvalue d fuel True state lhsTm of
+| "interp_statement d (Suc fuel) state (CoreStmt_Swap swapGhost lhsTm rhsTm) =
+    \<comment> \<open>Both lvalues are resolved in the swap's mode.\<close>
+    (case interp_lvalue d fuel True (state \<lparr> IS_Ghost := swapGhost \<rparr>) lhsTm of
       Inl err \<Rightarrow> Inl err
     | Inr lhsLvalue \<Rightarrow>
-        (case interp_lvalue d fuel True state rhsTm of
+        (case interp_lvalue d fuel True (state \<lparr> IS_Ghost := swapGhost \<rparr>) rhsTm of
           Inl err \<Rightarrow> Inl err
         | Inr rhsLvalue \<Rightarrow>
             (case perform_swap state lhsLvalue rhsLvalue of
               Inl err \<Rightarrow> Inl err
             | Inr newState \<Rightarrow> Inr (Continue newState))))"
 
-  (* Return *)
+  (* Return. The term is evaluated in the state as it is, i.e. in the mode of
+     the function being run. *)
 | "interp_statement d (Suc fuel) state (CoreStmt_Return tm) =
     (case interp_term d fuel state tm of
       Inr val \<Rightarrow> Inr (Return state val)
@@ -1844,22 +1885,26 @@ where
       - Each time the body is about to run, the decreases-term (if any) is evaluated
         and checked (see eval_decreases); after the body it is evaluated and checked
         again, in the state the next iteration will start from, and it is a RuntimeError
-        if its value has not strictly decreased (see decreases_error). *)
+        if its value has not strictly decreased (see decreases_error).
+      - The invariants and the decreases-term are ghost code. The condition is
+        evaluated in the loop's mode. The body runs in the state as it is. *)
 | "interp_statement d (Suc fuel) state (CoreStmt_While whileGhost condTm invars decr bodyStmts) =
-    (case interp_term_list d fuel state invars of
+    (case interp_term_list d fuel (state \<lparr> IS_Ghost := Ghost \<rparr>) invars of
       Inl err \<Rightarrow> Inl err
     | Inr invarVals \<Rightarrow>
         (case conditions_error invarVals of
           Some err \<Rightarrow> Inl err
         | None \<Rightarrow>
-            (case interp_term d fuel state condTm of
+            (case interp_term d fuel (state \<lparr> IS_Ghost := whileGhost \<rparr>) condTm of
               Inr (CV_Bool True) \<Rightarrow>
-                (case eval_decreases (interp_term d fuel state) decr of
+                (case eval_decreases (interp_term d fuel (state \<lparr> IS_Ghost := Ghost \<rparr>)) decr of
                   Inl err \<Rightarrow> Inl err
                 | Inr decrVal \<Rightarrow>
                     (case interp_statement_list d fuel state bodyStmts of
                       Inr (Continue state') \<Rightarrow>
-                        (case eval_decreases (interp_term d fuel (restore_scope state state')) decr of
+                        (case eval_decreases
+                                (interp_term d fuel ((restore_scope state state') \<lparr> IS_Ghost := Ghost \<rparr>))
+                                decr of
                           Inl err \<Rightarrow> Inl err
                         | Inr decrVal' \<Rightarrow>
                             (case decreases_error decrVal decrVal' of
@@ -1873,9 +1918,10 @@ where
             | Inr _ \<Rightarrow> Inl TypeError
             | Inl err \<Rightarrow> Inl err)))"
 
-  (* Pattern match *)
-| "interp_statement d (Suc fuel) state (CoreStmt_Match _ scrutTm arms) =
-    (case interp_term d fuel state scrutTm of
+  (* Pattern match. The scrutinee is evaluated in the match's mode; the chosen
+     arm runs in the state as it is. *)
+| "interp_statement d (Suc fuel) state (CoreStmt_Match matchGhost scrutTm arms) =
+    (case interp_term d fuel (state \<lparr> IS_Ghost := matchGhost \<rparr>) scrutTm of
       Inr scrutVal \<Rightarrow>
         (case find_matching_arm scrutVal arms of
           Inr armStmts \<Rightarrow>
@@ -1886,12 +1932,12 @@ where
         | Inl err \<Rightarrow> Inl err)
     | Inl err \<Rightarrow> Inl err)"
 
-  (* Assert: the condition is evaluated, and it is a RuntimeError if it is
-     false. The proof body is not run.
+  (* Assert: the condition is evaluated (as ghost code), and it is a RuntimeError
+     if it is false. The proof body is not run.
      "assert *" (no condition) only occurs inside a proof body, so it should
      never be executed. *)
 | "interp_statement d (Suc fuel) state (CoreStmt_Assert (Some condTm) _) =
-    (case interp_term d fuel state condTm of
+    (case interp_term d fuel (state \<lparr> IS_Ghost := Ghost \<rparr>) condTm of
       Inr (CV_Bool True) \<Rightarrow> Inr (Continue state)
     | Inr (CV_Bool False) \<Rightarrow> Inl RuntimeError  \<comment> \<open>assertion failed\<close>
     | Inr _ \<Rightarrow> Inl TypeError
@@ -1907,12 +1953,15 @@ where
   (* Obtain: brings a new variable into scope, bound to a value of its type
      that satisfies the condition. It is a RuntimeError if there is no such
      value. Like a Quantifier, this spends one unit of depth, and evaluates the
-     condition at every value of the type, each at its own converged fuel. *)
+     condition at every value of the type, each at its own converged fuel. The
+     condition is ghost code. *)
 | "interp_statement 0 (Suc _) _ (CoreStmt_Obtain _ _ _) = Inl InsufficientFuel"
 | "interp_statement (Suc d) (Suc _) state (CoreStmt_Obtain varName varTy condTm) =
     (case choose_witness
             (values_of_type state (apply_subst (IS_TyArgs state) varTy))
-            (\<lambda>v. converged (\<lambda>m. interp_term d m (bind_mutable_local varName v state) condTm)) of
+            (\<lambda>v. converged (\<lambda>m. interp_term d m
+                                    ((bind_mutable_local varName v state) \<lparr> IS_Ghost := Ghost \<rparr>)
+                                    condTm)) of
       Inr witness \<Rightarrow> Inr (Continue (bind_mutable_local varName witness state))
     | Inl err \<Rightarrow> Inl err)"
 
@@ -1942,14 +1991,19 @@ where
     \<comment> \<open>Look up the function and check we have the correct number of arguments.\<close>
     (case fmlookup (IS_Functions state) fnName of
       Some f \<Rightarrow>
-        (if length argTms \<noteq> length (IF_Args f) then Inl TypeError  \<comment> \<open>wrong number of term args\<close>
+        (if IS_Ghost state = NotGhost \<and> IF_Ghost f = Ghost then Inl TypeError  \<comment> \<open>executable code calls a ghost function\<close>
+        else if length argTms \<noteq> length (IF_Args f) then Inl TypeError  \<comment> \<open>wrong number of term args\<close>
         else if length argTys \<noteq> length (IF_TyArgs f) then Inl TypeError  \<comment> \<open>wrong number of type args\<close>
         else
             \<comment> \<open>Evaluate each argument, both as an lvalue and as an rvalue.\<close>
             \<comment> \<open>(Both are needed, because, e.g., `a[10]` might evaluate successfully as an
                 lvalue, but fail as an rvalue, if 10 was out of bounds for the array.)\<close>
-            let refResults = map (interp_lvalue d fuel True state) argTms;
-                valResults = map (interp_term d fuel state) argTms;
+            \<comment> \<open>Each argument is evaluated in the mode of its parameter (arg_state): the
+                actual for a ghost parameter is ghost code.\<close>
+            let refResults = map (\<lambda>(arg, tm). interp_lvalue d fuel True (arg_state state arg) tm)
+                                 (zip (IF_Args f) argTms);
+                valResults = map (\<lambda>(arg, tm). interp_term d fuel (arg_state state arg) tm)
+                                 (zip (IF_Args f) argTms);
                 argTuples = zip (IF_Args f) (zip refResults valResults);
                 \<comment> \<open>Resolve each argTy against the caller's IS_TyArgs (which is
                     ground by the well-formedness invariant) before binding it.
@@ -1957,11 +2011,13 @@ where
                 calleeTyArgs = fmap_of_list
                   (zip (IF_TyArgs f)
                        (map (apply_subst (IS_TyArgs state)) argTys));
-                \<comment> \<open>Create a 'cleared state' for running the function body.\<close>
+                \<comment> \<open>Create a 'cleared state' for running the function body. The body
+                    runs in the mode of the function.\<close>
                 clearedState = state \<lparr> IS_Locals := fmempty,
                                        IS_Refs := fmempty,
                                        IS_ConstLocals := {||},
-                                       IS_TyArgs := calleeTyArgs \<rparr>
+                                       IS_TyArgs := calleeTyArgs,
+                                       IS_Ghost := IF_Ghost f \<rparr>
             in
               \<comment> \<open>Create a 'pre call state' by adding the arguments, one by one, into the
                   cleared state.\<close>
@@ -1973,7 +2029,9 @@ where
                       returning RuntimeError if a violation is found. (This check requires
                       another call to interp_lvalue, this time with writable = False, for each
                       argument.)\<close>
-                  (case call_args_alias (IF_Args f) (map (interp_lvalue d fuel False state) argTms) of
+                  (case call_args_alias (IF_Args f)
+                          (map (\<lambda>(arg, tm). interp_lvalue d fuel False (arg_state state arg) tm)
+                               (zip (IF_Args f) argTms)) of
                     Some err \<Rightarrow> Inl err
                   | None \<Rightarrow>
                   \<comment> \<open>Now delegate to 'checked_call' to run the pre- and post-condition checks,
@@ -2035,43 +2093,59 @@ lemma interp_function_call_InrE:
     and "length argTms = length (IF_Args f)"
     and "length argTys = length (IF_TyArgs f)"
     and "fold process_one_arg
-           (zip (IF_Args f) (zip (map (interp_writable_lvalue d fuel state) argTms)
-                                 (map (interp_term d fuel state) argTms)))
+           (zip (IF_Args f)
+                (zip (map (\<lambda>(arg, tm). interp_writable_lvalue d fuel (arg_state state arg) tm)
+                          (zip (IF_Args f) argTms))
+                     (map (\<lambda>(arg, tm). interp_term d fuel (arg_state state arg) tm)
+                          (zip (IF_Args f) argTms))))
            (Inr (state \<lparr> IS_Locals := fmempty, IS_Refs := fmempty, IS_ConstLocals := {||},
                          IS_TyArgs := fmap_of_list (zip (IF_TyArgs f)
-                                        (map (apply_subst (IS_TyArgs state)) argTys)) \<rparr>))
+                                        (map (apply_subst (IS_TyArgs state)) argTys)),
+                         IS_Ghost := IF_Ghost f \<rparr>))
          = Inr preCallState"
     and "call_body (interp_statement_list d fuel) state f
-           (map (interp_writable_lvalue d fuel state) argTms)
-           (map (interp_term d fuel state) argTms) preCallState = Inr r"
+           (map (\<lambda>(arg, tm). interp_writable_lvalue d fuel (arg_state state arg) tm)
+                (zip (IF_Args f) argTms))
+           (map (\<lambda>(arg, tm). interp_term d fuel (arg_state state arg) tm)
+                (zip (IF_Args f) argTms)) preCallState = Inr r"
+    and "IS_Ghost state = NotGhost \<Longrightarrow> IF_Ghost f = NotGhost"
 proof (cases "fmlookup (IS_Functions state) fnName")
   case None
   with H show ?thesis by simp
 next
   case lk: (Some f)
   show ?thesis
-  proof (cases "length argTms \<noteq> length (IF_Args f) \<or> length argTys \<noteq> length (IF_TyArgs f)")
+  proof (cases "(IS_Ghost state = NotGhost \<and> IF_Ghost f = Ghost)
+                \<or> length argTms \<noteq> length (IF_Args f) \<or> length argTys \<noteq> length (IF_TyArgs f)")
     case True
     with H lk show ?thesis by (auto split: if_split_asm)
   next
     case len: False
     hence len_args: "length argTms = length (IF_Args f)"
-      and len_tys: "length argTys = length (IF_TyArgs f)" by auto
-    let ?refResults = "map (interp_writable_lvalue d fuel state) argTms"
-    let ?valResults = "map (interp_term d fuel state) argTms"
+      and len_tys: "length argTys = length (IF_TyArgs f)"
+      and ngh: "\<not> (IS_Ghost state = NotGhost \<and> IF_Ghost f = Ghost)" by auto
+    from ngh have gh: "IS_Ghost state = NotGhost \<Longrightarrow> IF_Ghost f = NotGhost"
+      by (cases "IF_Ghost f") auto
+    let ?refResults = "map (\<lambda>(arg, tm). interp_writable_lvalue d fuel (arg_state state arg) tm)
+                           (zip (IF_Args f) argTms)"
+    let ?valResults = "map (\<lambda>(arg, tm). interp_term d fuel (arg_state state arg) tm)
+                           (zip (IF_Args f) argTms)"
     let ?calleeTyArgs = "fmap_of_list (zip (IF_TyArgs f) (map (apply_subst (IS_TyArgs state)) argTys))"
     let ?clearedState = "state \<lparr> IS_Locals := fmempty, IS_Refs := fmempty,
                                   IS_ConstLocals := {||},
-                                  IS_TyArgs := ?calleeTyArgs \<rparr>"
+                                  IS_TyArgs := ?calleeTyArgs,
+                                  IS_Ghost := IF_Ghost f \<rparr>"
     show ?thesis
     proof (cases "fold process_one_arg (zip (IF_Args f) (zip ?refResults ?valResults))
                     (Inr ?clearedState)")
       case (Inl err)
-      with H lk len show ?thesis by (simp add: Let_def)
+      with H lk len_args len_tys ngh show ?thesis by (simp add: Let_def)
     next
       case fold: (Inr preCallState)
-      from H lk len fold
-      have "(case call_args_alias (IF_Args f) (map (interp_lvalue d fuel False state) argTms) of
+      from H lk len_args len_tys ngh fold
+      have "(case call_args_alias (IF_Args f)
+                    (map (\<lambda>(arg, tm). interp_lvalue d fuel False (arg_state state arg) tm)
+                         (zip (IF_Args f) argTms)) of
                Some err \<Rightarrow> Inl err
              | None \<Rightarrow> checked_call (interp_term_list d fuel) f ?refResults ?valResults
                          ?calleeTyArgs ?clearedState
@@ -2086,7 +2160,7 @@ next
       from checked_call_Inr[OF this]
       have body: "call_body (interp_statement_list d fuel) state f ?refResults ?valResults
                     preCallState = Inr r" .
-      show ?thesis by (rule that[OF lk len_args len_tys fold body])
+      show ?thesis by (rule that[OF lk len_args len_tys fold body gh])
     qed
   qed
 qed
@@ -2095,8 +2169,28 @@ qed
 lemma interp_function_call_Inr_no_alias:
   assumes H: "interp_function_call d (Suc fuel) state fnName argTys argTms = Inr r"
     and lk: "fmlookup (IS_Functions state) fnName = Some f"
-  shows "call_args_alias (IF_Args f) (map (interp_lvalue d fuel False state) argTms) = None"
+  shows "call_args_alias (IF_Args f)
+           (map (\<lambda>(arg, tm). interp_lvalue d fuel False (arg_state state arg) tm)
+                (zip (IF_Args f) argTms)) = None"
   using H lk by (auto simp: Let_def split: if_split_asm sum.splits option.splits)
+
+(* A call of a ghost function from executable code is a TypeError. *)
+lemma interp_function_call_ghost_from_exec:
+  assumes "fmlookup (IS_Functions state) fnName = Some f"
+    and "IS_Ghost state = NotGhost" and "IF_Ghost f = Ghost"
+  shows "interp_function_call d (Suc fuel) state fnName argTys argTms = Inl TypeError"
+  using assms by simp
+
+(* When the mode of a state is already g, setting it to g changes nothing. This
+   is how the override of a NotGhost statement, or of the argument for a
+   NotGhost parameter, disappears in executable code. *)
+lemma IS_Ghost_update_same:
+  "IS_Ghost state = g \<Longrightarrow> state \<lparr> IS_Ghost := g \<rparr> = state"
+  by auto
+
+lemma arg_state_NotGhost_param [simp]:
+  "arg_state state (n, vr, NotGhost) = state"
+  by (simp add: param_mode_def)
 
 
 end

@@ -38,7 +38,8 @@ datatype InterpStateError =
 (* ========================================================================== *)
 
 (* The state before globals and functions are installed: everything empty
-   except the datatype tables, the world and the extern allocation oracle. *)
+   except the datatype tables, the world and the extern allocation oracle.
+   The mode is NotGhost (executable code). *)
 definition base_interp_state ::
   "CoreTyEnv \<Rightarrow> 'w \<Rightarrow> (string \<Rightarrow> CoreAllocLevel \<Rightarrow> nat \<Rightarrow> bool)
    \<Rightarrow> 'w InterpState" where
@@ -49,6 +50,7 @@ definition base_interp_state ::
        IS_Store = [],
        IS_ConstLocals = {||},
        IS_TyArgs = fmempty,
+       IS_Ghost = NotGhost,
        IS_Datatypes = TE_Datatypes env,
        IS_DataCtors = TE_DataCtors env,
        IS_DataCtorsByType = TE_DataCtorsByType env,
@@ -61,15 +63,15 @@ definition base_interp_state ::
 (* Functions                                                                  *)
 (* ========================================================================== *)
 
-(* The InterpFun for one function: type parameters, argument Var/Ref tags,
-   the impure flag and the contract come from the FunInfo; argument names from
+(* The InterpFun for one function: type parameters, argument Var/Ref tags and
+   ghost flags, the impure flag and the contract come from the FunInfo; argument names from
    the CoreFunction; the body is supplied by the caller (the Core body, or the
    ExternFunc for an extern function). *)
 definition make_interp_fun ::
   "FunInfo \<Rightarrow> CoreFunction \<Rightarrow> (CoreStatement list + 'w ExternFunc) \<Rightarrow> 'w InterpFun" where
   "make_interp_fun info f body =
      \<lparr> IF_TyArgs = FI_TyArgs info,
-       IF_Args = zip (CF_Args f) (map (fst \<circ> snd) (FI_TmArgs info)),
+       IF_Args = zip (CF_Args f) (map snd (FI_TmArgs info)),
        IF_Body = body,
        IF_Impure = FI_Impure info,
        IF_Ghost = FI_Ghost info,
