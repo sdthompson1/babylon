@@ -1099,7 +1099,6 @@ lemma erase_ghost_interp_fun_simps [simp]:
      = erase_ghost_args funInfos name (IF_Args f)"
   "IF_Impure (erase_ghost_interp_fun funInfos name f) = IF_Impure f"
   "IF_Ghost (erase_ghost_interp_fun funInfos name f) = IF_Ghost f"
-  "IF_ReturnType (erase_ghost_interp_fun funInfos name f) = IF_ReturnType f"
   "IF_Body (erase_ghost_interp_fun funInfos name f)
      = map_sum (erase_ghost_statement_list funInfos) id (IF_Body f)"
   "IF_Requires (erase_ghost_interp_fun funInfos name f) = []"

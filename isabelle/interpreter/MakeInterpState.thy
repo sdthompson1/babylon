@@ -75,7 +75,6 @@ definition make_interp_fun ::
        IF_Body = body,
        IF_Impure = FI_Impure info,
        IF_Ghost = FI_Ghost info,
-       IF_ReturnType = FI_ReturnType info,
        IF_Requires = FI_Requires info,
        IF_Ensures = FI_Ensures info \<rparr>"
 

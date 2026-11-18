@@ -36,7 +36,6 @@ lemma mc_interp_fun_simps [simp]:
   "IF_Body (mc_interp_fun f) = map_sum match_compile_statement_list id (IF_Body f)"
   "IF_Impure (mc_interp_fun f) = IF_Impure f"
   "IF_Ghost (mc_interp_fun f) = IF_Ghost f"
-  "IF_ReturnType (mc_interp_fun f) = IF_ReturnType f"
   "IF_Requires (mc_interp_fun f) = IF_Requires f"
   "IF_Ensures (mc_interp_fun f) = IF_Ensures f"
   by (simp_all add: mc_interp_fun_def)

@@ -752,54 +752,239 @@ lemma is_allocated_Record:
   by (auto simp: list_ex_iff)
 
 (* ========================================================================== *)
-(* Improper copies of allocated values *)
+(* Place positions and value positions: reads of allocated values *)
 (* ========================================================================== *)
 
-(* The Core language imposes some rules on copying of allocated values:
-    1. The initializer in a Var variable declaration (CoreStmt_VarDecl) must not
-       be allocated.
-    2. The rhs value in an assigment (CoreStmt_Assign) must not be allocated.
-    3. Returned values (CoreStmt_Assign) must not be allocated.
+(* Every subterm of a term or statement sits in a place position or in a value
+   position. In a place position the enclosing construct only needs to know where
+   the thing is; in a value position it needs the contents, to store them somewhere
+   else or to compute with them. Core has these rules about value positions; they
+   apply to executable (NotGhost) code only, and ghost code may copy allocated
+   values freely:
 
-   These rules only apply to NotGhost code; Ghost code may copy allocated values freely.
+    R1. A value in a value position must not be allocated.
+    R3. CoreTm_Default must not produce an allocated value, whatever position
+        it is in.
+    R4. A function that is not ghost must not return an allocated value. This
+        holds for an extern function as well as for one with a Core body.
 
-   The rationale for the rules is that in the generated C code, an allocated value
-   is a descriptor holding a pointer to a heap block; copying such values would result
-   in two descriptors "owning" the same piece of heap memory, which would lead to
-   trouble later on.
+   (R2 is the matching typing rule: a term in a value position must have a
+   complete type.)
+
+   The rationale is that in the generated C code an allocated value is a
+   descriptor holding a pointer to a heap block. A value position copies its
+   term, or may copy it, and a copy of a descriptor would be a second descriptor
+   "owning" the same piece of heap memory, which would lead to trouble later on.
 
    Violation of the rules results in a RuntimeError, signalling undefined behaviour.
    A (future) Core verifier will ensure that RuntimeErrors do not occur, provided that
    all verification conditions are discharged.
+
+   The positions are as follows.
+
+     Construct                          Value positions            Place positions
+     ---------------------------------  -------------------------  ---------------------
+     CoreTm_LitArray, CoreTm_Record,    elements, field values,
+       CoreTm_VariantCtor                 payload
+     CoreTm_Let                         the result of the body     the right-hand side
+     CoreTm_Match                       the result of the chosen   the scrutinee
+                                          arm
+     CoreTm_RecordProj,                 index terms                the base
+       CoreTm_VariantProj,
+       CoreTm_ArrayProj
+     CoreTm_Cast to an array type                                  the operand
+     CoreTm_Cast to any other type,     the operands
+       CoreTm_Unop, CoreTm_Binop
+     CoreTm_FunctionCall,                                          arguments, operand
+       CoreTm_Sizeof, CoreTm_Allocated
+     interp_lvalue                      index terms
+     CoreStmt_VarDecl with Var,         the right-hand side        the left side of the
+       CoreStmt_Assign                                               assignment
+     CoreStmt_VarDeclCall,              the call's result, after   the arguments
+       CoreStmt_AssignCall                the optional cast
+     CoreStmt_VarDecl with Ref,                                    all
+       CoreStmt_Swap, the scrutinee
+       of CoreStmt_Match
+     CoreStmt_While                     the condition
+
+   CoreStmt_Return makes no check of its own: the returned value is checked when
+   the call returns (R4, in call_body). Specification terms (assert and obtain
+   conditions, loop invariants, decreases-terms, contracts) are always ghost
+   code, so the rules do not apply to them.
+
+   In the interpreter a term is evaluated in the same way in either kind of
+   position: the difference is only whether the check below (value_position) is
+   applied to its result. In particular the right-hand side of a "let", a
+   by-value argument, and a "ref" declaration with a read-only base still copy
+   the value into a new const cell, with no check: here a place is an unchecked
+   copy.
+
+   In executable code the operands of operators, index terms and conditions are
+   scalars, so the check cannot fail there; it is applied all the same, so that
+   every value position is visible in the text of the interpreter.
 
    There are not (yet) any rules to prevent memory leaks; for example, an assignment
    is currently allowed to "clobber" an allocated lhs, thus losing the pointer to it.
    This will be addressed as future work.
 *)
 
-(* copy_check returns None if the given value may be copied, or Some RuntimeError
-   if it is an allocated value (and we are in NotGhost mode). Whether a value is
-   allocated is decided from the value alone (is_allocated), so no type is needed
-   and the check cannot give a TypeError.
-*)
-fun copy_check :: "GhostOrNot \<Rightarrow> 'w InterpState \<Rightarrow> CoreValue \<Rightarrow> InterpError option" where
-  "copy_check Ghost state val = None"
-| "copy_check NotGhost state val =
-    (if is_allocated (IS_ExternAlloc state) val then Some RuntimeError else None)"
+(* value_position is applied to the result of evaluating a subterm that sits in a
+   value position, with the state in which the subterm was evaluated. In executable
+   code it turns an allocated value into a RuntimeError; otherwise it passes the
+   result through. Whether a value is allocated is decided from the value alone
+   (is_allocated), so no type is needed and the check cannot give a TypeError. *)
+definition value_position ::
+    "'w InterpState \<Rightarrow> InterpError + CoreValue \<Rightarrow> InterpError + CoreValue" where
+  "value_position state r =
+    (case r of
+       Inr v \<Rightarrow> if IS_Ghost state = NotGhost
+                   \<and> is_allocated (IS_ExternAlloc state) v
+                then Inl RuntimeError else Inr v
+     | Inl err \<Rightarrow> Inl err)"
 
-(* copy_check only looks at the allocation oracle of the state. *)
-lemma copy_check_cong_state:
-  assumes "IS_ExternAlloc state' = IS_ExternAlloc state"
-  shows "copy_check ghost state' val = copy_check ghost state val"
-  using assms by (cases ghost) simp_all
+(* The same check for a list of values, each of them in a value position. *)
+definition value_position_list ::
+    "'w InterpState \<Rightarrow> InterpError + CoreValue list \<Rightarrow> InterpError + CoreValue list" where
+  "value_position_list state r =
+    (case r of
+       Inr vs \<Rightarrow> if IS_Ghost state = NotGhost
+                    \<and> list_ex (is_allocated (IS_ExternAlloc state)) vs
+                 then Inl RuntimeError else Inr vs
+     | Inl err \<Rightarrow> Inl err)"
 
-lemma copy_check_Ghost [simp]: "copy_check Ghost state val = None"
-  by simp
+lemma value_position_Inl [simp]: "value_position state (Inl err) = Inl err"
+  by (simp add: value_position_def)
 
-(* The only error copy_check gives is RuntimeError. *)
-lemma copy_check_cases:
-  "copy_check ghost state val = None \<or> copy_check ghost state val = Some RuntimeError"
-  by (cases ghost) simp_all
+lemma value_position_list_Inl [simp]: "value_position_list state (Inl err) = Inl err"
+  by (simp add: value_position_list_def)
+
+(* The check does nothing in ghost code. *)
+lemma value_position_Ghost [simp]:
+  "IS_Ghost state = Ghost \<Longrightarrow> value_position state r = r"
+  by (simp add: value_position_def split: sum.splits)
+
+lemma value_position_list_Ghost [simp]:
+  "IS_Ghost state = Ghost \<Longrightarrow> value_position_list state r = r"
+  by (simp add: value_position_list_def split: sum.splits)
+
+(* A result that passes the check is the result that went in, and (in executable
+   code) it is not allocated. *)
+lemma value_position_Inr_iff:
+  "value_position state r = Inr v
+   \<longleftrightarrow> r = Inr v \<and> (IS_Ghost state = NotGhost \<longrightarrow> \<not> is_allocated (IS_ExternAlloc state) v)"
+  by (auto simp: value_position_def split: sum.splits)
+
+lemma value_position_list_Inr_iff:
+  "value_position_list state r = Inr vs
+   \<longleftrightarrow> r = Inr vs \<and> (IS_Ghost state = NotGhost
+                      \<longrightarrow> (\<forall>v \<in> set vs. \<not> is_allocated (IS_ExternAlloc state) v))"
+  by (auto simp: value_position_list_def list_ex_iff split: sum.splits)
+
+lemma value_position_InrD: "value_position state r = Inr v \<Longrightarrow> r = Inr v"
+  by (simp add: value_position_Inr_iff)
+
+lemma value_position_list_InrD: "value_position_list state r = Inr vs \<Longrightarrow> r = Inr vs"
+  by (simp add: value_position_list_Inr_iff)
+
+(* The check either passes its argument through, or replaces a successful result
+   by RuntimeError: that is the only error it adds. *)
+lemma value_position_cases:
+  obtains (same) "value_position state r = r"
+  | (error) v where "r = Inr v" and "value_position state r = Inl RuntimeError"
+proof (cases r)
+  case (Inl err)
+  then show ?thesis using same by simp
+next
+  case (Inr v)
+  show ?thesis
+  proof (cases "IS_Ghost state = NotGhost \<and> is_allocated (IS_ExternAlloc state) v")
+    case True
+    with Inr show ?thesis using error by (simp add: value_position_def)
+  next
+    case False
+    with Inr show ?thesis using same by (simp add: value_position_def)
+  qed
+qed
+
+lemma value_position_list_cases:
+  obtains (same) "value_position_list state r = r"
+  | (error) vs where "r = Inr vs" and "value_position_list state r = Inl RuntimeError"
+proof (cases r)
+  case (Inl err)
+  then show ?thesis using same by simp
+next
+  case (Inr vs)
+  show ?thesis
+  proof (cases "IS_Ghost state = NotGhost \<and> list_ex (is_allocated (IS_ExternAlloc state)) vs")
+    case True
+    with Inr show ?thesis using error by (simp add: value_position_list_def)
+  next
+    case False
+    with Inr show ?thesis using same by (simp add: value_position_list_def)
+  qed
+qed
+
+lemma value_position_Inl_iff:
+  "value_position state r = Inl err
+   \<longleftrightarrow> r = Inl err \<or> (err = RuntimeError \<and> (\<exists>v. r = Inr v \<and> IS_Ghost state = NotGhost
+                                               \<and> is_allocated (IS_ExternAlloc state) v))"
+  by (auto simp: value_position_def split: sum.splits)
+
+lemma value_position_list_Inl_iff:
+  "value_position_list state r = Inl err
+   \<longleftrightarrow> r = Inl err \<or> (err = RuntimeError \<and> (\<exists>vs. r = Inr vs \<and> IS_Ghost state = NotGhost
+                            \<and> (\<exists>v \<in> set vs. is_allocated (IS_ExternAlloc state) v)))"
+  by (auto simp: value_position_list_def list_ex_iff split: sum.splits)
+
+(* The check only looks at the mode and the allocation oracle of the state. *)
+lemma value_position_cong_state:
+  assumes "IS_Ghost state' = IS_Ghost state" and "IS_ExternAlloc state' = IS_ExternAlloc state"
+  shows "value_position state' r = value_position state r"
+  using assms by (cases r) (simp_all add: value_position_def)
+
+lemma value_position_list_cong_state:
+  assumes "IS_Ghost state' = IS_Ghost state" and "IS_ExternAlloc state' = IS_ExternAlloc state"
+  shows "value_position_list state' r = value_position_list state r"
+  using assms by (cases r) (simp_all add: value_position_list_def)
+
+(* So the check is the same after a change to any other part of the state, and
+   in particular in a state with a new local variable. *)
+lemma value_position_update_irrelevant [simp]:
+  "value_position (state \<lparr> IS_Globals := gl \<rparr>) = value_position state"
+  "value_position (state \<lparr> IS_Locals := lo \<rparr>) = value_position state"
+  "value_position (state \<lparr> IS_Refs := rf \<rparr>) = value_position state"
+  "value_position (state \<lparr> IS_Store := sto \<rparr>) = value_position state"
+  "value_position (state \<lparr> IS_ConstLocals := cl \<rparr>) = value_position state"
+  "value_position (state \<lparr> IS_TyArgs := ta \<rparr>) = value_position state"
+  "value_position (state \<lparr> IS_Functions := fs \<rparr>) = value_position state"
+  "value_position (state \<lparr> IS_World := w \<rparr>) = value_position state"
+  by (rule ext, rule value_position_cong_state; simp)+
+
+lemma value_position_list_update_irrelevant [simp]:
+  "value_position_list (state \<lparr> IS_Globals := gl \<rparr>) = value_position_list state"
+  "value_position_list (state \<lparr> IS_Locals := lo \<rparr>) = value_position_list state"
+  "value_position_list (state \<lparr> IS_Refs := rf \<rparr>) = value_position_list state"
+  "value_position_list (state \<lparr> IS_Store := sto \<rparr>) = value_position_list state"
+  "value_position_list (state \<lparr> IS_ConstLocals := cl \<rparr>) = value_position_list state"
+  "value_position_list (state \<lparr> IS_TyArgs := ta \<rparr>) = value_position_list state"
+  "value_position_list (state \<lparr> IS_Functions := fs \<rparr>) = value_position_list state"
+  "value_position_list (state \<lparr> IS_World := w \<rparr>) = value_position_list state"
+  by (rule ext, rule value_position_list_cong_state; simp)+
+
+lemma value_position_bind_const_local [simp]:
+  "value_position (bind_const_local varName val state) = value_position state"
+  by (rule ext, rule value_position_cong_state; simp add: Let_def)
+
+lemma value_position_bind_mutable_local [simp]:
+  "value_position (bind_mutable_local varName val state) = value_position state"
+  by (rule ext, rule value_position_cong_state; simp add: Let_def)
+
+(* A scalar is never allocated, so it passes the check. *)
+lemma value_position_Bool [simp]: "value_position state (Inr (CV_Bool b)) = Inr (CV_Bool b)"
+  by (simp add: value_position_def)
+
+lemma value_position_list_Nil [simp]: "value_position_list state (Inr []) = Inr []"
+  by (simp add: value_position_list_def)
 
 
 (* ========================================================================== *)
@@ -1240,8 +1425,10 @@ lemma checked_call_no_contract:
 (* This is the last step of a function call. It runs the body statement list, or calls the
    external function, and returns the resulting post-call interpreter state, and the return value.
 
-   For a Core body, when the function is not ghost, the returned value must not be
-   allocated (copy_check): see the comment on copy_check.
+   When the function is not ghost, the returned value must not be allocated (R4,
+   see "Place positions and value positions" above). This applies to a Core body
+   and to an external function alike. The check is value_position, applied in the
+   mode of the function.
 
    Inputs:
     - run: statement-list evaluator (interp_statement_list, partially applied to depth and fuel)
@@ -1266,11 +1453,10 @@ definition call_body ::
            producing postCallState and a return value.\<close>
         (case run preCallState bodyStmts of
           Inr (Return postCallState retVal) \<Rightarrow>
-            \<comment> \<open>A non-ghost function must not return an allocated value (rule 3 of
-               copy_check).\<close>
-            (case copy_check (IF_Ghost f) preCallState retVal of
-               Some err \<Rightarrow> Inl err
-             | None \<Rightarrow>
+            \<comment> \<open>A non-ghost function must not return an allocated value (R4).\<close>
+            (case value_position (state \<lparr> IS_Ghost := IF_Ghost f \<rparr>) (Inr retVal) of
+               Inl err \<Rightarrow> Inl err
+             | Inr _ \<Rightarrow>
                  \<comment> \<open>Restore the state how it was before the call (keeping ref updates)
                     and pass the return value back to the caller.\<close>
                  Inr (restore_scope state postCallState, retVal))
@@ -1288,7 +1474,12 @@ definition call_body ::
              (newWorld, refUpdates, retVal) = externFun (IS_World state) vals;
              state' = state \<lparr> IS_World := newWorld \<rparr>
         in case apply_ref_updates state' refs refUpdates of
-          Inr finalState \<Rightarrow> Inr (finalState, retVal)
+          Inr finalState \<Rightarrow>
+            \<comment> \<open>A non-ghost external function must not return an allocated value
+               either (R4).\<close>
+            (case value_position (state \<lparr> IS_Ghost := IF_Ghost f \<rparr>) (Inr retVal) of
+               Inl err \<Rightarrow> Inl err
+             | Inr _ \<Rightarrow> Inr (finalState, retVal))
         | Inl err \<Rightarrow> Inl err))"
 
 (* The evaluator is only ever applied to the body statements, in preCallState.
@@ -1620,7 +1811,7 @@ where
       Some (sign, bits) \<Rightarrow> Inr (CV_FiniteInt sign bits i)
     | None \<Rightarrow> Inl TypeError)"
 | "interp_term d (Suc fuel) state (CoreTm_LitArray _ tms) =
-    (case interp_term_list d fuel state tms of
+    (case value_position_list state (interp_term_list d fuel state tms) of
       Inl err \<Rightarrow> Inl err
     | Inr vals \<Rightarrow> Inr (make_1d_array vals))"
 
@@ -1636,37 +1827,43 @@ where
           Some val \<Rightarrow> Inr val
         | None \<Rightarrow> Inl TypeError)))"  \<comment> \<open>name not in scope\<close>
 
-  (* Cast (delegates to cast_value) *)
+  (* Cast (delegates to cast_value). The operand of an array cast is in a place
+     position (the cast makes a view of the array and reads nothing); the operand
+     of any other cast is in a value position. *)
 | "interp_term d (Suc fuel) state (CoreTm_Cast targetTy tm) =
-    (case interp_term d fuel state tm of
+    (let operand = interp_term d fuel state tm in
+     case (if is_array_type targetTy then operand else value_position state operand) of
       Inl err \<Rightarrow> Inl err
     | Inr v \<Rightarrow> cast_value targetTy v)"
 
   (* Unary operator *)
 | "interp_term d (Suc fuel) state (CoreTm_Unop op tm) =
-    (case interp_term d fuel state tm of
+    (case value_position state (interp_term d fuel state tm) of
       Inl err \<Rightarrow> Inl err
     | Inr val \<Rightarrow> eval_unop op val)"
 
   (* Binary operator *)
 | "interp_term d (Suc fuel) state (CoreTm_Binop op lhsTm rhsTm) =
-    (case interp_term d fuel state lhsTm of
+    (case value_position state (interp_term d fuel state lhsTm) of
       Inl err \<Rightarrow> Inl err
     | Inr lhsVal \<Rightarrow>
         (case short_circuit op lhsVal of
           Some result \<Rightarrow> Inr result
         | None \<Rightarrow>
-            (case interp_term d fuel state rhsTm of
+            (case value_position state (interp_term d fuel state rhsTm) of
               Inl err \<Rightarrow> Inl err
             | Inr rhsVal \<Rightarrow> eval_binop op lhsVal rhsVal)))"
 
-  (* Let *)
+  (* Let. The right-hand side is in a place position: its value is bound with no
+     check. The result of the body is in a value position. *)
 | "interp_term d (Suc fuel) state (CoreTm_Let varName rhsTm bodyTm) =
     (case interp_term d fuel state rhsTm of
       Inl err \<Rightarrow> Inl err
-    | Inr rhsVal \<Rightarrow> interp_term d fuel (bind_const_local varName rhsVal state) bodyTm)"
+    | Inr rhsVal \<Rightarrow>
+        value_position (bind_const_local varName rhsVal state)
+          (interp_term d fuel (bind_const_local varName rhsVal state) bodyTm))"
 
-  (* Function call *)
+  (* Function call. The arguments are in place positions. *)
 | "interp_term d (Suc fuel) state (CoreTm_FunctionCall fnName argTypes argTms) =
     (if is_pure_fun state fnName then
       (case interp_function_call d fuel state fnName argTypes argTms of
@@ -1677,17 +1874,17 @@ where
 
   (* Variant construction *)
 | "interp_term d (Suc fuel) state (CoreTm_VariantCtor ctorName _ payloadTm) =
-    (case interp_term d fuel state payloadTm of
+    (case value_position state (interp_term d fuel state payloadTm) of
       Inl err \<Rightarrow> Inl err
     | Inr payloadValue \<Rightarrow> Inr (CV_Variant ctorName payloadValue))"
 
   (* Record construction *)
 | "interp_term d (Suc fuel) state (CoreTm_Record nameTermPairs) =
-    (case interp_term_list d fuel state (map snd nameTermPairs) of
+    (case value_position_list state (interp_term_list d fuel state (map snd nameTermPairs)) of
       Inl err \<Rightarrow> Inl err
     | Inr vals \<Rightarrow> Inr (CV_Record (zip (map fst nameTermPairs) vals)))"
 
-  (* Record projection *)
+  (* Record projection. The base of a projection is in a place position. *)
 | "interp_term d (Suc fuel) state (CoreTm_RecordProj tm fldName) =
     (case interp_term d fuel state tm of
       Inr (CV_Record nameTmPairs) \<Rightarrow>
@@ -1706,11 +1903,12 @@ where
     | Inr _ \<Rightarrow> Inl TypeError  \<comment> \<open>not a variant value\<close>
     | Inl err \<Rightarrow> Inl err)"
 
-  (* Array projection (indexing) *)
+  (* Array projection (indexing). The base is in a place position; the index
+     terms are in value positions. *)
 | "interp_term d (Suc fuel) state (CoreTm_ArrayProj arrayTm idxTms) =
     (case interp_term d fuel state arrayTm of
       Inr (CV_Array _ _ elementMap) \<Rightarrow>
-        (case interp_term_list d fuel state idxTms of
+        (case value_position_list state (interp_term_list d fuel state idxTms) of
           Inr indexVals \<Rightarrow>
             (case interpret_index_vals indexVals of
               Inr indices \<Rightarrow>
@@ -1722,16 +1920,17 @@ where
     | Inr _ \<Rightarrow> Inl TypeError  \<comment> \<open>not an array value\<close>
     | Inl err \<Rightarrow> Inl err)"  \<comment> \<open>error evaluating array term\<close>
 
-  (* Pattern match *)
+  (* Pattern match. The scrutinee is in a place position; the result of the
+     chosen arm is in a value position. *)
 | "interp_term d (Suc fuel) state (CoreTm_Match scrutTm arms) =
     (case interp_term d fuel state scrutTm of
       Inr scrutVal \<Rightarrow>
         (case find_matching_arm scrutVal arms of
-          Inr armTm \<Rightarrow> interp_term d fuel state armTm
+          Inr armTm \<Rightarrow> value_position state (interp_term d fuel state armTm)
         | Inl err \<Rightarrow> Inl err)
     | Inl err \<Rightarrow> Inl err)"
 
-  (* Sizeof *)
+  (* Sizeof. The operand is in a place position. *)
 | "interp_term d (Suc fuel) state (CoreTm_Sizeof tm) =
     (case interp_term d fuel state tm of
       Inr (CV_Array _ sizes _) \<Rightarrow> Inr (array_size_to_value sizes)
@@ -1748,16 +1947,19 @@ where
       (\<lambda>v. converged (\<lambda>m. interp_term d m (bind_const_local varName v state) bodyTm))"
 
   (* Allocated: evaluate the operand, then delegate to is_allocated. The type
-     annotation is not read: is_allocated decides from the value alone. *)
+     annotation is not read: is_allocated decides from the value alone. The
+     operand is in a place position. *)
 | "interp_term d (Suc fuel) state (CoreTm_Allocated _ tm) =
     (case interp_term d fuel state tm of
       Inl err \<Rightarrow> Inl err
     | Inr v \<Rightarrow> Inr (CV_Bool (is_allocated (IS_ExternAlloc state) v)))"
 
   (* Default value: resolve any current-frame tyvars via IS_TyArgs, then
-     delegate to the recursive default_value helper. *)
+     delegate to the recursive default_value helper. In executable code the
+     default value must not be allocated, whatever position the term is in
+     (R3). *)
 | "interp_term _ (Suc fuel) state (CoreTm_Default ty) =
-    default_value fuel state (apply_subst (IS_TyArgs state) ty)"
+    value_position state (default_value fuel state (apply_subst (IS_TyArgs state) ty))"
 
   (* Evaluate an lvalue to an (addr, path) pair.
 
@@ -1773,7 +1975,8 @@ where
      This function also doesn't check for "bad paths" (e.g. an incorrect field name, or an
      array index out of range); that happens later, when the path is used. It does, however,
      check whether the base variable name exists (in IS_Locals or IS_Refs) and whether any
-     array indices can be successfully evaluated. *)
+     array indices can be successfully evaluated. The index terms are in value
+     positions. *)
 | "interp_lvalue _ 0 _ _ _ = Inl InsufficientFuel"
 | "interp_lvalue d (Suc fuel) writable state tm =
     (case tm of
@@ -1797,7 +2000,7 @@ where
     | CoreTm_ArrayProj tm indexTms \<Rightarrow>
         (case interp_lvalue d fuel writable state tm of
           Inr (addr, path) \<Rightarrow>
-            (case interp_term_list d fuel state indexTms of
+            (case value_position_list state (interp_term_list d fuel state indexTms) of
               Inr indexVals \<Rightarrow>
                 (case interpret_index_vals indexVals of
                   Inr indices \<Rightarrow> Inr (addr, path @ [LVPath_ArrayProj indices])
@@ -1833,30 +2036,31 @@ where
 | "interp_statement d (Suc fuel) state (CoreStmt_VarDecl declGhost varName Var varTy initialTm) =
     \<comment> \<open>The initializer is an ordinary (pure) term; impure-call initializers use
         CoreStmt_VarDeclCall. The state is unchanged by evaluating it.
-        A non-ghost declaration must not copy an allocated value (rule 1 of
-        copy_check). The initializer is evaluated in the declaration's mode.\<close>
-    (case interp_term d fuel (state \<lparr> IS_Ghost := declGhost \<rparr>) initialTm of
-       Inr initialVal \<Rightarrow>
-         (case copy_check declGhost state initialVal of
-            Some err \<Rightarrow> Inl err
-          | None \<Rightarrow> Inr (Continue (bind_mutable_local varName initialVal state)))
+        The initializer is evaluated in the declaration's mode, and is in a value
+        position.\<close>
+    (case value_position (state \<lparr> IS_Ghost := declGhost \<rparr>)
+            (interp_term d fuel (state \<lparr> IS_Ghost := declGhost \<rparr>) initialTm) of
+       Inr initialVal \<Rightarrow> Inr (Continue (bind_mutable_local varName initialVal state))
      | Inl err \<Rightarrow> Inl err)"
 
 | "interp_statement d (Suc fuel) state (CoreStmt_VarDeclCall declGhost varName _ castOpt fnName argTys argTms) =
     \<comment> \<open>Run the (possibly impure) call, observing its state effect, then apply the
         optional cast to the returned value before binding it. The call is made in
         the declaration's mode; the state that comes back carries that mode, so the
-        mode of the original state is put back.\<close>
+        mode of the original state is put back. The call's result, after the cast,
+        is in a value position (in the declaration's mode).\<close>
     (case interp_function_call d fuel (state \<lparr> IS_Ghost := declGhost \<rparr>) fnName argTys argTms of
        Inr (newState, retVal) \<Rightarrow>
-         (case apply_cast_opt castOpt retVal of
+         (case value_position (state \<lparr> IS_Ghost := declGhost \<rparr>)
+                 (apply_cast_opt castOpt retVal) of
             Inr initialVal \<Rightarrow>
               Inr (Continue (bind_mutable_local varName initialVal
                                (newState \<lparr> IS_Ghost := IS_Ghost state \<rparr>)))
           | Inl err \<Rightarrow> Inl err)
      | Inl err \<Rightarrow> Inl err)"
 | "interp_statement d (Suc fuel) state (CoreStmt_VarDecl declGhost varName Ref _ lvalueTm) =
-    \<comment> \<open>The lvalue term is evaluated in the declaration's mode.\<close>
+    \<comment> \<open>The lvalue term is evaluated in the declaration's mode. It is in a place
+        position (also when its value is copied, in the read-only case below).\<close>
     (case lvalue_base_name lvalueTm of
       Some baseName \<Rightarrow>
         \<comment> \<open>Determine whether the base is read-only. The base is read-only iff:
@@ -1885,21 +2089,19 @@ where
 | "interp_statement d (Suc fuel) state (CoreStmt_Assign assignGhost _ lhsLvalue rhsTm) =
     \<comment> \<open>Resolve the lhs to an address and path; the rhs is an ordinary (pure)
         term (impure-call rhs's use CoreStmt_AssignCall). State is unchanged by
-        evaluating it. A non-ghost assignment must not copy an allocated value
-        (rule 2 of copy_check). The type annotation is not read. Both sides are
-        evaluated in the assignment's mode.\<close>
+        evaluating it. The type annotation is not read. Both sides are evaluated
+        in the assignment's mode. The lhs is in a place position and the rhs in a
+        value position.\<close>
     (case interp_lvalue d fuel True (state \<lparr> IS_Ghost := assignGhost \<rparr>) lhsLvalue of
       Inr (addr, path) \<Rightarrow>
-        (case interp_term d fuel (state \<lparr> IS_Ghost := assignGhost \<rparr>) rhsTm of
+        (case value_position (state \<lparr> IS_Ghost := assignGhost \<rparr>)
+                (interp_term d fuel (state \<lparr> IS_Ghost := assignGhost \<rparr>) rhsTm) of
           Inr rhsVal \<Rightarrow>
-            (case copy_check assignGhost state rhsVal of
-               Some err \<Rightarrow> Inl err
-             | None \<Rightarrow>
-                 (let oldVal = IS_Store state ! addr in
-                 case update_value_at_path oldVal path rhsVal of
-                   Inr newVal \<Rightarrow>
-                     Inr (Continue (state \<lparr> IS_Store := (IS_Store state)[addr := newVal] \<rparr>))
-                 | Inl err \<Rightarrow> Inl err))
+            (let oldVal = IS_Store state ! addr in
+            case update_value_at_path oldVal path rhsVal of
+              Inr newVal \<Rightarrow>
+                Inr (Continue (state \<lparr> IS_Store := (IS_Store state)[addr := newVal] \<rparr>))
+            | Inl err \<Rightarrow> Inl err)
         | Inl err \<Rightarrow> Inl err)
     | Inl err \<Rightarrow> Inl err)"
 
@@ -1910,10 +2112,12 @@ where
         the element written is determined by the new value of i, not the old.
         The call is made in the assignment's mode. The state that comes back
         carries that mode: the lhs is resolved in it, and the mode of the original
-        state is put back in the final state.\<close>
+        state is put back in the final state. The call's result, after the cast,
+        is in a value position (in the assignment's mode).\<close>
     (case interp_function_call d fuel (state \<lparr> IS_Ghost := assignGhost \<rparr>) fnName argTys argTms of
       Inr (newState, retVal) \<Rightarrow>
-        (case apply_cast_opt castOpt retVal of
+        (case value_position (state \<lparr> IS_Ghost := assignGhost \<rparr>)
+                (apply_cast_opt castOpt retVal) of
           Inr rhsVal \<Rightarrow>
             (case interp_lvalue d fuel True newState lhsLvalue of
               Inr (addr, path) \<Rightarrow>
@@ -1929,7 +2133,7 @@ where
 
   (* Swap *)
 | "interp_statement d (Suc fuel) state (CoreStmt_Swap swapGhost lhsTm rhsTm) =
-    \<comment> \<open>Both lvalues are resolved in the swap's mode.\<close>
+    \<comment> \<open>Both lvalues are resolved in the swap's mode. Both are in place positions.\<close>
     (case interp_lvalue d fuel True (state \<lparr> IS_Ghost := swapGhost \<rparr>) lhsTm of
       Inl err \<Rightarrow> Inl err
     | Inr lhsLvalue \<Rightarrow>
@@ -1941,7 +2145,8 @@ where
             | Inr newState \<Rightarrow> Inr (Continue newState))))"
 
   (* Return. The term is evaluated in the state as it is, i.e. in the mode of
-     the function being run. *)
+     the function being run. No check is made here: the returned value is checked
+     when the call returns (call_body). *)
 | "interp_statement d (Suc fuel) state (CoreStmt_Return tm) =
     (case interp_term d fuel state tm of
       Inr val \<Rightarrow> Inr (Return state val)
@@ -1956,7 +2161,8 @@ where
         again, in the state the next iteration will start from, and it is a RuntimeError
         if its value has not strictly decreased (see decreases_error).
       - The invariants and the decreases-term are ghost code. The condition is
-        evaluated in the loop's mode. The body runs in the state as it is. *)
+        evaluated in the loop's mode, and is in a value position. The body runs in
+        the state as it is. *)
 | "interp_statement d (Suc fuel) state (CoreStmt_While whileGhost condTm invars decr bodyStmts) =
     (case interp_term_list d fuel (state \<lparr> IS_Ghost := Ghost \<rparr>) invars of
       Inl err \<Rightarrow> Inl err
@@ -1964,7 +2170,8 @@ where
         (case conditions_error invarVals of
           Some err \<Rightarrow> Inl err
         | None \<Rightarrow>
-            (case interp_term d fuel (state \<lparr> IS_Ghost := whileGhost \<rparr>) condTm of
+            (case value_position (state \<lparr> IS_Ghost := whileGhost \<rparr>)
+                    (interp_term d fuel (state \<lparr> IS_Ghost := whileGhost \<rparr>) condTm) of
               Inr (CV_Bool True) \<Rightarrow>
                 (case eval_decreases (interp_term d fuel (state \<lparr> IS_Ghost := Ghost \<rparr>)) decr of
                   Inl err \<Rightarrow> Inl err
@@ -1987,8 +2194,8 @@ where
             | Inr _ \<Rightarrow> Inl TypeError
             | Inl err \<Rightarrow> Inl err)))"
 
-  (* Pattern match. The scrutinee is evaluated in the match's mode; the chosen
-     arm runs in the state as it is. *)
+  (* Pattern match. The scrutinee is evaluated in the match's mode, and is in a
+     place position; the chosen arm runs in the state as it is. *)
 | "interp_statement d (Suc fuel) state (CoreStmt_Match matchGhost scrutTm arms) =
     (case interp_term d fuel (state \<lparr> IS_Ghost := matchGhost \<rparr>) scrutTm of
       Inr scrutVal \<Rightarrow>

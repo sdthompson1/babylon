@@ -34,9 +34,8 @@ record 'w InterpFun =
      write to the external world). *)
   IF_Impure :: bool
 
-  (* Whether the function is ghost, and its (declared, possibly generic) return type. *)
+  (* Whether the function is ghost. *)
   IF_Ghost :: GhostOrNot
-  IF_ReturnType :: CoreType
 
   (* The function's contract, as in FI_Requires / FI_Ensures. These refer to the
      parameters by the positional names of ContractNames.thy. *)
