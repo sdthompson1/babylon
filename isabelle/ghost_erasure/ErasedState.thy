@@ -28,8 +28,9 @@ begin
 (* Erase the function named name: drop its ghost parameters, erase the ghost
    code from its body, and drop its contract (which is ghost code). The
    function signatures funInfos say which parameters of the function are ghost
-   (the InterpFun does not record this), and which arguments of the calls in
-   the body are ghost. *)
+   (IF_Args carries the same flags, see fun_info_matches_interp_fun, but
+   erasure reads the signatures throughout), and which arguments of the calls
+   in the body are ghost. *)
 definition erase_ghost_interp_fun ::
     "(string, FunInfo) fmap \<Rightarrow> string \<Rightarrow> 'w InterpFun \<Rightarrow> 'w InterpFun" where
   "erase_ghost_interp_fun funInfos name f =

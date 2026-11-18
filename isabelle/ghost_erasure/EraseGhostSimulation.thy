@@ -35,7 +35,14 @@ begin
 
    A ghost argument of a call is evaluated, and bound to its parameter, in the
    full state only. Dropping it does not change the fuel that the other
-   arguments get, because a call evaluates each argument with the same fuel. *)
+   arguments get, because a call evaluates each argument with the same fuel.
+
+   The two states are in the same mode (IS_Ghost, part of state_erased). The
+   erased program sets the mode where the full program does: a statement that
+   erasure keeps has the same ghost flag, a function that is not ghost keeps
+   its IF_Ghost, and the parameters that erasure keeps are not ghost, so their
+   arguments are evaluated in the mode of the call in both runs. Nothing is
+   assumed about which mode the states are in. *)
 
 
 (* ========================================================================== *)

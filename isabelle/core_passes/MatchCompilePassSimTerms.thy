@@ -18,13 +18,18 @@ begin
    function table funs of the state, with funs_match_compilable genv funs.
 
    Each claim says: if the original run from a state `full` that matches a
-   well-formed environment succeeds, at the given fuel, on a term (statement,
-   ...) that is well-typed in NotGhost mode in that environment and has
-   variable scrutinees, then the compiled run from mc_state full succeeds at
-   some fuel with the same value (the compiled state). The hypotheses on the
-   environment are what the type soundness theorem needs to tell us that the
-   scrutinee of a compiled match is a well-typed value, which is what the
-   match compiler's semantics (compile_match_semantics) is about. *)
+   well-formed environment and is in executable mode (IS_Ghost full =
+   NotGhost) succeeds, at the given fuel, on a term (statement, ...) that is
+   well-typed in NotGhost mode in that environment and has variable
+   scrutinees, then the compiled run from mc_state full succeeds at some fuel
+   with the same value (the compiled state). The hypotheses on the
+   environment and on the mode are what the type soundness theorem needs to
+   tell us that the scrutinee of a compiled match is a well-typed value, which
+   is what the match compiler's semantics (compile_match_semantics) is about.
+   For statements, type soundness also asks that the enclosing function is not
+   ghost (TE_FunctionGhost env = NotGhost).
+
+   mc_state keeps the mode, so the compiled run is in executable mode too. *)
 
 (* With no ghost parameters, every argument of a call is typed in the ambient
    NotGhost mode. *)
@@ -94,9 +99,12 @@ definition stmts_sim :: "nat \<Rightarrow> CoreStatement list \<Rightarrow> bool
        (\<exists>fuel'. interp_statement_list d fuel' (mc_state full) (match_compile_statement_list stmts)
                   = Inr (mc_result res)))"
 
-(* The call claim takes the typing of the call apart, in the form that the
-   type soundness theorem uses, so that it serves both a pure call in a term
-   and an impure call in a statement. *)
+(* The call claim takes the typing of the call apart, so that it serves both a
+   pure call in a term and an impure call in a statement. Every argument is
+   typed in NotGhost mode: no function has a ghost parameter
+   (funs_match_compilable), so this is the form that the type soundness theorem
+   asks for, with each argument typed in the mode of its parameter
+   (call_args_param_modes in MatchCompilePassSimStmts.thy). *)
 definition call_sim :: "nat \<Rightarrow> string \<Rightarrow> CoreType list \<Rightarrow> CoreTerm list \<Rightarrow> bool" where
   "call_sim fuel fnName tyArgs argTms \<longleftrightarrow>
     (\<forall>env storeTyping (full :: 'w InterpState) funInfo newFull retVal.

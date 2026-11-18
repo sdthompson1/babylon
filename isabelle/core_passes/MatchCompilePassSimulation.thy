@@ -6,7 +6,8 @@ begin
 
    If a statement list (or a function call) that is well-typed in NotGhost
    mode, ghost-free and has variable scrutinees runs to a result from a state
-   that matches its environment, then the compiled statement list runs to the
+   that matches its environment and is in executable mode (IS_Ghost =
+   NotGhost), then the compiled statement list runs to the
    same result, with the function bodies compiled (mc_state, mc_result), from
    the compiled state, at some fuel. The fuel of the compiled run is
    existentially quantified because the compiled program nests extra Match
@@ -221,8 +222,9 @@ proof -
   from stmts_simD[OF this refl refl sme wf gm ng fgh T gf ok H] show ?thesis .
 qed
 
-(* The simulation for a function call (the hypotheses on the call are those
-   of the type soundness theorem, interp_function_call_sound). *)
+(* The simulation for a function call. The hypotheses on the call are those
+   of the type soundness theorem (interp_function_call_sound) for a call from
+   executable code of a function without ghost parameters. *)
 theorem match_compile_simulation_call:
   fixes full :: "'w InterpState"
   assumes fmc: "funs_match_compilable env (IS_Functions full)"
