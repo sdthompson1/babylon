@@ -42,7 +42,13 @@ begin
    erasure keeps has the same ghost flag, a function that is not ghost keeps
    its IF_Ghost, and the parameters that erasure keeps are not ghost, so their
    arguments are evaluated in the mode of the call in both runs. Nothing is
-   assumed about which mode the states are in. *)
+   assumed about which mode the states are in.
+
+   The check on a value position (value_position, CoreInterp.thy) looks only at
+   the mode and the allocation oracle of the state, which the two states share
+   (state_erased_value_position). Every value that the erased run checks is a
+   value that the full run checked in the same mode, and the full run
+   succeeded, so the checks of the erased run pass. *)
 
 
 (* ========================================================================== *)
@@ -163,6 +169,21 @@ lemma state_erased_reset_ghost:
            (newErased \<lparr> IS_Ghost := IS_Ghost erased \<rparr>)"
   using state_erased_set_ghost[OF assms(2), of "IS_Ghost full"] state_erasedD(11)[OF assms(1)]
   by simp
+
+(* Related states are in the same mode and have the same allocation oracle, so
+   the check on a value position (value_position) comes out the same in both:
+   a check that passed in the full run passes in the erased run. *)
+lemma state_erased_value_position:
+  assumes "state_erased env emb full erased"
+  shows "value_position erased = value_position full"
+    and "value_position_list erased = value_position_list full"
+proof -
+  note D = state_erasedD[OF assms]
+  show "value_position erased = value_position full"
+    by (rule ext, rule value_position_cong_state[OF D(11) D(10)])
+  show "value_position_list erased = value_position_list full"
+    by (rule ext, rule value_position_list_cong_state[OF D(11) D(10)])
+qed
 
 
 (* ========================================================================== *)
@@ -315,6 +336,8 @@ next
       note D = state_erasedD[OF rel]
       note sub = IH_term[OF fn_eq funs_eq rel]
       note subs = IH_list[OF fn_eq funs_eq rel]
+      \<comment> \<open>The check on a value position is the same in both states. \<close>
+      note vpE = state_erased_value_position[OF rel]
 
       \<comment> \<open>The erased term evaluates in the erased state as the term does in
           the full state. \<close>
@@ -333,7 +356,7 @@ next
           l: "interp_term_list d fuel full elems = Inr vals"
           by (cases "interp_term_list d fuel full elems") simp_all
         note lE = subs[OF wgs l]
-        show ?thesis using l lE by (simp add: CoreTm_LitArray)
+        show ?thesis using l lE by (simp add: CoreTm_LitArray vpE)
       next
         case (CoreTm_Var name)
         have ng: "\<not> tyenv_var_ghost env name"
@@ -345,9 +368,9 @@ next
         have W1: "notghost_typed env operand"
           by (rule notghost_typed_Cast[OF W[unfolded CoreTm_Cast]])
         from H CoreTm_Cast obtain x where s: "interp_term d fuel full operand = Inr x"
-          by (cases "interp_term d fuel full operand") simp_all
+          by (cases "interp_term d fuel full operand") (simp_all add: Let_def split: if_splits)
         note sE = sub[OF W1 s]
-        show ?thesis using s sE by (simp add: CoreTm_Cast)
+        show ?thesis using s sE by (simp add: CoreTm_Cast vpE Let_def cong: if_cong)
       next
         case (CoreTm_Unop uop operand)
         have W1: "notghost_typed env operand"
@@ -355,25 +378,29 @@ next
         from H CoreTm_Unop obtain x where s: "interp_term d fuel full operand = Inr x"
           by (cases "interp_term d fuel full operand") simp_all
         note sE = sub[OF W1 s]
-        show ?thesis using s sE by (simp add: CoreTm_Unop)
+        show ?thesis using s sE by (simp add: CoreTm_Unop vpE)
       next
         case (CoreTm_Binop bop lhs rhs)
         note Wb = notghost_typed_Binop[OF W[unfolded CoreTm_Binop]]
         have W1: "notghost_typed env lhs" by (rule Wb(1))
         have W2: "notghost_typed env rhs" by (rule Wb(2))
-        from H CoreTm_Binop obtain x where s1: "interp_term d fuel full lhs = Inr x"
-          by (cases "interp_term d fuel full lhs") simp_all
+        \<comment> \<open>The left operand passed its check (the run succeeded). \<close>
+        from H CoreTm_Binop obtain x where
+          vp1: "value_position full (interp_term d fuel full lhs) = Inr x"
+          by (cases "value_position full (interp_term d fuel full lhs)") simp_all
+        note s1 = value_position_InrD[OF vp1]
+        note c1 = vp1[unfolded s1]
         note s1E = sub[OF W1 s1]
         show ?thesis
         proof (cases "short_circuit bop x")
           case (Some r)
-          show ?thesis using s1 s1E Some by (simp add: CoreTm_Binop)
+          show ?thesis using s1 s1E c1 Some by (simp add: CoreTm_Binop vpE)
         next
           case None
-          from H CoreTm_Binop s1 None obtain y where s2: "interp_term d fuel full rhs = Inr y"
+          from H CoreTm_Binop s1 c1 None obtain y where s2: "interp_term d fuel full rhs = Inr y"
             by (cases "interp_term d fuel full rhs") simp_all
           note s2E = sub[OF W2 s2]
-          show ?thesis using s1 s1E None s2 s2E by (simp add: CoreTm_Binop)
+          show ?thesis using s1 s1E c1 None s2 s2E by (simp add: CoreTm_Binop vpE)
         qed
       next
         case (CoreTm_Let var rhs body)
@@ -399,8 +426,10 @@ next
         from HL obtain x where s1: "interp_term d fuel full rhs = Inr x"
           by (cases "interp_term d fuel full rhs") simp_all
         note s1E = sub[OF W1 s1]
-        from HL s1 have s2: "interp_term d fuel (bind_const_local var x full) body = Inr v"
+        from HL s1
+        have "value_position full (interp_term d fuel (bind_const_local var x full) body) = Inr v"
           by (simp del: bind_const_local.simps)
+        note s2 = value_position_InrD[OF this]
         \<comment> \<open>The body runs with the new variable bound, in both states, to a
             new cell. \<close>
         have relL: "state_erased ?envL (emb @ [length (IS_Store full)])
@@ -415,7 +444,7 @@ next
         note s2E = IH_term[OF fnL funsL relL W2 s2]
         show ?thesis
           unfolding CoreTm_Let erase_ghost_term.simps interp_term_Let
-          using s1 s1E s2 s2E by simp
+          using s1 s1E s2 s2E by (simp add: vpE)
       next
         case (CoreTm_Quantifier q var varTy body)
         with W show ?thesis by simp
@@ -447,14 +476,18 @@ next
         from H CoreTm_VariantCtor obtain x where s: "interp_term d fuel full payload = Inr x"
           by (cases "interp_term d fuel full payload") simp_all
         note sE = sub[OF W1 s]
-        show ?thesis using s sE by (simp add: CoreTm_VariantCtor)
+        show ?thesis using s sE by (simp add: CoreTm_VariantCtor vpE)
       next
         case (CoreTm_Record flds)
         have wgs: "list_all (notghost_typed env) (map snd flds)"
           by (rule notghost_typed_Record[OF W[unfolded CoreTm_Record]])
+        \<comment> \<open>The field values passed their check (the run succeeded). \<close>
         from H CoreTm_Record obtain vals where
-          l: "interp_term_list d fuel full (map snd flds) = Inr vals"
-          by (cases "interp_term_list d fuel full (map snd flds)") simp_all
+          vp: "value_position_list full (interp_term_list d fuel full (map snd flds)) = Inr vals"
+          by (cases "value_position_list full (interp_term_list d fuel full (map snd flds))")
+             simp_all
+        note l = value_position_list_InrD[OF vp]
+        note c = vp[unfolded l]
         note lE = subs[OF wgs l]
         \<comment> \<open>The erased record has the same field names, and the erased field
             terms. \<close>
@@ -466,10 +499,10 @@ next
           unfolding sndE by (rule lE)
         have fullV: "interp_term d (Suc fuel) full (CoreTm_Record flds)
                        = Inr (CV_Record (zip (map fst flds) vals))"
-          using l by simp
+          using l c by simp
         have erV: "interp_term d (Suc fuel) erased (CoreTm_Record ?fldsE)
                      = Inr (CV_Record (zip (map fst ?fldsE) vals))"
-          using lE' by simp
+          using lE' c by (simp add: vpE)
         show ?thesis unfolding CoreTm_Record eqE fullV erV fstE by (rule refl)
       next
         case (CoreTm_RecordProj recTm fldName)
@@ -502,7 +535,7 @@ next
             l: "interp_term_list d fuel full idxs = Inr ivs"
             by (cases "interp_term_list d fuel full idxs") simp_all
           note lE = subs[OF wgs l]
-          show ?thesis using s sE CV_Array l lE by (simp add: CoreTm_ArrayProj)
+          show ?thesis using s sE CV_Array l lE by (simp add: CoreTm_ArrayProj vpE)
         qed (use s sE in \<open>simp_all add: CoreTm_ArrayProj\<close>)
       next
         case (CoreTm_Match scrut arms)
@@ -513,14 +546,15 @@ next
         note sE = sub[OF W1 s]
         from H CoreTm_Match s obtain armTm where a: "find_matching_arm sv arms = Inr armTm"
           by (cases "find_matching_arm sv arms") simp_all
-        from H CoreTm_Match s a have s2: "interp_term d fuel full armTm = Inr v" by simp
+        from H CoreTm_Match s a have s2: "interp_term d fuel full armTm = Inr v"
+          by (simp add: value_position_Inr_iff)
         have W2: "notghost_typed env armTm"
           by (rule Wm(2)[OF find_matching_arm_in_arms[OF a]])
         note s2E = sub[OF W2 s2]
         \<comment> \<open>The erased match chooses the erasure of the same arm. \<close>
         note aE = find_matching_arm_map
                     [where f = "erase_ghost_term (TE_Functions genv)", OF a]
-        show ?thesis using s sE a aE s2 s2E by (simp add: CoreTm_Match)
+        show ?thesis using s sE a aE s2 s2E by (simp add: CoreTm_Match vpE)
       next
         case (CoreTm_Sizeof arr)
         have W1: "notghost_typed env arr"
@@ -537,7 +571,7 @@ next
         have dv: "default_value fuel erased (apply_subst (IS_TyArgs full) dty)
                     = default_value fuel full (apply_subst (IS_TyArgs full) dty)"
           by (rule default_value_cong_state(1)[OF D(2) D(9), rule_format])
-        show ?thesis by (simp add: CoreTm_Default D(6) dv)
+        show ?thesis by (simp add: CoreTm_Default D(6) dv vpE)
       qed
       show "interp_term d (Suc fuel) erased (?er tm) = Inr v" unfolding eq by (rule H)
     qed
@@ -587,6 +621,7 @@ next
         and W: "notghost_typed env lvTm"
         and H: "interp_writable_lvalue d (Suc fuel) full lvTm = Inr (addr, path)"
       note lvs = IH_lv[OF fn_eq funs_eq rel]
+      note vpE = state_erased_value_position[OF rel]
       show "\<exists>i. interp_writable_lvalue d (Suc fuel) erased (?er lvTm) = Inr (i, path)
                 \<and> i < length emb \<and> emb ! i = addr"
       proof (cases lvTm)
@@ -636,10 +671,13 @@ next
         from H CoreTm_ArrayProj obtain path' where
           s: "interp_writable_lvalue d fuel full arr = Inr (addr, path')"
           by (auto split: sum.splits prod.splits)
+        \<comment> \<open>The index values passed their check (the run succeeded). \<close>
         from H CoreTm_ArrayProj s obtain ivs where
-          l: "interp_term_list d fuel full idxs = Inr ivs"
-          by (cases "interp_term_list d fuel full idxs") simp_all
-        from H CoreTm_ArrayProj s l obtain indices where
+          vp: "value_position_list full (interp_term_list d fuel full idxs) = Inr ivs"
+          by (cases "value_position_list full (interp_term_list d fuel full idxs)") simp_all
+        note l = value_position_list_InrD[OF vp]
+        note c = vp[unfolded l]
+        from H CoreTm_ArrayProj s l c obtain indices where
           ii: "interpret_index_vals ivs = Inr indices" and
           p: "path = path' @ [LVPath_ArrayProj indices]"
           by (cases "interpret_index_vals ivs") auto
@@ -648,9 +686,9 @@ next
           i_lt: "i < length emb" and ei: "emb ! i = addr"
           by blast
         note lE = IH_list[OF fn_eq funs_eq rel wgs l]
-        from sE lE ii p
+        from sE lE c ii p
         have "interp_writable_lvalue d (Suc fuel) erased (?er lvTm) = Inr (i, path)"
-          by (simp add: CoreTm_ArrayProj)
+          by (simp add: CoreTm_ArrayProj vpE)
         with i_lt ei show ?thesis by blast
       next
         case (CoreTm_Cast targetTy operand)
@@ -693,6 +731,8 @@ next
       let ?fX = "full \<lparr> IS_Ghost := NotGhost \<rparr>"
       let ?eX = "erased \<lparr> IS_Ghost := NotGhost \<rparr>"
       have relX: "state_erased env emb ?fX ?eX" by (rule state_erased_set_ghost[OF rel])
+      \<comment> \<open>The check on a value position is the same in both. \<close>
+      note vpX = state_erased_value_position[OF relX]
       have funsX: "IS_Functions ?fX = funs" using funs_eq by simp
       note subX = IH_term[OF fn_eq funsX relX]
       note lvsX = IH_lv[OF fn_eq funsX relX]
@@ -733,16 +773,16 @@ next
             have iW: "notghost_typed env initTm" by (rule notghost_typedI[OF iT])
             note decl = notghost_decl_var_ghost[OF tlv tgl]
             from Var H CoreStmt_VarDecl obtain initVal where
-              iv: "interp_term d fuel ?fX initTm = Inr initVal"
+              vp: "value_position ?fX (interp_term d fuel ?fX initTm) = Inr initVal"
               by (auto split: sum.splits)
+            note iv = value_position_InrD[OF vp]
             note ivE = subX[OF iW iv]
-            \<comment> \<open>The copy check passed in the full run; it passes in the erased
-                run too, which has the same allocation oracle. \<close>
-            from Var H CoreStmt_VarDecl NotGhost iv
-            have cc: "copy_check NotGhost full initVal = None"
-              by (auto split: option.splits)
-            have ccE: "copy_check NotGhost erased initVal = None"
-              using cc copy_check_cong_state[OF D(10)] by simp
+            \<comment> \<open>The check on the initializer (a value position) passed in the
+                full run; it passes in the erased run too, which is in the same
+                mode and has the same allocation oracle. \<close>
+            note cc = vp[unfolded iv]
+            have ccE: "value_position ?eX (Inr initVal) = Inr initVal"
+              using cc by (simp add: vpX)
             from Var H[symmetric] CoreStmt_VarDecl NotGhost iv cc
             have cF: "is_continue res"
               and stepF: "fresh_binding_step varName initVal full (result_state res)"
@@ -906,20 +946,26 @@ next
           define ne where "ne = newErased \<lparr> IS_Ghost := IS_Ghost erased \<rparr>"
           have rel1: "state_erased env emb nf ne"
             unfolding nf_def ne_def by (rule state_erased_reset_ghost[OF rel rel0])
+          \<comment> \<open>The check on the call's result (a value position) passed in the
+              full run; it passes in the erased run too. \<close>
           from H CoreStmt_VarDeclCall call obtain initVal where
-            cast: "apply_cast_opt castOpt retVal = Inr initVal"
+            vp0: "value_position ?fX (apply_cast_opt castOpt retVal) = Inr initVal"
             by (auto split: sum.splits)
+          note cast0 = value_position_InrD[OF vp0]
+          note cast = cast0 vp0[unfolded cast0]
+          have castE: "value_position ?eX (Inr initVal) = Inr initVal"
+            using cast(2) by (simp add: vpX)
           from H[symmetric] CoreStmt_VarDeclCall call cast
           have cF: "is_continue res"
             and stepF: "fresh_binding_step varName initVal nf (result_state res)"
             and ncF: "varName |\<notin>| IS_ConstLocals (result_state res)"
             by (simp_all add: nf_def fresh_binding_step_def static_parts_eq_def Let_def)
           have "\<exists>resE. interp_statement d (Suc fuel) erased stmt' = Inr resE"
-            using callE cast by (simp add: stmt'_eq Let_def)
+            using callE cast castE by (simp add: stmt'_eq Let_def)
           then obtain resE where
             HE: "interp_statement d (Suc fuel) erased stmt' = Inr resE"
             by blast
-          from HE[symmetric] stmt'_eq callE cast
+          from HE[symmetric] stmt'_eq callE cast castE
           have cE: "is_continue resE"
             and stepE: "fresh_binding_step varName initVal ne (result_state resE)"
             and ncE: "varName |\<notin>| IS_ConstLocals (result_state resE)"
@@ -962,15 +1008,14 @@ next
             wl: "interp_writable_lvalue d fuel ?fX lhsLv = Inr (addr, path)"
             by (auto split: sum.splits)
           from H CoreStmt_Assign wl obtain rhsVal where
-            rv: "interp_term d fuel ?fX rhsTm = Inr rhsVal"
+            vp: "value_position ?fX (interp_term d fuel ?fX rhsTm) = Inr rhsVal"
             by (auto split: sum.splits)
-          \<comment> \<open>The copy check passed in the full run; it passes in the erased
-              run too (same allocation oracle). \<close>
-          from H CoreStmt_Assign NotGhost wl rv
-          have cc: "copy_check NotGhost full rhsVal = None"
-            by (auto split: option.splits)
-          have ccE: "copy_check NotGhost erased rhsVal = None"
-            using cc copy_check_cong_state[OF D(10)] by simp
+          note rv = value_position_InrD[OF vp]
+          \<comment> \<open>The check on the rhs (a value position) passed in the full run; it
+              passes in the erased run too (same mode, same allocation oracle). \<close>
+          note cc = vp[unfolded rv]
+          have ccE: "value_position ?eX (Inr rhsVal) = Inr rhsVal"
+            using cc by (simp add: vpX)
           from H CoreStmt_Assign NotGhost wl rv cc obtain newVal where
             upd: "update_value_at_path (IS_Store full ! addr) path rhsVal = Inr newVal"
             by (auto simp: Let_def split: sum.splits)
@@ -1033,9 +1078,15 @@ next
             call: "interp_function_call d fuel ?fX fnName argTys argTms
                      = Inr (newFull, retVal)"
             by (auto split: sum.splits prod.splits)
+          \<comment> \<open>The check on the call's result (a value position) passed in the
+              full run; it passes in the erased run too. \<close>
           from H CoreStmt_AssignCall call obtain rhsVal where
-            cast: "apply_cast_opt castOpt retVal = Inr rhsVal"
+            vp0: "value_position ?fX (apply_cast_opt castOpt retVal) = Inr rhsVal"
             by (auto split: sum.splits)
+          note cast0 = value_position_InrD[OF vp0]
+          note cast = cast0 vp0[unfolded cast0]
+          have castE: "value_position ?eX (Inr rhsVal) = Inr rhsVal"
+            using cast(2) by (simp add: vpX)
           from H CoreStmt_AssignCall call cast obtain addr path where
             wl: "interp_writable_lvalue d fuel newFull lhsLv = Inr (addr, path)"
             by (auto split: sum.splits)
@@ -1067,11 +1118,11 @@ next
             and stepF: "store_write_step addr newVal nf (result_state res)"
             by (simp_all add: nf_def store_write_step_def static_parts_eq_def Let_def)
           have "\<exists>resE. interp_statement d (Suc fuel) erased stmt' = Inr resE"
-            using wlE callE cast upd by (simp add: stmt'_eq cell Let_def)
+            using wlE callE cast castE upd by (simp add: stmt'_eq cell Let_def)
           then obtain resE where
             HE: "interp_statement d (Suc fuel) erased stmt' = Inr resE"
             by blast
-          from HE[symmetric] wlE callE cast upd
+          from HE[symmetric] wlE callE cast castE upd
           have cE: "is_continue resE"
             and stepE: "store_write_step i newVal ne (result_state resE)"
             by (simp_all add: ne_def stmt'_eq cell store_write_step_def static_parts_eq_def Let_def)
@@ -1187,10 +1238,16 @@ next
           have ieE: "conditions_error [] = None"
             by (simp add: conditions_error_def)
           note [simp] = iv ie ivE ieE
+          \<comment> \<open>The condition is in a value position: its check passed in the full
+              run, and passes in the erased run too. \<close>
           from H CoreStmt_While obtain condVal where
-            cv: "interp_term d fuel ?fX condTm = Inr condVal"
+            vp: "value_position ?fX (interp_term d fuel ?fX condTm) = Inr condVal"
             by (auto split: sum.splits)
-          note cvE = subX[OF cW cv]
+          note cv0 = value_position_InrD[OF vp]
+          note cv = cv0 vp[unfolded cv0]
+          have cvE1: "value_position ?eX (Inr condVal) = Inr condVal"
+            using cv(2) by (simp add: vpX)
+          note cvE = subX[OF cW cv0] cvE1
           show ?thesis
           proof (cases condVal)
             case (CV_Bool b)
@@ -1873,16 +1930,24 @@ next
             by (simp add: call_body_def)
         next
           case (Return postF bodyRetVal)
-          \<comment> \<open>The copy check on the returned value passed in the full run; it
+          \<comment> \<open>The check on the returned value (R4) passed in the full run; it
               passes in the erased run too, since the erased function has the
-              same ghost flag and the related pre-call states have the same
-              allocation oracle. \<close>
-          from bodyF Inl bodyEval Return
-          have cc: "copy_check (IF_Ghost f) preF bodyRetVal = None"
-            by (auto simp: call_body_def split: option.splits)
-          note DP = state_erasedD[OF relP]
-          have ccE: "copy_check (IF_Ghost f) preE bodyRetVal = None"
-            using cc copy_check_cong_state[OF DP(10)] by simp
+              same ghost flag and the callers' states have the same allocation
+              oracle. \<close>
+          have cc: "value_position (full \<lparr>IS_Ghost := IF_Ghost f\<rparr>) (Inr bodyRetVal)
+                      = Inr bodyRetVal"
+          proof (cases rule: value_position_Inr_cases
+                               [of "full \<lparr>IS_Ghost := IF_Ghost f\<rparr>" bodyRetVal])
+            case ok
+            then show ?thesis .
+          next
+            case error
+            with bodyF Inl bodyEval Return show ?thesis by (simp add: call_body_def)
+          qed
+          have ccE: "value_position (erased \<lparr>IS_Ghost := IF_Ghost f\<rparr>) (Inr bodyRetVal)
+                       = Inr bodyRetVal"
+            using cc
+            by (simp add: state_erased_value_position(1)[OF state_erased_set_ghost[OF rel]])
           from bodyF Inl bodyEval Return cc
           have newFull_eq: "newFull = restore_scope full postF"
             and ret_eq: "retVal = bodyRetVal"
@@ -1957,7 +2022,23 @@ next
           and newFull_eq: "newFull = finalState"
           and ret_eq: "retVal = externRetVal"
           by (cases "apply_ref_updates ?fullW ?refsXF refUpdates")
-             (simp_all add: call_body_def Let_def)
+             (simp_all add: call_body_def Let_def split: sum.splits)
+        \<comment> \<open>The check on the returned value (R4) passed in the full run; it
+            passes in the erased run too. \<close>
+        have ccX: "value_position (full \<lparr>IS_Ghost := IF_Ghost f\<rparr>) (Inr externRetVal)
+                     = Inr externRetVal"
+        proof (cases rule: value_position_Inr_cases
+                             [of "full \<lparr>IS_Ghost := IF_Ghost f\<rparr>" externRetVal])
+          case ok
+          then show ?thesis .
+        next
+          case error
+          with bodyF Inr ext_eq final_eq show ?thesis by (simp add: call_body_def Let_def)
+        qed
+        have ccXE: "value_position (erased \<lparr>IS_Ghost := IF_Ghost f\<rparr>) (Inr externRetVal)
+                      = Inr externRetVal"
+          using ccX
+          by (simp add: state_erased_value_position(1)[OF state_erased_set_ghost[OF rel]])
 
         \<comment> \<open>Every argument has a value in the full state. \<close>
         have lenA: "length (IF_Args f) = length ?refsF" using len_eq by simp
@@ -2072,7 +2153,7 @@ next
           unfolding newFull_eq by (rule relN)
         have callE: "interp_function_call d (Suc fuel) erased fnName argTys ?argsE
                        = Inr (newErased, retVal)"
-          using lookE lenE tyLen_eq foldE aliasE Inr valsE_drop extE finalE ret_eq ghF
+          using lookE lenE tyLen_eq foldE aliasE Inr valsE_drop extE finalE ret_eq ccXE ghF
           by (simp add: checked_call_no_contract call_body_def Let_def paramsE_eq' D(3) D(6) D(11))
         from callE relN' show ?thesis by blast
       qed

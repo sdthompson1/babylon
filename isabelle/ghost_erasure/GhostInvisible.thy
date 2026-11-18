@@ -864,6 +864,8 @@ next
         proof (cases vr)
           case Var
           from T CoreStmt_VarDecl Var have g_eq: "g = Ghost" by (auto split: if_splits)
+          have vpg [simp]: "value_position (full \<lparr>IS_Ghost := g\<rparr>) r = r" for r
+            using g_eq by simp
           from T CoreStmt_VarDecl Var g_eq
           have tlv: "TE_LocalVars env' = fmupd varName ty (TE_LocalVars env)"
             and tgl: "TE_GhostLocals env' = finsert varName (TE_GhostLocals env)"
@@ -953,6 +955,8 @@ next
       next
         case (CoreStmt_VarDeclCall g varName varTy castOpt fnName argTys argTms)
         from T CoreStmt_VarDeclCall have g_eq: "g = Ghost" by (auto split: if_splits)
+        have vpg [simp]: "value_position (full \<lparr>IS_Ghost := g\<rparr>) r = r" for r
+          using g_eq by simp
         from T CoreStmt_VarDeclCall g_eq obtain retTy where
           callT: "core_impure_call_type env Ghost fnName argTys argTms = Some retTy"
           by (auto split: if_splits option.splits)
@@ -1026,6 +1030,8 @@ next
       next
         case (CoreStmt_Assign g ty lhsLv rhsTm)
         from T CoreStmt_Assign have g_eq: "g = Ghost" by (auto split: if_splits)
+        have vpg [simp]: "value_position (full \<lparr>IS_Ghost := g\<rparr>) r = r" for r
+          using g_eq by simp
         from T CoreStmt_Assign g_eq
         have glv: "ghost_lvalue_ok env Ghost lhsLv" by (auto split: if_splits)
         from T CoreStmt_Assign have env'_eq: "env' = env"
@@ -1056,6 +1062,8 @@ next
       next
         case (CoreStmt_AssignCall g lhsLv castOpt fnName argTys argTms)
         from T CoreStmt_AssignCall have g_eq: "g = Ghost" by (auto split: if_splits)
+        have vpg [simp]: "value_position (full \<lparr>IS_Ghost := g\<rparr>) r = r" for r
+          using g_eq by simp
         from T CoreStmt_AssignCall g_eq
         have glv: "ghost_lvalue_ok env Ghost lhsLv" by (auto split: if_splits)
         from T CoreStmt_AssignCall g_eq obtain retTy where
@@ -1166,6 +1174,8 @@ next
         from T CoreStmt_While have env'_eq: "env' = env"
           by (auto split: if_splits option.splits CoreType.splits)
         from T CoreStmt_While have g_eq: "g = Ghost" by (auto split: if_splits)
+        have vpg [simp]: "value_position (full \<lparr>IS_Ghost := g\<rparr>) r = r" for r
+          using g_eq by simp
         from T CoreStmt_While g_eq obtain bodyEnv where
           bodyT: "core_statement_list_type (env \<lparr> TE_ProofTopLevel := False \<rparr>) Ghost bodyStmts
                     = Some bodyEnv"

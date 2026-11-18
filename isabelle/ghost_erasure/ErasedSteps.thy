@@ -1943,7 +1943,9 @@ lemma interp_term_Let:
   "interp_term d (Suc fuel) state (CoreTm_Let varName rhsTm bodyTm) =
     (case interp_term d fuel state rhsTm of
        Inl err \<Rightarrow> Inl err
-     | Inr rhsVal \<Rightarrow> interp_term d fuel (bind_const_local varName rhsVal state) bodyTm)"
+     | Inr rhsVal \<Rightarrow>
+         value_position (bind_const_local varName rhsVal state)
+           (interp_term d fuel (bind_const_local varName rhsVal state) bodyTm))"
   by (simp del: bind_const_local.simps)
 
 lemma bind_const_local_step:
