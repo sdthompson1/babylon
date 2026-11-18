@@ -115,13 +115,19 @@ next
 next
   case (CoreTm_ArrayProj t idx)
   from CoreTm_ArrayProj.prems(1) obtain f0 w ivs indices where fuel: "fuel = Suc f0"
-    and evt: "interp_term d f0 s t = Inr w" and evi: "interp_term_list d f0 s idx = Inr ivs"
+    and evt: "interp_term d f0 s t = Inr w"
+    and vp: "value_position_list s (interp_term_list d f0 s idx) = Inr ivs"
     and ii: "interpret_index_vals ivs = Inr indices"
     by (cases fuel) (auto split: sum.splits CoreValue.splits option.splits)
+  \<comment> \<open>The index values passed the check of their value position, in both states.\<close>
+  note evi = value_position_list_InrD[OF vp]
+  note chk = vp[unfolded evi]
   from CoreTm_ArrayProj.prems(4) obtain f0' w' ivs' where fuel': "fuel' = Suc f0'"
     and evt': "interp_term d f0' s' (tr t) = Inr w'"
-    and evi': "interp_term_list d f0' s' (map tr idx) = Inr ivs'"
+    and vp': "value_position_list s' (interp_term_list d f0' s' (map tr idx)) = Inr ivs'"
     unfolding tr_simps(4) by (cases fuel') (auto split: sum.splits CoreValue.splits option.splits)
+  note evi' = value_position_list_InrD[OF vp']
+  note chk' = vp'[unfolded evi']
   obtain G0 where G: "G = Suc G0" using Suc_le_D[OF CoreTm_ArrayProj.prems(2)[unfolded fuel]] by blast
   obtain G0' where G': "G' = Suc G0'" using Suc_le_D[OF CoreTm_ArrayProj.prems(5)[unfolded fuel']] by blast
   have Qt: "Q t" and Qi: "list_all Q idx" using Q_sub(3) CoreTm_ArrayProj.prems(7) by blast+
@@ -136,7 +142,7 @@ next
   have eviF': "interp_term_list d F' s' (map tr idx) = Inr ivs'"
     by (rule interp_term_list_more_fuel[OF evi' _ order_trans[OF le(3,4)]]) simp
   have "ivs = ivs'" by (rule idx[OF Qi eviF eviF'])
-  with CoreTm_ArrayProj.IH(1)[OF evt le(1,2) evt' le(3,4) Qt] eviG eviG' ii
+  with CoreTm_ArrayProj.IH(1)[OF evt le(1,2) evt' le(3,4) Qt] eviG eviG' ii chk chk'
   show ?case unfolding tr_simps(4) G G' by (auto split: sum.splits)
 next
   case (CoreTm_Cast ty t)
@@ -147,10 +153,10 @@ next
     case (CoreTy_Array e dims)
     from CoreTm_Cast.prems(1) obtain f0 w where fuel: "fuel = Suc f0"
       and evt: "interp_term d f0 s t = Inr w"
-      by (cases fuel) (auto split: sum.splits)
+      by (cases fuel) (auto simp: Let_def CoreTy_Array split: sum.splits)
     from CoreTm_Cast.prems(4) obtain f0' w' where fuel': "fuel' = Suc f0'"
       and evt': "interp_term d f0' s' (tr t) = Inr w'"
-      unfolding tr_simps(5) by (cases fuel') (auto split: sum.splits)
+      unfolding tr_simps(5) by (cases fuel') (auto simp: Let_def CoreTy_Array split: sum.splits)
     have Qt: "Q t" using Q_sub(4) CoreTm_Cast.prems(7) by blast
     have le: "f0 \<le> G0" "G0 \<le> F" "f0' \<le> G0'" "G0' \<le> F'"
       using fuel fuel' G G' CoreTm_Cast.prems(2,3,5,6) by simp_all

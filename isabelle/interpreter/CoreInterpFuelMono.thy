@@ -890,7 +890,7 @@ next
       using Suc_le_D by auto
     assume noFuel: "interp_term d (Suc fuel) state (CoreTm_Cast targetTy tm) \<noteq> Inl InsufficientFuel"
     hence sub_noFuel: "interp_term d fuel state tm \<noteq> Inl InsufficientFuel"
-      by (auto split: sum.splits)
+      by (auto simp: Let_def split: sum.splits if_splits)
     hence IH: "\<forall>f'\<ge>fuel. interp_term d f' state tm = interp_term d fuel state tm"
       using "6.IH" by blast
     from IH f''_ge have "interp_term d f'' state tm = interp_term d fuel state tm"
@@ -933,13 +933,13 @@ next
       using "8.IH"(1) by blast
     show "interp_term d f' state (CoreTm_Binop op lhsTm rhsTm)
             = interp_term d (Suc fuel) state (CoreTm_Binop op lhsTm rhsTm)"
-    proof (cases "interp_term d fuel state lhsTm")
+    proof (cases "value_position state (interp_term d fuel state lhsTm)")
       case (Inl err)
-      hence "interp_term d f'' state lhsTm = Inl err" using IH_lhs f''_ge by metis
+      hence "value_position state (interp_term d f'' state lhsTm) = Inl err" using IH_lhs f''_ge by metis
       thus ?thesis using Inl f'_eq by simp
     next
       case (Inr lhsVal)
-      have lhs_f'': "interp_term d f'' state lhsTm = Inr lhsVal" using IH_lhs Inr f''_ge by auto
+      have lhs_f'': "value_position state (interp_term d f'' state lhsTm) = Inr lhsVal" using IH_lhs[rule_format, OF f''_ge] Inr by simp
       show ?thesis
       proof (cases "short_circuit op lhsVal")
         case (Some result)
@@ -1594,7 +1594,7 @@ next
       case (Inr res)
       obtain newState retVal where res_eq: "res = (newState, retVal)" by (cases res)
       show ?thesis
-      proof (cases "apply_cast_opt castOpt retVal")
+      proof (cases "value_position (state \<lparr>IS_Ghost := assignGhost\<rparr>) (apply_cast_opt castOpt retVal)")
         case (Inl err)
         thus ?thesis using fc_eq f'_eq Inr res_eq by simp
       next
@@ -1701,9 +1701,9 @@ next
         hence IH_cond: "\<forall>f'\<ge>fuel. interp_term d f' (state \<lparr>IS_Ghost := whileGhost\<rparr>) condTm = interp_term d fuel (state \<lparr>IS_Ghost := whileGhost\<rparr>) condTm"
           using "35.IH"(2)[OF Invs InvsOk] by blast
         show ?thesis
-        proof (cases "interp_term d fuel (state \<lparr>IS_Ghost := whileGhost\<rparr>) condTm")
+        proof (cases "value_position (state \<lparr>IS_Ghost := whileGhost\<rparr>) (interp_term d fuel (state \<lparr>IS_Ghost := whileGhost\<rparr>) condTm)")
           case (Inl err)
-          hence "interp_term d f'' (state \<lparr>IS_Ghost := whileGhost\<rparr>) condTm = Inl err" using IH_cond f''_ge by metis
+          hence "value_position (state \<lparr>IS_Ghost := whileGhost\<rparr>) (interp_term d f'' (state \<lparr>IS_Ghost := whileGhost\<rparr>) condTm) = Inl err" using IH_cond f''_ge by metis
           thus ?thesis using Inl f'_eq by simp
         next
           case (Inr condVal)
@@ -1713,10 +1713,10 @@ next
             show ?thesis
             proof (cases b)
               case True
-              have cond_fuel: "interp_term d fuel (state \<lparr>IS_Ghost := whileGhost\<rparr>) condTm = Inr (CV_Bool True)"
+              have cond_fuel: "value_position (state \<lparr>IS_Ghost := whileGhost\<rparr>) (interp_term d fuel (state \<lparr>IS_Ghost := whileGhost\<rparr>) condTm) = Inr (CV_Bool True)"
                 using Inr CV_Bool True by simp
-              have cond_f'': "interp_term d f'' (state \<lparr>IS_Ghost := whileGhost\<rparr>) condTm = Inr (CV_Bool True)"
-                using IH_cond cond_fuel f''_ge by simp
+              have cond_f'': "value_position (state \<lparr>IS_Ghost := whileGhost\<rparr>) (interp_term d f'' (state \<lparr>IS_Ghost := whileGhost\<rparr>) condTm) = Inr (CV_Bool True)"
+                using IH_cond[rule_format, OF f''_ge] cond_fuel by simp
               \<comment> \<open>The decreases-term before the body, at both fuels. \<close>
               have decr0_noFuel: "eval_decreases (interp_term d fuel (state \<lparr>IS_Ghost := Ghost\<rparr>)) decr
                                     \<noteq> Inl InsufficientFuel"
@@ -1838,39 +1838,39 @@ next
               qed
             next
               case False
-              have cond_fuel: "interp_term d fuel (state \<lparr>IS_Ghost := whileGhost\<rparr>) condTm = Inr (CV_Bool False)"
+              have cond_fuel: "value_position (state \<lparr>IS_Ghost := whileGhost\<rparr>) (interp_term d fuel (state \<lparr>IS_Ghost := whileGhost\<rparr>) condTm) = Inr (CV_Bool False)"
                 using Inr CV_Bool False by simp
-              have "interp_term d f'' (state \<lparr>IS_Ghost := whileGhost\<rparr>) condTm = Inr (CV_Bool False)"
+              have "value_position (state \<lparr>IS_Ghost := whileGhost\<rparr>) (interp_term d f'' (state \<lparr>IS_Ghost := whileGhost\<rparr>) condTm) = Inr (CV_Bool False)"
                 using IH_cond cond_fuel f''_ge by metis
               thus ?thesis using f'_eq cond_fuel by simp
             qed
           next
             case (CV_FiniteInt x21 x22 x23)
-            have "interp_term d f'' (state \<lparr>IS_Ghost := whileGhost\<rparr>) condTm = Inr condVal" using IH_cond Inr f''_ge by metis
+            have "value_position (state \<lparr>IS_Ghost := whileGhost\<rparr>) (interp_term d f'' (state \<lparr>IS_Ghost := whileGhost\<rparr>) condTm) = Inr condVal" using IH_cond Inr f''_ge by metis
             thus ?thesis using f'_eq CV_FiniteInt Inr by simp
           next
             case (CV_Record x4)
-            have "interp_term d f'' (state \<lparr>IS_Ghost := whileGhost\<rparr>) condTm = Inr condVal" using IH_cond Inr f''_ge by metis
+            have "value_position (state \<lparr>IS_Ghost := whileGhost\<rparr>) (interp_term d f'' (state \<lparr>IS_Ghost := whileGhost\<rparr>) condTm) = Inr condVal" using IH_cond Inr f''_ge by metis
             thus ?thesis using f'_eq CV_Record Inr by simp
           next
             case (CV_Variant x51 x52)
-            have "interp_term d f'' (state \<lparr>IS_Ghost := whileGhost\<rparr>) condTm = Inr condVal" using IH_cond Inr f''_ge by metis
+            have "value_position (state \<lparr>IS_Ghost := whileGhost\<rparr>) (interp_term d f'' (state \<lparr>IS_Ghost := whileGhost\<rparr>) condTm) = Inr condVal" using IH_cond Inr f''_ge by metis
             thus ?thesis using f'_eq CV_Variant Inr by simp
           next
             case (CV_Array al x61 x62)
-            have "interp_term d f'' (state \<lparr>IS_Ghost := whileGhost\<rparr>) condTm = Inr condVal" using IH_cond Inr f''_ge by metis
+            have "value_position (state \<lparr>IS_Ghost := whileGhost\<rparr>) (interp_term d f'' (state \<lparr>IS_Ghost := whileGhost\<rparr>) condTm) = Inr condVal" using IH_cond Inr f''_ge by metis
             thus ?thesis using f'_eq CV_Array Inr by simp
           next
             case (CV_Int x7)
-            have "interp_term d f'' (state \<lparr>IS_Ghost := whileGhost\<rparr>) condTm = Inr condVal" using IH_cond Inr f''_ge by metis
+            have "value_position (state \<lparr>IS_Ghost := whileGhost\<rparr>) (interp_term d f'' (state \<lparr>IS_Ghost := whileGhost\<rparr>) condTm) = Inr condVal" using IH_cond Inr f''_ge by metis
             thus ?thesis using f'_eq CV_Int Inr by simp
           next
             case (CV_Real x8)
-            have "interp_term d f'' (state \<lparr>IS_Ghost := whileGhost\<rparr>) condTm = Inr condVal" using IH_cond Inr f''_ge by metis
+            have "value_position (state \<lparr>IS_Ghost := whileGhost\<rparr>) (interp_term d f'' (state \<lparr>IS_Ghost := whileGhost\<rparr>) condTm) = Inr condVal" using IH_cond Inr f''_ge by metis
             thus ?thesis using f'_eq CV_Real Inr by simp
           next
             case (CV_Extern x91 x92 x93)
-            have "interp_term d f'' (state \<lparr>IS_Ghost := whileGhost\<rparr>) condTm = Inr condVal" using IH_cond Inr f''_ge by metis
+            have "value_position (state \<lparr>IS_Ghost := whileGhost\<rparr>) (interp_term d f'' (state \<lparr>IS_Ghost := whileGhost\<rparr>) condTm) = Inr condVal" using IH_cond Inr f''_ge by metis
             thus ?thesis using f'_eq CV_Extern Inr by simp
           qed
         qed
@@ -2501,7 +2501,7 @@ next
   proof (intro allI impI)
     fix d' assume d'_ge: "d' \<ge> d"
     have "interp_term d fuel state tm \<noteq> Inl InsufficientFuel"
-      using "6.prems" by (auto split: sum.splits)
+      using "6.prems" by (auto simp: Let_def split: sum.splits if_splits)
     hence "interp_term d' fuel state tm = interp_term d fuel state tm"
       using "6.IH" d'_ge by blast
     thus "interp_term d' (Suc fuel) state (CoreTm_Cast targetTy tm)
@@ -2534,7 +2534,7 @@ next
       using "8.IH"(1) d'_ge by blast
     show "interp_term d' (Suc fuel) state (CoreTm_Binop op lhsTm rhsTm)
             = interp_term d (Suc fuel) state (CoreTm_Binop op lhsTm rhsTm)"
-    proof (cases "interp_term d fuel state lhsTm")
+    proof (cases "value_position state (interp_term d fuel state lhsTm)")
       case (Inl err)
       thus ?thesis using lhs_eq by simp
     next
@@ -3001,7 +3001,7 @@ next
       case (Inr res)
       obtain newState retVal where res_eq: "res = (newState, retVal)" by (cases res)
       show ?thesis
-      proof (cases "apply_cast_opt castOpt retVal")
+      proof (cases "value_position (state \<lparr>IS_Ghost := assignGhost\<rparr>) (apply_cast_opt castOpt retVal)")
         case (Inl err)
         thus ?thesis using fc_eq Inr res_eq by simp
       next
@@ -3087,7 +3087,7 @@ next
         hence cond_eq: "interp_term d' fuel (state \<lparr>IS_Ghost := whileGhost\<rparr>) condTm = interp_term d fuel (state \<lparr>IS_Ghost := whileGhost\<rparr>) condTm"
           using "35.IH"(2)[OF Invs InvsOk] d'_ge by blast
         show ?thesis
-        proof (cases "interp_term d fuel (state \<lparr>IS_Ghost := whileGhost\<rparr>) condTm")
+        proof (cases "value_position (state \<lparr>IS_Ghost := whileGhost\<rparr>) (interp_term d fuel (state \<lparr>IS_Ghost := whileGhost\<rparr>) condTm)")
           case (Inl err)
           thus ?thesis using cond_eq by simp
         next
@@ -3098,9 +3098,9 @@ next
             show ?thesis
             proof (cases b)
               case True
-              have cond_d: "interp_term d fuel (state \<lparr>IS_Ghost := whileGhost\<rparr>) condTm = Inr (CV_Bool True)"
+              have cond_d: "value_position (state \<lparr>IS_Ghost := whileGhost\<rparr>) (interp_term d fuel (state \<lparr>IS_Ghost := whileGhost\<rparr>) condTm) = Inr (CV_Bool True)"
                 using Inr CV_Bool True by simp
-              have cond_d': "interp_term d' fuel (state \<lparr>IS_Ghost := whileGhost\<rparr>) condTm = Inr (CV_Bool True)"
+              have cond_d': "value_position (state \<lparr>IS_Ghost := whileGhost\<rparr>) (interp_term d' fuel (state \<lparr>IS_Ghost := whileGhost\<rparr>) condTm) = Inr (CV_Bool True)"
                 using cond_eq cond_d by simp
               \<comment> \<open>The decreases-term before the body, at both depths. \<close>
               have decr0_noFuel: "eval_decreases (interp_term d fuel (state \<lparr>IS_Ghost := Ghost\<rparr>)) decr
@@ -3218,9 +3218,9 @@ next
               qed
             next
               case False
-              have cond_d: "interp_term d fuel (state \<lparr>IS_Ghost := whileGhost\<rparr>) condTm = Inr (CV_Bool False)"
+              have cond_d: "value_position (state \<lparr>IS_Ghost := whileGhost\<rparr>) (interp_term d fuel (state \<lparr>IS_Ghost := whileGhost\<rparr>) condTm) = Inr (CV_Bool False)"
                 using Inr CV_Bool False by simp
-              have "interp_term d' fuel (state \<lparr>IS_Ghost := whileGhost\<rparr>) condTm = Inr (CV_Bool False)"
+              have "value_position (state \<lparr>IS_Ghost := whileGhost\<rparr>) (interp_term d' fuel (state \<lparr>IS_Ghost := whileGhost\<rparr>) condTm) = Inr (CV_Bool False)"
                 using cond_eq cond_d by simp
               thus ?thesis using cond_d by simp
             qed
