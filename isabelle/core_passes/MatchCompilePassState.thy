@@ -117,9 +117,35 @@ lemma is_pure_fun_mc [simp]:
   "is_pure_fun (mc_state s) fnName = is_pure_fun s fnName"
   by (simp split: option.splits)
 
-lemma copy_check_mc [simp]:
-  "copy_check g (mc_state s) v = copy_check g s v"
-  by (rule copy_check_cong_state) simp_all
+(* The check of a value position only reads the mode and the allocation
+   oracle, which mc_state keeps. *)
+lemma value_position_mc [simp]:
+  "value_position (mc_state s) = value_position s"
+  by (rule ext, rule value_position_cong_state) simp_all
+
+lemma value_position_list_mc [simp]:
+  "value_position_list (mc_state s) = value_position_list s"
+  by (rule ext, rule value_position_list_cong_state) simp_all
+
+lemma value_position_mc_ghost [simp]:
+  "value_position ((mc_state s) \<lparr> IS_Ghost := g \<rparr>) = value_position (s \<lparr> IS_Ghost := g \<rparr>)"
+  by (rule ext, rule value_position_cong_state) simp_all
+
+lemma value_position_list_mc_ghost [simp]:
+  "value_position_list ((mc_state s) \<lparr> IS_Ghost := g \<rparr>)
+   = value_position_list (s \<lparr> IS_Ghost := g \<rparr>)"
+  by (rule ext, rule value_position_list_cong_state) simp_all
+
+(* The Let case of the interpreter, with the binding kept folded. The check of
+   the body's result does not depend on the binding. *)
+lemma interp_term_Let_vp:
+  "interp_term d (Suc fuel) state (CoreTm_Let varName rhsTm bodyTm) =
+    (case interp_term d fuel state rhsTm of
+       Inl err \<Rightarrow> Inl err
+     | Inr rhsVal \<Rightarrow>
+         value_position state
+           (interp_term d fuel (bind_const_local varName rhsVal state) bodyTm))"
+  by (simp del: bind_const_local.simps split: sum.splits)
 
 lemma default_value_mc [simp]:
   "default_value n (mc_state s) ty = default_value n s ty"
@@ -430,19 +456,25 @@ lemma interp_statement_list_single:
    \<Longrightarrow> interp_statement_list d (Suc (Suc f)) s [stmt] = Inr res"
   by (cases res) simp_all
 
-(* A match with one wildcard arm evaluates as its arm body does. *)
+(* A match with one wildcard arm evaluates as its arm body does, provided the
+   value of the body passes the check of a value position (the result of the
+   arm of a match is in a value position). *)
 lemma interp_wild_match:
   "interp_term d f1 s scrut = Inr sv \<Longrightarrow> interp_term d f2 s body = Inr v
+   \<Longrightarrow> value_position s (Inr v) = Inr v
    \<Longrightarrow> interp_term d (Suc (max f1 f2)) s (CoreTm_Match scrut [(CorePat_Wildcard, body)]) = Inr v"
   using interp_term_more_fuel[of d f1 s scrut "Inr sv" "max f1 f2"]
         interp_term_more_fuel[of d f2 s body "Inr v" "max f1 f2"]
   by simp
 
 (* A term tree whose walk picks the leaf b evaluates, in the interpreter, as
-   b does, at some fuel. *)
+   b does, at some fuel, provided the value of b passes the check of a value
+   position: every test of the tree is a match, which applies that check to the
+   result of its arm, i.e. to the value of b. *)
 lemma match_tree_to_term_eval:
   assumes "match_tree_eval (var_env s) t = Some b"
       and "interp_term d fuel s b = Inr v"
+      and "value_position s (Inr v) = Inr v"
   shows "\<exists>fuel'. interp_term d fuel' s (match_tree_to_term t) = Inr v"
   using assms
 proof (induction t arbitrary: fuel)
@@ -457,7 +489,7 @@ next
     by (auto split: option.splits)
   from arms_find_in[OF arm] obtain p where arm_in: "(p, t') \<in> set arms" by auto
   have t'_in: "t' \<in> Basic_BNFs.snds (p, t')" by simp
-  from MT_Test.IH[OF arm_in t'_in t'_eval MT_Test.prems(2)] obtain f1 where
+  from MT_Test.IH[OF arm_in t'_in t'_eval MT_Test.prems(2,3)] obtain f1 where
     f1: "interp_term d f1 s (match_tree_to_term t') = Inr v" by blast
   from eval_match_scrut_interp[OF sc_eval] obtain n where
     n: "interp_term d n s sc = Inr w" by blast
@@ -466,7 +498,8 @@ next
   have t'': "interp_term d ?F s (match_tree_to_term t') = Inr v"
     by (rule interp_term_Inr_more_fuel[OF f1]) simp
   have "interp_term d (Suc ?F) s (match_tree_to_term (MT_Test sc arms)) = Inr v"
-    using sc' arms_find_find_matching_arm[OF arm, of match_tree_to_term] t'' by simp
+    using sc' arms_find_find_matching_arm[OF arm, of match_tree_to_term] t'' MT_Test.prems(3)
+    by simp
   thus ?case by blast
 qed
 

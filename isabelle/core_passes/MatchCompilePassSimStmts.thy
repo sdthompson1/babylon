@@ -220,10 +220,13 @@ next
   note [simp] = IS_Ghost_update_same gmg
   from typing g have t: "core_term_type env NotGhost initTm = Some ty" by (auto split: if_splits)
   from ok have ok': "core_term_match_scrutinees_ok initTm" by simp
-  from ev obtain v where v: "interp_term d fuel full initTm = Inr v"
-    and cc: "copy_check g full v = None"
+  \<comment> \<open>The initializer is in a value position: the original run checked its
+      value, and the compiled run checks the same value in the same mode.\<close>
+  from ev obtain v where vp: "value_position full (interp_term d fuel full initTm) = Inr v"
     and res_eq: "res = Continue (bind_mutable_local x v full)"
-    by (auto split: sum.splits option.splits)
+    by (auto split: sum.splits)
+  note v = value_position_InrD[OF vp]
+  note cc = vp[unfolded v]
   from term_simD[OF IH fe fs sme wf gm t ok' v] obtain f1 where
     f1: "interp_term d f1 (mc_state full) (match_compile_term initTm) = Inr v" by auto
   have "interp_statement d (Suc f1) (mc_state full) (CoreStmt_VarDecl g x Var ty (match_compile_term initTm))
@@ -417,16 +420,18 @@ next
     by (auto split: sum.splits)
   note nfg [simp] = call_result_mode[OF call]
   from ev call obtain v where
-    cast: "apply_cast_opt castOpt retVal = Inr v" and
+    vp: "value_position full (apply_cast_opt castOpt retVal) = Inr v" and
     res_eq: "res = Continue (bind_mutable_local x v newFull)"
     by (auto split: sum.splits)
+  note cast = value_position_InrD[OF vp]
+  note chk = vp[unfolded cast]
   from call_simD[OF IH fe fs sme wf gm fi args len_ty wk refs ok' call] obtain f1 where
     f1: "interp_function_call d f1 (mc_state full) fnName tyArgs (map match_compile_term argTms)
            = Inr (mc_state newFull, retVal)" by auto
   have "interp_statement d (Suc f1) (mc_state full)
           (CoreStmt_VarDeclCall g x ty castOpt fnName tyArgs (map match_compile_term argTms))
         = Inr (mc_result res)"
-    using f1 cast res_eq by simp
+    using f1 cast chk res_eq by simp
   thus "\<exists>fuel'. interp_statement d (Suc fuel') (mc_state full)
                   (CoreStmt_VarDeclCall g x ty castOpt fnName tyArgs (map match_compile_term argTms))
                 = Inr (mc_result res)"
@@ -461,11 +466,12 @@ next
     by simp_all
   from ev obtain addr path v newVal where
     ap: "interp_writable_lvalue d fuel full lhs = Inr (addr, path)" and
-    v: "interp_term d fuel full rhs = Inr v" and
-    cc: "copy_check g full v = None" and
+    vp: "value_position full (interp_term d fuel full rhs) = Inr v" and
     upd: "update_value_at_path (IS_Store full ! addr) path v = Inr newVal" and
     res_eq: "res = Continue (full \<lparr> IS_Store := (IS_Store full)[addr := newVal] \<rparr>)"
-    by (auto simp: Let_def split: sum.splits option.splits)
+    by (auto simp: Let_def split: sum.splits)
+  note v = value_position_InrD[OF vp]
+  note cc = vp[unfolded v]
   from lvalue_simD[OF IHl fe fs sme wf gm tl okl ap] obtain f1 where
     f1: "interp_writable_lvalue d f1 (mc_state full) (match_compile_term lhs) = Inr (addr, path)" by auto
   from term_simD[OF IH fe fs sme wf gm tr okr v] obtain f2 where
@@ -530,9 +536,11 @@ next
   note nfg [simp] = call_result_mode[OF call]
   have gm1: "IS_Ghost newFull = NotGhost" using gm by simp
   from ev call obtain v where
-    cast: "apply_cast_opt castOpt retVal = Inr v"
+    vp: "value_position full (apply_cast_opt castOpt retVal) = Inr v"
     by (auto split: sum.splits)
-  from ev call cast obtain addr path newVal where
+  note cast = value_position_InrD[OF vp]
+  note chk = vp[unfolded cast]
+  from ev call cast chk obtain addr path newVal where
     ap: "interp_writable_lvalue d fuel newFull lhs = Inr (addr, path)" and
     upd: "update_value_at_path (IS_Store newFull ! addr) path v = Inr newVal" and
     res_eq: "res = Continue (newFull \<lparr> IS_Store := (IS_Store newFull)[addr := newVal] \<rparr>)"
@@ -565,7 +573,7 @@ next
   have "interp_statement d (Suc ?F) (mc_state full)
           (CoreStmt_AssignCall g (match_compile_term lhs) castOpt fnName tyArgs
              (map match_compile_term argTms)) = Inr (mc_result res)"
-    using f1' f2' cast upd res_eq by (simp add: Let_def)
+    using f1' f2' cast chk upd res_eq by (simp add: Let_def)
   thus "\<exists>fuel'. interp_statement d (Suc fuel') (mc_state full)
                   (CoreStmt_AssignCall g (match_compile_term lhs) castOpt fnName tyArgs
                      (map match_compile_term argTms)) = Inr (mc_result res)"
@@ -772,25 +780,28 @@ proof (rule stmt_simI)
   \<comment> \<open>The evaluation of the original loop: the empty invariant list and the
      absent decreases-term always pass.\<close>
   from ev inv decr obtain fuel0 where fuel_eq: "fuel = Suc fuel0" by (cases fuel) simp_all
-  from ev inv decr fuel_eq obtain cv where cv: "interp_term d fuel full condTm = Inr cv"
+  from ev inv decr fuel_eq obtain cv where
+    vp: "value_position full (interp_term d fuel full condTm) = Inr cv"
     by (auto simp: conditions_error_def split: sum.splits)
+  note cv = value_position_InrD[OF vp]
+  note chk = vp[unfolded cv]
   from term_simD[OF IH fe fs sme wf gm tc okc cv] obtain f1 where
     f1: "interp_term d f1 (mc_state full) (match_compile_term condTm) = Inr cv" by auto
   show "\<exists>fuel'. interp_statement_list d fuel' (mc_state full) (match_compile_statement ?W)
                  = Inr (mc_result res)"
   proof (cases "cv = CV_Bool False")
     case True
-    with ev inv decr fuel_eq cv have res_eq: "res = Continue full"
+    with ev inv decr fuel_eq cv chk have res_eq: "res = Continue full"
       by (simp add: conditions_error_def)
     have "interp_statement d (Suc (Suc f1)) (mc_state full) ?W' = Inr (mc_result res)"
-      using f1 True res_eq inv decr
+      using f1 True res_eq inv decr chk
       by (simp add: conditions_error_def interp_term_Inr_more_fuel[OF f1, of "Suc f1"])
     from interp_statement_list_single[OF this] show ?thesis unfolding W'_eq by blast
   next
     case False
-    with ev inv decr fuel_eq cv have cv_true: "cv = CV_Bool True"
+    with ev inv decr fuel_eq cv chk have cv_true: "cv = CV_Bool True"
       by (auto simp: conditions_error_def split: CoreValue.splits bool.splits)
-    from ev inv decr fuel_eq cv cv_true obtain r0 where
+    from ev inv decr fuel_eq cv chk cv_true obtain r0 where
       r0: "interp_statement_list d fuel full body = Inr r0"
       by (auto simp: conditions_error_def split: sum.splits)
     from stmts_simD[OF IHs fe1 fs sme1 wf1 gm ng1 fgh1 tb gf_body okb r0] obtain f2 where
@@ -799,7 +810,7 @@ proof (rule stmt_simI)
     show ?thesis
     proof (cases r0)
       case (Return s1 v)
-      with ev inv decr fuel_eq cv cv_true r0 have res_eq: "res = Return (restore_scope full s1) v"
+      with ev inv decr fuel_eq cv chk cv_true r0 have res_eq: "res = Return (restore_scope full s1) v"
         by (simp add: conditions_error_def)
       let ?F = "Suc (max f1 f2)"
       have f1': "interp_term d ?F (mc_state full) (match_compile_term condTm) = Inr cv"
@@ -813,7 +824,7 @@ proof (rule stmt_simI)
     next
       case (Continue s1)
       let ?full2 = "restore_scope full s1"
-      from ev inv decr fuel_eq cv cv_true r0 Continue have
+      from ev inv decr fuel_eq cv chk cv_true r0 Continue have
         rec: "interp_statement d fuel ?full2 ?W = Inr res"
         by (simp add: conditions_error_def)
       have sme2: "state_matches_env ?full2 env storeTyping"

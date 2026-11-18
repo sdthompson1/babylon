@@ -29,7 +29,17 @@ begin
    For statements, type soundness also asks that the enclosing function is not
    ghost (TE_FunctionGhost env = NotGhost).
 
-   mc_state keeps the mode, so the compiled run is in executable mode too. *)
+   mc_state keeps the mode, so the compiled run is in executable mode too.
+
+   The state is in executable mode, so the checks of value positions
+   (value_position, CoreInterp.thy) are live in both runs. mc_state also keeps
+   the allocation oracle, so a value that passed a check in the original run
+   passes the same check in the compiled run. The compiled run makes no check
+   that the original run did not make on the same value: a compiled match
+   becomes a tree of matches (or a match with one wildcard arm), each of which
+   checks the result of its arm, and that result is the value of the arm that
+   the original match picked, which the original match checked. The scrutinees
+   of the tree are in place positions and are not checked. *)
 
 (* With no ghost parameters, every argument of a call is typed in the ambient
    NotGhost mode. *)
@@ -348,12 +358,21 @@ proof (rule term_simI)
     and ev: "interp_term d (Suc fuel) full (CoreTm_Cast ty tm) = Inr v"
   from typing obtain opTy where t: "core_term_type env NotGhost tm = Some opTy"
     by (auto split: option.splits if_splits)
-  from ev obtain w where w: "interp_term d fuel full tm = Inr w" and c: "cast_value ty w = Inr v"
-    by (auto split: sum.splits)
+  \<comment> \<open>The operand of a cast to a type that is not an array type is in a value
+      position; the compiled run checks the same value in the same mode.\<close>
+  from ev obtain w where
+    vp: "(if is_array_type ty then interp_term d fuel full tm
+          else value_position full (interp_term d fuel full tm)) = Inr w"
+    and c: "cast_value ty w = Inr v"
+    by (auto simp: Let_def split: sum.splits)
+  have w: "interp_term d fuel full tm = Inr w"
+    using vp by (auto split: if_splits dest: value_position_InrD)
+  have chk: "\<not> is_array_type ty \<longrightarrow> value_position full (Inr w) = Inr w"
+    using vp unfolding w by (cases "is_array_type ty") simp_all
   from term_simD[OF IH fe fs sme wf gm t _ w] ok obtain f1 where
     f1: "interp_term d f1 (mc_state full) (match_compile_term tm) = Inr w" by auto
   have "interp_term d (Suc f1) (mc_state full) (match_compile_term (CoreTm_Cast ty tm)) = Inr v"
-    using f1 c by simp
+    using f1 c chk by (simp add: Let_def)
   thus "\<exists>fuel'. interp_term d fuel' (mc_state full) (match_compile_term (CoreTm_Cast ty tm)) = Inr v"
     by blast
 qed
@@ -371,12 +390,15 @@ proof (rule term_simI)
     and ev: "interp_term d (Suc fuel) full (CoreTm_Unop op tm) = Inr v"
   from typing obtain opTy where t: "core_term_type env NotGhost tm = Some opTy"
     by (auto split: option.splits)
-  from ev obtain w where w: "interp_term d fuel full tm = Inr w" and c: "eval_unop op w = Inr v"
+  from ev obtain w where vp: "value_position full (interp_term d fuel full tm) = Inr w"
+    and c: "eval_unop op w = Inr v"
     by (auto split: sum.splits)
+  note w = value_position_InrD[OF vp]
+  note chk = vp[unfolded w]
   from term_simD[OF IH fe fs sme wf gm t _ w] ok obtain f1 where
     f1: "interp_term d f1 (mc_state full) (match_compile_term tm) = Inr w" by auto
   have "interp_term d (Suc f1) (mc_state full) (match_compile_term (CoreTm_Unop op tm)) = Inr v"
-    using f1 c by simp
+    using f1 c chk by simp
   thus "\<exists>fuel'. interp_term d fuel' (mc_state full) (match_compile_term (CoreTm_Unop op tm)) = Inr v"
     by blast
 qed
@@ -394,12 +416,15 @@ proof (rule term_simI)
     and ev: "interp_term d (Suc fuel) full (CoreTm_VariantCtor c tys tm) = Inr v"
   from typing obtain pTy where t: "core_term_type env NotGhost tm = Some pTy"
     by (auto simp: Let_def split: option.splits if_splits)
-  from ev obtain w where w: "interp_term d fuel full tm = Inr w" and v_eq: "v = CV_Variant c w"
+  from ev obtain w where vp: "value_position full (interp_term d fuel full tm) = Inr w"
+    and v_eq: "v = CV_Variant c w"
     by (auto split: sum.splits)
+  note w = value_position_InrD[OF vp]
+  note chk = vp[unfolded w]
   from term_simD[OF IH fe fs sme wf gm t _ w] ok obtain f1 where
     f1: "interp_term d f1 (mc_state full) (match_compile_term tm) = Inr w" by auto
   have "interp_term d (Suc f1) (mc_state full) (match_compile_term (CoreTm_VariantCtor c tys tm)) = Inr v"
-    using f1 v_eq by simp
+    using f1 v_eq chk by simp
   thus "\<exists>fuel'. interp_term d fuel' (mc_state full) (match_compile_term (CoreTm_VariantCtor c tys tm))
                  = Inr v"
     by blast
@@ -497,21 +522,27 @@ proof (rule term_simI)
     by (auto split: option.splits)
   from ok have ok1: "core_term_match_scrutinees_ok tm1" and ok2: "core_term_match_scrutinees_ok tm2"
     by simp_all
-  from ev obtain w1 where w1: "interp_term d fuel full tm1 = Inr w1" by (auto split: sum.splits)
+  from ev obtain w1 where vp1: "value_position full (interp_term d fuel full tm1) = Inr w1"
+    by (auto split: sum.splits)
+  note w1 = value_position_InrD[OF vp1]
+  note chk1 = vp1[unfolded w1]
   from term_simD[OF IH1 fe fs sme wf gm t1 ok1 w1] obtain f1 where
     f1: "interp_term d f1 (mc_state full) (match_compile_term tm1) = Inr w1" by auto
   show "\<exists>fuel'. interp_term d fuel' (mc_state full) (match_compile_term (CoreTm_Binop op tm1 tm2)) = Inr v"
   proof (cases "short_circuit op w1")
     case (Some r)
-    with ev w1 have "v = r" by simp
+    with ev w1 chk1 have "v = r" by simp
     hence "interp_term d (Suc f1) (mc_state full) (match_compile_term (CoreTm_Binop op tm1 tm2)) = Inr v"
-      using f1 Some by simp
+      using f1 Some chk1 by simp
     thus ?thesis by blast
   next
     case None
-    from ev w1 None obtain w2 where w2: "interp_term d fuel full tm2 = Inr w2"
+    from ev w1 chk1 None obtain w2 where
+      vp2: "value_position full (interp_term d fuel full tm2) = Inr w2"
       and r: "eval_binop op w1 w2 = Inr v"
       by (auto split: sum.splits)
+    note w2 = value_position_InrD[OF vp2]
+    note chk2 = vp2[unfolded w2]
     from term_simD[OF IH2 fe fs sme wf gm t2 ok2 w2] obtain f2 where
       f2: "interp_term d f2 (mc_state full) (match_compile_term tm2) = Inr w2" by auto
     let ?F = "max f1 f2"
@@ -520,7 +551,7 @@ proof (rule term_simI)
     have f2': "interp_term d ?F (mc_state full) (match_compile_term tm2) = Inr w2"
       by (rule interp_term_Inr_more_fuel[OF f2]) simp
     have "interp_term d (Suc ?F) (mc_state full) (match_compile_term (CoreTm_Binop op tm1 tm2)) = Inr v"
-      using f1' f2' None r by simp
+      using f1' f2' None r chk1 chk2 by simp
     thus ?thesis by blast
   qed
 qed
@@ -548,9 +579,12 @@ proof (rule term_simI)
                      TE_ConstLocals := finsert x (TE_ConstLocals env) \<rparr>"
   from ok have ok_rhs: "core_term_match_scrutinees_ok rhs"
     and ok_body: "core_term_match_scrutinees_ok body" by simp_all
+  \<comment> \<open>The result of the body is in a value position.\<close>
   from ev obtain w where w: "interp_term d fuel full rhs = Inr w"
-    and body_ev: "interp_term d fuel (bind_const_local x w full) body = Inr v"
-    by (auto simp: interp_term_Let split: sum.splits)
+    and vpb: "value_position full (interp_term d fuel (bind_const_local x w full) body) = Inr v"
+    by (auto simp: interp_term_Let_vp split: sum.splits)
+  note body_ev = value_position_InrD[OF vpb]
+  note chk = vpb[unfolded body_ev]
   from term_simD[OF IH fe fs sme wf gm t_rhs ok_rhs w] obtain f1 where
     f1: "interp_term d f1 (mc_state full) (match_compile_term rhs) = Inr w" by auto
   \<comment> \<open>The state after binding the variable matches the extended environment.\<close>
@@ -593,7 +627,7 @@ proof (rule term_simI)
   have f2': "interp_term d ?F (bind_const_local x w (mc_state full)) (match_compile_term body) = Inr v"
     using interp_term_Inr_more_fuel[OF f2, of ?F] by simp
   have "interp_term d (Suc ?F) (mc_state full) (match_compile_term (CoreTm_Let x rhs body)) = Inr v"
-    using f1' f2' by (simp add: interp_term_Let)
+    using f1' f2' chk by (simp add: interp_term_Let_vp)
   thus "\<exists>fuel'. interp_term d fuel' (mc_state full) (match_compile_term (CoreTm_Let x rhs body)) = Inr v"
     by blast
 qed
@@ -612,13 +646,16 @@ proof (rule term_simI)
   from typing have t: "\<forall>tm \<in> set tms. \<exists>ty. core_term_type env NotGhost tm = Some ty"
     by (auto simp: list_all_iff split: if_splits)
   from ok have ok': "list_all core_term_match_scrutinees_ok tms" by simp
-  from ev obtain vs where vs: "interp_term_list d fuel full tms = Inr vs"
+  from ev obtain vs where
+    vpl: "value_position_list full (interp_term_list d fuel full tms) = Inr vs"
     and v_eq: "v = make_1d_array vs"
     by (auto split: sum.splits)
+  note vs = value_position_list_InrD[OF vpl]
+  note chk = vpl[unfolded vs]
   from terms_simD[OF IH fe fs sme wf gm t ok' vs] obtain f1 where
     f1: "interp_term_list d f1 (mc_state full) (map match_compile_term tms) = Inr vs" by auto
   have "interp_term d (Suc f1) (mc_state full) (match_compile_term (CoreTm_LitArray eTy tms)) = Inr v"
-    using f1 v_eq by simp
+    using f1 v_eq chk by simp
   thus "\<exists>fuel'. interp_term d fuel' (mc_state full) (match_compile_term (CoreTm_LitArray eTy tms))
                  = Inr v"
     by blast
@@ -643,14 +680,17 @@ proof (rule term_simI)
     by (auto simp: case_prod_unfold)
   from ok have ok': "list_all core_term_match_scrutinees_ok (map snd flds)"
     by (auto simp: list_all_iff)
-  from ev obtain vs where vs: "interp_term_list d fuel full (map snd flds) = Inr vs"
+  from ev obtain vs where
+    vpl: "value_position_list full (interp_term_list d fuel full (map snd flds)) = Inr vs"
     and v_eq: "v = CV_Record (zip (map fst flds) vs)"
     by (auto split: sum.splits)
+  note vs = value_position_list_InrD[OF vpl]
+  note chk = vpl[unfolded vs]
   from terms_simD[OF IH fe fs sme wf gm t ok' vs] obtain f1 where
     f1: "interp_term_list d f1 (mc_state full) (map match_compile_term (map snd flds)) = Inr vs"
     by auto
   have "interp_term d (Suc f1) (mc_state full) (match_compile_term (CoreTm_Record flds)) = Inr v"
-    using f1 v_eq by (simp add: case_prod_unfold comp_def)
+    using f1 v_eq chk by (simp add: case_prod_unfold comp_def)
   thus "\<exists>fuel'. interp_term d fuel' (mc_state full) (match_compile_term (CoreTm_Record flds)) = Inr v"
     by blast
 qed
@@ -673,11 +713,13 @@ proof (rule term_simI)
     and ok2: "list_all core_term_match_scrutinees_ok idxs" by simp_all
   from ev obtain al sizes m ivs where
     w: "interp_term d fuel full arr = Inr (CV_Array al sizes m)" and
-    ivs: "interp_term_list d fuel full idxs = Inr ivs" and
+    vpl: "value_position_list full (interp_term_list d fuel full idxs) = Inr ivs" and
     rest: "(case interpret_index_vals ivs of
               Inr indices \<Rightarrow> (case fmlookup m indices of Some r \<Rightarrow> Inr r | None \<Rightarrow> Inl RuntimeError)
             | Inl err \<Rightarrow> Inl err) = Inr v"
     by (auto split: sum.splits CoreValue.splits)
+  note ivs = value_position_list_InrD[OF vpl]
+  note chk = vpl[unfolded ivs]
   from term_simD[OF IH fe fs sme wf gm t ok1 w] obtain f1 where
     f1: "interp_term d f1 (mc_state full) (match_compile_term arr) = Inr (CV_Array al sizes m)" by auto
   from terms_simD[OF IHs fe fs sme wf gm ti ok2 ivs] obtain f2 where
@@ -688,7 +730,7 @@ proof (rule term_simI)
   have f2': "interp_term_list d ?F (mc_state full) (map match_compile_term idxs) = Inr ivs"
     by (rule interp_term_list_Inr_more_fuel[OF f2]) simp
   have "interp_term d (Suc ?F) (mc_state full) (match_compile_term (CoreTm_ArrayProj arr idxs)) = Inr v"
-    using f1' f2' rest by simp
+    using f1' f2' rest chk by simp
   thus "\<exists>fuel'. interp_term d fuel' (mc_state full) (match_compile_term (CoreTm_ArrayProj arr idxs))
                  = Inr v"
     by blast
@@ -802,8 +844,14 @@ proof (rule term_simI)
   from ev obtain sv body where
     sv: "interp_term d fuel full scrut = Inr sv" and
     arm: "find_matching_arm sv arms = Inr body" and
-    body_ev: "interp_term d fuel full body = Inr v"
+    vpb: "value_position full (interp_term d fuel full body) = Inr v"
     by (auto split: sum.splits)
+  \<comment> \<open>The result of the arm is in a value position: the original run checked
+      it. Every match of the compiled term yields this same value, and checks it
+      in the same mode with the same oracle.\<close>
+  note body_ev = value_position_InrD[OF vpb]
+  note chk = vpb[unfolded body_ev]
+  have chk': "value_position (mc_state full) (Inr v) = Inr v" using chk by simp
   from find_matching_arm_in_arms[OF arm] obtain p where arm_in: "(p, body) \<in> set arms" by auto
   have t_body: "core_term_type env NotGhost body = Some ty" by (rule bodies[OF arm_in])
   from ok_arms arm_in have ok_body: "core_term_match_scrutinees_ok body" by (auto simp: list_all_iff)
@@ -823,7 +871,7 @@ proof (rule term_simI)
     have arm': "find_matching_arm sv ?arms' = Inr (match_compile_term body)"
       by (rule find_matching_arm_map[OF arm])
     have "interp_term d (Suc ?F) (mc_state full) (CoreTm_Match (match_compile_term scrut) ?arms') = Inr v"
-      using f1' arm' f2' by simp
+      using f1' arm' f2' chk by simp
     hence "interp_term d (Suc ?F) (mc_state full) (match_compile_term (CoreTm_Match scrut arms)) = Inr v"
       using True by (simp add: Let_def)
     thus ?thesis by blast
@@ -858,14 +906,14 @@ proof (rule term_simI)
       hence f1': "interp_term d f1 (mc_state full) (CoreTm_Var x) = Inr sv" by (simp add: scrut_eq)
       have "interp_term d (Suc (max f1 f2)) (mc_state full)
               (CoreTm_Match (CoreTm_Var x) [(CorePat_Wildcard, b)]) = Inr v"
-        unfolding b_eq by (rule interp_wild_match[OF f1' f2])
+        unfolding b_eq by (rule interp_wild_match[OF f1' f2 chk'])
       hence "interp_term d (Suc (max f1 f2)) (mc_state full)
                (match_compile_term (CoreTm_Match scrut arms)) = Inr v"
         using False scrut_eq MT_Leaf by (simp add: compile_match_term_def Let_def)
       thus ?thesis by blast
     next
       case (MT_Test sc tarms)
-      from match_tree_to_term_eval[OF tree' f2] obtain f3 where
+      from match_tree_to_term_eval[OF tree' f2 chk'] obtain f3 where
         "interp_term d f3 (mc_state full)
            (match_tree_to_term (compile_match_tree (CoreTm_Var x) ?arms')) = Inr v" by blast
       hence "interp_term d f3 (mc_state full) (match_compile_term (CoreTm_Match scrut arms)) = Inr v"
@@ -977,10 +1025,12 @@ proof (rule lvalue_simI)
       and oki: "list_all core_term_match_scrutinees_ok idxs" by simp_all
     from ev CoreTm_ArrayProj obtain addr path ivs indices where
       r': "interp_writable_lvalue d fuel full tm' = Inr (addr, path)" and
-      ivs: "interp_term_list d fuel full idxs = Inr ivs" and
+      vpl: "value_position_list full (interp_term_list d fuel full idxs) = Inr ivs" and
       ind: "interpret_index_vals ivs = Inr indices" and
       r_eq: "r = (addr, path @ [LVPath_ArrayProj indices])"
       by (auto split: sum.splits)
+    note ivs = value_position_list_InrD[OF vpl]
+    note chk = vpl[unfolded ivs]
     from lvalue_simD[OF IH fe fs sme wf gm t ok' r'] obtain f1 where
       f1: "interp_writable_lvalue d f1 (mc_state full) (match_compile_term tm') = Inr (addr, path)" by auto
     from terms_simD[OF IHs fe fs sme wf gm ti oki ivs] obtain f2 where
@@ -991,7 +1041,7 @@ proof (rule lvalue_simI)
     have f2': "interp_term_list d ?F (mc_state full) (map match_compile_term idxs) = Inr ivs"
       by (rule interp_term_list_Inr_more_fuel[OF f2]) simp
     have "interp_writable_lvalue d (Suc ?F) (mc_state full) (match_compile_term tm) = Inr r"
-      using f1' f2' ind r_eq CoreTm_ArrayProj by simp
+      using f1' f2' ind r_eq chk CoreTm_ArrayProj by simp
     thus ?thesis by blast
   next
     case (CoreTm_Cast cty tm')

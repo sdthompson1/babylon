@@ -457,11 +457,14 @@ proof (rule call_simI)
   proof (cases "IF_Body f")
     case (Inl body)
     \<comment> \<open>A Babylon body: run the compiled body in the compiled frame.\<close>
-    from bodyF Inl obtain postF where
+    \<comment> \<open>The returned value passed the check of the original call (R4); the
+        compiled call makes the same check of the same value.\<close>
+    from bodyF Inl obtain postF rv0 where
       bodyEval: "interp_statement_list d fuel preF body = Inr (Return postF retVal)" and
-      cc: "copy_check (IF_Ghost f) preF retVal = None" and
+      vp: "value_position (full \<lparr> IS_Ghost := IF_Ghost f \<rparr>) (Inr retVal) = Inr rv0" and
       newFull_eq: "newFull = restore_scope full postF"
-      by (auto simp: call_body_def split: sum.splits ExecResult.splits option.splits)
+      by (auto simp: call_body_def split: sum.splits ExecResult.splits)
+    note cc = vp[unfolded value_position_InrD[OF vp, symmetric]]
     from fi_match Inl have "core_statement_list_type ?envB (FI_Ghost funInfo) body \<noteq> None"
       unfolding fun_info_matches_interp_fun_def by auto
     then obtain envB' where bodyT: "core_statement_list_type ?envB NotGhost body = Some envB'"
@@ -528,12 +531,16 @@ proof (rule call_simI)
     qed
     obtain w upd rv where ext_eq: "ext (IS_World full) (rights ?valsF) = (w, upd, rv)"
       by (cases "ext (IS_World full) (rights ?valsF)") auto
-    from bodyF Inr ext_eq obtain fin where
+    \<comment> \<open>The returned value passed the check of the original call (R4); the
+        compiled call makes the same check of the same value.\<close>
+    from bodyF Inr ext_eq obtain fin rv0 where
       aru: "apply_ref_updates (full \<lparr> IS_World := w \<rparr>)
               (rights (map (\<lambda>((_, vr, _), rr). if vr = Ref then rr else Inl TypeError)
                             (zip (IF_Args f) ?refsF))) upd = Inr fin" and
+      vp: "value_position (full \<lparr> IS_Ghost := IF_Ghost f \<rparr>) (Inr rv) = Inr rv0" and
       nf: "newFull = fin" and rv: "retVal = rv"
       by (auto simp: call_body_def Let_def split: sum.splits)
+    note cc = vp[unfolded value_position_InrD[OF vp, symmetric]]
     have aru': "apply_ref_updates ((mc_state full) \<lparr> IS_World := w \<rparr>)
                   (rights (map (\<lambda>((_, vr, _), rr). if vr = Ref then rr else Inl TypeError)
                                 (zip (IF_Args f) ?refsF))) upd = Inr (mc_state fin)"
@@ -541,7 +548,7 @@ proof (rule call_simI)
     have cb: "call_body (interp_statement_list d F0) (mc_state full) (mc_interp_fun f) ?refsG ?valsG
                 (mc_state preF) = Inr (mc_state newFull, retVal)"
       unfolding call_body_def mc_interp_fun_simps vals_eq refs_eq
-      using Inr ext_eq aru' nf rv by (simp add: Let_def)
+      using Inr ext_eq aru' nf rv cc by (simp add: Let_def)
     have "interp_function_call d (Suc F0) (mc_state full) fnName tyArgs (map match_compile_term argTms)
             = Inr (mc_state newFull, retVal)"
       by (rule interp_function_call_I[OF lk lenA lenT gh' argsNG' compiled_fold[OF F0]
