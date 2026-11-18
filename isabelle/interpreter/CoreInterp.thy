@@ -769,7 +769,8 @@ lemma is_allocated_Record:
         holds for an extern function as well as for one with a Core body.
 
    (R2 is the matching typing rule: a term in a value position must have a
-   complete type.)
+   complete type. See complete_if_executable in CoreTypecheck.thy for the terms,
+   and CoreStmtTypecheck.thy for the statements.)
 
    The rationale is that in the generated C code an allocated value is a
    descriptor holding a pointer to a heap block. A value position copies its

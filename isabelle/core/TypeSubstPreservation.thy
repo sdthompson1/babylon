@@ -41,7 +41,9 @@ qed
      env's TE_TypeVars, which the fresh domain avoids.
 
    - The substitution range consists of complete types (in any mode): the type
-     arguments of calls and constructors must stay complete after substitution.
+     arguments of calls and constructors must stay complete after substitution,
+     and so must the types of the terms in value positions (rule R2, see
+     complete_if_executable).
 
    This lemma is a corollary of core_term_type_subst_callee_env: under these
    conditions, apply_subst_to_callee_env subst env env equals env up to

@@ -571,7 +571,8 @@ qed
      (needed for the runtime-type checks at non-ghost positions).
    - The substitution's range consists of complete types (needed, in any mode,
      for the completeness check on the type arguments of calls and constructors,
-     and on the operand of allocated). *)
+     and on the operand of allocated; and for the types of the terms in value
+     positions, rule R2, see complete_if_executable). *)
 lemma core_term_type_subst_callee_env:
   assumes "core_term_type calleeEnv ghost tm = Some ty"
       and "tyenv_well_formed calleeEnv"

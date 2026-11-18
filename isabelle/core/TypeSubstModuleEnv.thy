@@ -948,8 +948,9 @@ qed
    - In NotGhost mode, the runtime-tyvar coverage holds
      (module_env_subst_runtime_ok).
    - The substitution's range consists of complete types (in any mode), so that
-     the type arguments of calls and constructors, and the operand types of
-     allocated, stay complete. *)
+     the type arguments of calls and constructors, the operand types of
+     allocated, and the types of the terms in value positions (rule R2, see
+     complete_if_executable) stay complete. *)
 lemma core_term_type_subst_module_env:
   assumes "core_term_type env ghost tm = Some ty"
       and "tyenv_binders_distinct env"
