@@ -860,8 +860,12 @@ next
         from idxs_typed have types_all_some: "list_all (\<lambda>ty. ty \<noteq> None) ?types"
           by (simp add: list_all_length)
         from IH_list[OF "3.prems"(1,2)] types_all_some
-        have idx_sound: "sound_term_results state env (map the ?types) (interp_term_list d fuel state idxTms)"
+        have idx_sound0: "sound_term_results state env (map the ?types) (interp_term_list d fuel state idxTms)"
           by simp
+        \<comment> \<open>The index terms are in value positions.\<close>
+        hence idx_sound: "sound_term_results state env (map the ?types)
+                            (value_position_list state (interp_term_list d fuel state idxTms))"
+          by (rule sound_term_results_value_position_list)
         from idxs_typed have map_the_types: "map the ?types =
             replicate (length idxTms) (CoreTy_FiniteInt Unsigned IntBits_64)"
           by (induction idxTms) (auto simp: list_all_iff)
@@ -881,7 +885,7 @@ next
                             = Some (CoreTy_Array (apply_subst ?s elemTy) dims)"
             by auto
           show ?thesis
-          proof (cases "interp_term_list d fuel state idxTms")
+          proof (cases "value_position_list state (interp_term_list d fuel state idxTms)")
             case (Inl err)
             then have "interp_writable_lvalue d (Suc fuel) state tm = Inl err"
               using CoreTm_ArrayProj \<open>interp_writable_lvalue d fuel state innerTm = Inr addrPath\<close>
@@ -1043,10 +1047,16 @@ next
                 does not read. \<close>
             let ?envX = "env \<lparr> TE_LocalVars := fmupd varName varTy (TE_LocalVars env),
                                TE_ConstLocals := fminus (TE_ConstLocals env) {|varName|} \<rparr>"
+            \<comment> \<open>The initializer is in a value position: its value is checked (in the
+                declaration's mode), which cannot give a TypeError. \<close>
             from IH_term[OF "4.prems"(1,2) init_ty0]
-            have init_sound: "sound_term_result state env varTy (interp_term d fuel (state \<lparr>IS_Ghost := declGhost\<rparr>) initTm)" .
+            have init_sound: "sound_term_result state env varTy
+                                (value_position (state \<lparr>IS_Ghost := declGhost\<rparr>)
+                                   (interp_term d fuel (state \<lparr>IS_Ghost := declGhost\<rparr>) initTm))"
+              by (rule sound_term_result_value_position)
             show ?thesis
-            proof (cases "interp_term d fuel (state \<lparr>IS_Ghost := declGhost\<rparr>) initTm")
+            proof (cases "value_position (state \<lparr>IS_Ghost := declGhost\<rparr>)
+                            (interp_term d fuel (state \<lparr>IS_Ghost := declGhost\<rparr>) initTm)")
               case (Inl err)
               with init_sound have err_sound: "sound_error_result err" by simp
               from Inl have interp_err:
@@ -1059,18 +1069,6 @@ next
               from init_sound Inr
               have val_typed: "value_has_type env initialVal
                                  (apply_subst (IS_TyArgs state) varTy)" by simp
-              show ?thesis
-              proof (cases "copy_check declGhost state initialVal")
-                case (Some err)
-                \<comment> \<open>An improper copy of an allocated value: a RuntimeError. \<close>
-                with copy_check_cases[of declGhost state initialVal]
-                have err_eq: "err = RuntimeError" by simp
-                have "interp_statement d (Suc fuel) state
-                    (CoreStmt_VarDecl declGhost varName Var varTy initTm) = Inl RuntimeError"
-                  using Inr Some err_eq by simp
-                with CoreStmt_VarDecl Var show ?thesis by simp
-              next
-              case None
               obtain state' addr where alloc_eq: "(state', addr) = alloc_store state initialVal"
                 by (cases "alloc_store state initialVal") auto
               let ?state'' = "state' \<lparr> IS_Locals := fmupd varName addr (IS_Locals state'),
@@ -1079,7 +1077,7 @@ next
               have interp_eq: "interp_statement d (Suc fuel) state
                   (CoreStmt_VarDecl declGhost varName Var varTy initTm) =
                   Inr (Continue ?state'')"
-                using Inr None alloc_eq by (simp add: case_prod_beta)
+                using Inr alloc_eq by (simp add: case_prod_beta)
               let ?subVarTy = "apply_subst (IS_TyArgs state) varTy"
               have sme_X: "state_matches_env ?state'' ?envX (storeTyping @ [?subVarTy])"
                 using state_matches_env_add_nonconst_local[OF "4.prems"(1) val_typed
@@ -1090,7 +1088,6 @@ next
                 using storeTyping_extends_append .
               from new_sme ext interp_eq CoreStmt_VarDecl Var
               show ?thesis by auto
-              qed
             qed
         next
           case Ref
@@ -1335,18 +1332,23 @@ next
               tyargs_eq: "IS_TyArgs newState = IS_TyArgs state" and
               ret_typed: "value_has_type env retVal (apply_subst (IS_TyArgs state) retTy)"
               by auto
+            \<comment> \<open>The call's result, after the cast, is in a value position: a failed
+                cast or an allocated value is a RuntimeError. \<close>
             show ?thesis
-            proof (cases "apply_cast_opt castOpt retVal")
+            proof (cases "value_position (state \<lparr>IS_Ghost := declGhost\<rparr>)
+                            (apply_cast_opt castOpt retVal)")
               case (Inl err)
               have err_eq: "err = RuntimeError"
-                using apply_cast_opt_error_is_runtime[OF Inl cast_ty ret_typed] .
+                using Inl apply_cast_opt_error_is_runtime[OF _ cast_ty ret_typed]
+                by (auto simp: value_position_Inl_iff)
               have interp_err: "interp_statement d (Suc fuel) state
                   (CoreStmt_VarDeclCall declGhost varName varTy castOpt fnName tyArgs argTms) = Inl RuntimeError"
                 using Inl Inr fcResult_eq err_eq by simp
               with CoreStmt_VarDeclCall show ?thesis by simp
             next
               case (Inr initialVal)
-              from apply_cast_opt_sound[OF Inr cast_ty ret_typed[unfolded tyargs_eq[symmetric]]]
+              from apply_cast_opt_sound[OF value_position_InrD[OF Inr] cast_ty
+                                           ret_typed[unfolded tyargs_eq[symmetric]]]
               have val_typed_new: "value_has_type env initialVal (apply_subst (IS_TyArgs newState) varTy)" .
               hence val_typed: "value_has_type env initialVal (apply_subst (IS_TyArgs state) varTy)"
                 using tyargs_eq by simp
@@ -1412,10 +1414,16 @@ next
               path_ty: "type_at_path env (storeTyping ! addr) path
                           = Some (apply_subst (IS_TyArgs state) lhsTy)"
               by auto
+            \<comment> \<open>The rhs is in a value position: its value is checked (in the
+                assignment's mode), which cannot give a TypeError. \<close>
             from IH_term[OF "4.prems"(1,2) rhs_ty0]
-            have rhs_sound: "sound_term_result state env lhsTy (interp_term d fuel (state \<lparr>IS_Ghost := assignGhost\<rparr>) rhsTm)" .
+            have rhs_sound: "sound_term_result state env lhsTy
+                               (value_position (state \<lparr>IS_Ghost := assignGhost\<rparr>)
+                                  (interp_term d fuel (state \<lparr>IS_Ghost := assignGhost\<rparr>) rhsTm))"
+              by (rule sound_term_result_value_position)
             show ?thesis
-            proof (cases "interp_term d fuel (state \<lparr>IS_Ghost := assignGhost\<rparr>) rhsTm")
+            proof (cases "value_position (state \<lparr>IS_Ghost := assignGhost\<rparr>)
+                            (interp_term d fuel (state \<lparr>IS_Ghost := assignGhost\<rparr>) rhsTm)")
               case (Inl err)
               with rhs_sound have err_sound: "sound_error_result err" by simp
               have interp_err: "interp_statement d (Suc fuel) state
@@ -1430,19 +1438,7 @@ next
               from "4.prems"(1) addr_valid
               have old_slot_typed: "value_has_type env (IS_Store state ! addr) (storeTyping ! addr)"
                 unfolding state_matches_env_def store_well_typed_def by simp
-              show ?thesis
-              proof (cases "copy_check assignGhost state rhsVal")
-                case (Some err)
-                \<comment> \<open>An improper copy of an allocated value: a RuntimeError. \<close>
-                with copy_check_cases[of assignGhost state rhsVal]
-                have err_eq: "err = RuntimeError" by simp
-                have "interp_statement d (Suc fuel) state
-                    (CoreStmt_Assign assignGhost lhsTy lhsTm rhsTm) = Inl RuntimeError"
-                  using Inr Some err_eq \<open>interp_writable_lvalue d fuel (state \<lparr>IS_Ghost := assignGhost\<rparr>) lhsTm = Inr addrPath\<close>
-                        ap_eq by simp
-                with CoreStmt_Assign show ?thesis by simp
-              next
-              case None
+              note rhs_eval = Inr
               show ?thesis
               proof (cases "update_value_at_path (IS_Store state ! addr) path rhsVal")
                 case (Inl err)
@@ -1450,7 +1446,7 @@ next
                 have err_eq: "err = RuntimeError" .
                 have interp_err: "interp_statement d (Suc fuel) state
                     (CoreStmt_Assign assignGhost lhsTy lhsTm rhsTm) = Inl RuntimeError"
-                  using Inl Inr None \<open>interp_writable_lvalue d fuel (state \<lparr>IS_Ghost := assignGhost\<rparr>) lhsTm = Inr addrPath\<close>
+                  using Inl rhs_eval \<open>interp_writable_lvalue d fuel (state \<lparr>IS_Ghost := assignGhost\<rparr>) lhsTm = Inr addrPath\<close>
                         ap_eq err_eq by simp
                 with CoreStmt_Assign show ?thesis by simp
               next
@@ -1460,7 +1456,7 @@ next
                 let ?state' = "state \<lparr> IS_Store := (IS_Store state)[addr := newVal] \<rparr>"
                 have interp_eq: "interp_statement d (Suc fuel) state
                     (CoreStmt_Assign assignGhost lhsTy lhsTm rhsTm) = Inr (Continue ?state')"
-                  using Inr None \<open>interp_term d fuel (state \<lparr>IS_Ghost := assignGhost\<rparr>) rhsTm = Inr rhsVal\<close>
+                  using Inr rhs_eval
                     \<open>interp_writable_lvalue d fuel (state \<lparr>IS_Ghost := assignGhost\<rparr>) lhsTm = Inr addrPath\<close> ap_eq by simp
                 from state_matches_env_update_store[OF "4.prems"(1) addr_valid
                     new_slot_typed refl]
@@ -1469,7 +1465,6 @@ next
                   using storeTyping_extends_refl .
                 from new_sme ext interp_eq env'_eq CoreStmt_Assign
                 show ?thesis by auto
-              qed
               qed
             qed
           qed
@@ -1546,12 +1541,17 @@ next
             have ns_mode: "IS_Ghost newState = assignGhost"
               using static_parts_eqD(7)[OF interp_function_call_static[OF call_eq]] by simp
             \<comment> \<open>Apply the optional cast to the call's return value. \<close>
+            \<comment> \<open>The result, after the cast, is in a value position (in the
+                assignment's mode). \<close>
             show ?thesis
-            proof (cases "apply_cast_opt castOpt retVal")
+            proof (cases "value_position (state \<lparr>IS_Ghost := assignGhost\<rparr>)
+                            (apply_cast_opt castOpt retVal)")
               case (Inl err)
-              \<comment> \<open>A failed cast is a RuntimeError (apply_cast_opt overflow). \<close>
+              \<comment> \<open>A failed cast is a RuntimeError (apply_cast_opt overflow), and so is
+                  an allocated value in a value position. \<close>
               have err_eq: "err = RuntimeError"
-                using apply_cast_opt_error_is_runtime[OF Inl cast_ty ret_typed] .
+                using Inl apply_cast_opt_error_is_runtime[OF _ cast_ty ret_typed]
+                by (auto simp: value_position_Inl_iff)
               have interp_err: "interp_statement d (Suc fuel) state
                   (CoreStmt_AssignCall assignGhost lhsTm castOpt fnName tyArgs argTms) = Inl RuntimeError"
                 using Inl call_eq err_eq by simp
@@ -1559,7 +1559,8 @@ next
             next
               case (Inr rhsVal)
               note cast_eq = Inr
-              from apply_cast_opt_sound[OF Inr cast_ty ret_typed[unfolded tyargs_eq[symmetric]]]
+              from apply_cast_opt_sound[OF value_position_InrD[OF Inr] cast_ty
+                                           ret_typed[unfolded tyargs_eq[symmetric]]]
               have rhs_typed: "value_has_type env rhsVal (apply_subst (IS_TyArgs newState) lhsTy)" .
               \<comment> \<open>The lhs is resolved in the post-call state, so the lvalue IH is
                   applied to newState with the store typing the call produced. \<close>
@@ -1925,8 +1926,12 @@ next
           have while_typed: "core_statement_type env ghost
               (CoreStmt_While whileGhost condTm invars decr bodyStmts) = Some env"
             using typing CoreStmt_While env'_eq by simp
+          \<comment> \<open>The condition is in a value position. \<close>
           from IH_term[OF "4.prems"(1,2) cond_ty0]
-          have cond_sound: "sound_term_result state env CoreTy_Bool (interp_term d fuel (state \<lparr>IS_Ghost := whileGhost\<rparr>) condTm)" .
+          have cond_sound: "sound_term_result state env CoreTy_Bool
+                              (value_position (state \<lparr>IS_Ghost := whileGhost\<rparr>)
+                                 (interp_term d fuel (state \<lparr>IS_Ghost := whileGhost\<rparr>) condTm))"
+            by (rule sound_term_result_value_position)
           have IH_stmts: "\<And>env0 (state0 :: 'w InterpState) storeTyping0 ghost0 stmts0 env0'.
                   state_matches_env state0 env0 storeTyping0 \<Longrightarrow>
                   tyenv_well_formed env0 \<Longrightarrow>
@@ -1976,7 +1981,8 @@ next
           have loop_sound: ?thesis
             if iv [simp]: "interp_term_list d fuel (state \<lparr>IS_Ghost := Ghost\<rparr>) invars = Inr invarVals"
             and ie [simp]: "conditions_error invarVals = None" for invarVals
-          proof (cases "interp_term d fuel (state \<lparr>IS_Ghost := whileGhost\<rparr>) condTm")
+          proof (cases "value_position (state \<lparr>IS_Ghost := whileGhost\<rparr>)
+                          (interp_term d fuel (state \<lparr>IS_Ghost := whileGhost\<rparr>) condTm)")
             case (Inl err)
             with cond_sound have "sound_error_result err" by simp
             moreover have "interp_statement d (Suc fuel) state

@@ -133,6 +133,18 @@ next
   show ?thesis by (auto split: if_splits)
 qed
 
+(* The value-position check keeps a sound result sound: it passes the result
+   through or replaces it by RuntimeError, which is a sound error. The state of
+   the check is arbitrary. *)
+lemma sound_term_result_value_position:
+  "sound_term_result state env ty r \<Longrightarrow> sound_term_result state env ty (value_position state' r)"
+  by (rule value_position_cases[of state' r]) auto
+
+lemma sound_term_results_value_position_list:
+  "sound_term_results state env tys r
+   \<Longrightarrow> sound_term_results state env tys (value_position_list state' r)"
+  by (rule value_position_list_cases[of state' r]) auto
+
 (* Type soundness for Cast *)
 lemma type_soundness_cast:
   assumes state_env: "state_matches_env state env storeTyping"
@@ -151,12 +163,19 @@ proof -
 
   (* Apply IH to operand *)
   from IH[OF operand_typing]
-  have operand_sound: "sound_term_result state env operand_ty (interp_term d fuel state operand)"
+  have operand_sound0: "sound_term_result state env operand_ty (interp_term d fuel state operand)"
     by simp
+
+  (* The operand of an array cast is in a place position; the operand of any
+     other cast is in a value position, and its value is checked. *)
+  let ?operand = "if is_array_type target_ty then interp_term d fuel state operand
+                  else value_position state (interp_term d fuel state operand)"
+  have operand_sound: "sound_term_result state env operand_ty ?operand"
+    using operand_sound0 by (simp add: sound_term_result_value_position)
 
   (* Case split on operand result *)
   show ?thesis
-  proof (cases "interp_term d fuel state operand")
+  proof (cases ?operand)
     case (Inr operand_val)
     (* Operand succeeded - it is well-typed at the substituted operand type *)
     from operand_sound Inr
@@ -164,7 +183,7 @@ proof -
       by simp
     have interp_eq: "interp_term d (Suc fuel) state (CoreTm_Cast target_ty operand)
                        = cast_value target_ty operand_val"
-      using Inr by simp
+      using Inr by (simp add: Let_def)
     (* Case split on whether the cast succeeds *)
     show ?thesis
     proof (cases "cast_value target_ty operand_val")
@@ -180,7 +199,9 @@ proof -
     qed
   next
     case (Inl err)
-    then show ?thesis using operand_sound by auto
+    then have "interp_term d (Suc fuel) state (CoreTm_Cast target_ty operand) = Inl err"
+      by (simp add: Let_def)
+    with operand_sound Inl show ?thesis by auto
   qed
 qed
 
@@ -312,10 +333,12 @@ proof -
 
   (* Apply IH to operand *)
   from IH[OF operand_typing]
-  have operand_sound: "sound_term_result state env operandTy (interp_term d fuel state operand)" .
+  have operand_sound: "sound_term_result state env operandTy
+                         (value_position state (interp_term d fuel state operand))"
+    by (rule sound_term_result_value_position)
 
   show ?thesis
-  proof (cases "interp_term d fuel state operand")
+  proof (cases "value_position state (interp_term d fuel state operand)")
     case (Inl err)
     (* Operand failed - propagate the sound error *)
     then show ?thesis using operand_sound by auto
@@ -797,12 +820,16 @@ proof -
     by (auto split: option.splits prod.splits)
 
   (* Apply IH to operands *)
-  from IH[OF lhs_typing] have lhs_sound: "sound_term_result state env lhsTy (interp_term d fuel state lhs)" .
-  from IH[OF rhs_typing] have rhs_sound: "sound_term_result state env rhsTy (interp_term d fuel state rhs)" .
+  from IH[OF lhs_typing]
+  have lhs_sound: "sound_term_result state env lhsTy (value_position state (interp_term d fuel state lhs))"
+    by (rule sound_term_result_value_position)
+  from IH[OF rhs_typing]
+  have rhs_sound: "sound_term_result state env rhsTy (value_position state (interp_term d fuel state rhs))"
+    by (rule sound_term_result_value_position)
 
-  (* Case split on lhs evaluation *)
+  (* Case split on lhs evaluation (after the value-position check) *)
   show ?thesis
-  proof (cases "interp_term d fuel state lhs")
+  proof (cases "value_position state (interp_term d fuel state lhs)")
     case (Inl err)
     (* LHS failed - propagate error *)
     then have "interp_term d (Suc fuel) state (CoreTm_Binop op lhs rhs) = Inl err" by simp
@@ -830,9 +857,9 @@ proof -
     next
       case None
 
-      (* Case split on rhs evaluation *)
+      (* Case split on rhs evaluation (after the value-position check) *)
       show ?thesis
-      proof (cases "interp_term d fuel state rhs")
+      proof (cases "value_position state (interp_term d fuel state rhs)")
         case (Inl err)
         (* RHS failed - propagate error *)
         then have "interp_term d (Suc fuel) state (CoreTm_Binop op lhs rhs) = Inl err"
@@ -918,7 +945,7 @@ proof -
 
     (* The interpreter result *)
     have interp_eq: "interp_term d (Suc fuel) state (CoreTm_Let var rhs body) =
-          interp_term d fuel ?state'' body"
+          value_position state (interp_term d fuel ?state'' body)"
       using Inr alloc_eq by (simp add: case_prod_beta split: prod.splits)
 
     (* The new state matches the extended env under the extended storeTyping *)
@@ -963,6 +990,9 @@ proof -
     from body_sound vht_eq tyargs_eq
     have "sound_term_result state env ty (interp_term d fuel ?state'' body)"
       by (cases "interp_term d fuel ?state'' body") auto
+    \<comment> \<open>The result of the body is in a value position.\<close>
+    hence "sound_term_result state env ty (value_position state (interp_term d fuel ?state'' body))"
+      by (rule sound_term_result_value_position)
     with interp_eq show ?thesis by simp
   qed
 qed
@@ -1170,8 +1200,12 @@ proof -
   from idxs_typed have types_all_some: "list_all (\<lambda>ty. ty \<noteq> None) ?types"
     by (simp add: list_all_length)
   from IH_list[OF state_env wf_env] types_all_some
-  have idx_sound: "sound_term_results state env (map the ?types) (interp_term_list d fuel state idxTms)"
+  have idx_sound0: "sound_term_results state env (map the ?types) (interp_term_list d fuel state idxTms)"
     by simp
+  \<comment> \<open>The index terms are in value positions.\<close>
+  hence idx_sound: "sound_term_results state env (map the ?types)
+                      (value_position_list state (interp_term_list d fuel state idxTms))"
+    by (rule sound_term_results_value_position_list)
 
   (* The expected types are all u64 *)
   from idxs_typed have map_the_types: "map the ?types =
@@ -1201,7 +1235,7 @@ proof -
       by auto
 
     show ?thesis
-    proof (cases "interp_term_list d fuel state idxTms")
+    proof (cases "value_position_list state (interp_term_list d fuel state idxTms)")
       case (Inl err)
       then have "interp_term d (Suc fuel) state (CoreTm_ArrayProj arr idxTms) = Inl err"
         using Inr arr_val_eq by simp
@@ -1303,12 +1337,16 @@ proof -
 
   (* Apply the list IH *)
   from IH_list[OF state_env wf_env, of "map snd flds" types]
-  have list_sound: "sound_term_results state env (map the types) (interp_term_list d fuel state (map snd flds))"
+  have list_sound0: "sound_term_results state env (map the types) (interp_term_list d fuel state (map snd flds))"
     using types_eq all_typed by simp
+  \<comment> \<open>The field values are in value positions.\<close>
+  hence list_sound: "sound_term_results state env (map the types)
+                       (value_position_list state (interp_term_list d fuel state (map snd flds)))"
+    by (rule sound_term_results_value_position_list)
 
-  (* Case split on list evaluation *)
+  (* Case split on list evaluation (after the value-position check) *)
   show ?thesis
-  proof (cases "interp_term_list d fuel state (map snd flds)")
+  proof (cases "value_position_list state (interp_term_list d fuel state (map snd flds))")
     case (Inl err)
     then have "interp_term d (Suc fuel) state (CoreTm_Record flds) = Inl err"
       by simp
@@ -1384,11 +1422,13 @@ proof -
 
   (* IH on payload *)
   from IH[OF payload_typing]
-  have payload_sound: "sound_term_result state env payloadActualTy (interp_term d fuel state payload)" .
+  have payload_sound: "sound_term_result state env payloadActualTy
+                         (value_position state (interp_term d fuel state payload))"
+    by (rule sound_term_result_value_position)
 
-  (* Case split on payload evaluation *)
+  (* Case split on payload evaluation (after the value-position check) *)
   show ?thesis
-  proof (cases "interp_term d fuel state payload")
+  proof (cases "value_position state (interp_term d fuel state payload)")
     case (Inl err)
     then have "interp_term d (Suc fuel) state (CoreTm_VariantCtor ctorName tyArgs payload) = Inl err"
       by simp
@@ -1556,11 +1596,13 @@ proof -
 
       (* IH on arm body *)
       from IH[OF arm_typed]
-      have arm_sound: "sound_term_result state env resultTy (interp_term d fuel state armBody)" .
+      have arm_sound: "sound_term_result state env resultTy
+                         (value_position state (interp_term d fuel state armBody))"
+        by (rule sound_term_result_value_position)
 
-      (* Compute the result *)
+      (* Compute the result: the result of the chosen arm is in a value position *)
       have "interp_term d (Suc fuel) state (CoreTm_Match scrut arms) =
-            interp_term d fuel state armBody"
+            value_position state (interp_term d fuel state armBody)"
         using scrut_eval match_eq by simp
       with arm_sound ty_eq show ?thesis by simp
     qed
@@ -1642,16 +1684,20 @@ proof -
 
   (* Apply list IH *)
   from IH_list[OF state_env wf_env, of tms types] types_eq all_some
-  have list_sound: "sound_term_results state env (replicate (length tms) elemTy)
+  have list_sound0: "sound_term_results state env (replicate (length tms) elemTy)
                       (interp_term_list d fuel state tms)"
     using the_types by simp
+  \<comment> \<open>The elements are in value positions.\<close>
+  hence list_sound: "sound_term_results state env (replicate (length tms) elemTy)
+                      (value_position_list state (interp_term_list d fuel state tms))"
+    by (rule sound_term_results_value_position_list)
 
   let ?s = "IS_TyArgs state"
   let ?subElemTy = "apply_subst ?s elemTy"
 
-  (* Case split on list evaluation *)
+  (* Case split on list evaluation (after the value-position check) *)
   show ?thesis
-  proof (cases "interp_term_list d fuel state tms")
+  proof (cases "value_position_list state (interp_term_list d fuel state tms)")
     case (Inl err)
     then have "interp_term d (Suc fuel) state (CoreTm_LitArray elemTy tms) = Inl err" by simp
     with list_sound Inl show ?thesis by auto
@@ -2254,25 +2300,22 @@ proof -
             and ext_post: "storeTyping_extends bodyStoreTyping postStoreTyping"
             by auto
 
-          \<comment> \<open>The copy check on the returned value (a non-ghost function must not
+          \<comment> \<open>The check on the returned value (R4: a non-ghost function must not
               return an allocated value) cannot give a TypeError. \<close>
-          note cc_sound = copy_check_cases[of "IF_Ghost f" preCallState retVal]
-
           show ?thesis
-          proof (cases "copy_check (IF_Ghost f) preCallState retVal")
-            case (Some err)
+          proof (cases rule: value_position_Inr_cases[of "state \<lparr> IS_Ghost := IF_Ghost f \<rparr>" retVal])
+            case error
             \<comment> \<open>The function returned an allocated value: a RuntimeError. \<close>
-            with cc_sound have err_eq: "err = RuntimeError" by simp
-            from body_babylon body_Inr Return Some err_eq
+            from body_babylon body_Inr Return error
             have "call_body (interp_statement_list d fuel) state f?refResults ?valResults preCallState
                     = Inl RuntimeError"
               by (simp add: call_body_def)
             thus ?thesis by simp
           next
-          case None
+          case ok
 
           \<comment> \<open>Concrete form of the body result. \<close>
-          from body_babylon body_Inr Return None
+          from body_babylon body_Inr Return ok
           have interp_result:
             "call_body (interp_statement_list d fuel) state f?refResults ?valResults preCallState
                = Inr (restore_scope state postCallState, retVal)"
@@ -2943,7 +2986,10 @@ proof -
       have interp_result:
         "call_body (interp_statement_list d fuel) state f?refResults ?valResults preCallState
            = (case apply_ref_updates ?stateW ?refs refUpdates of
-                Inr finalState \<Rightarrow> Inr (finalState, retVal)
+                Inr finalState \<Rightarrow>
+                  (case value_position (state \<lparr> IS_Ghost := IF_Ghost f \<rparr>) (Inr retVal) of
+                     Inl err \<Rightarrow> Inl err
+                   | Inr _ \<Rightarrow> Inr (finalState, retVal))
               | Inl err \<Rightarrow> Inl err)"
         by (simp add: call_body_def)
 
@@ -2989,8 +3035,15 @@ proof -
             \<and> value_has_type env retVal (apply_subst (IS_TyArgs state) retTy)"
           using sme_final storeTyping_extends_refl tyargs_final tyargs_stateW ret_typed_final
             by auto
-        from witness interp_result Inr
-        show ?thesis by simp
+        \<comment> \<open>The check on the returned value (R4) passes, or gives a RuntimeError. \<close>
+        show ?thesis
+        proof (cases rule: value_position_Inr_cases[of "state \<lparr> IS_Ghost := IF_Ghost f \<rparr>" retVal])
+          case ok
+          with witness interp_result Inr show ?thesis by simp
+        next
+          case error
+          with interp_result Inr show ?thesis by simp
+        qed
       qed
     qed
 
@@ -3790,22 +3843,26 @@ proof -
   have gty_ground: "type_tyvars ?gty = {}"
     using is_well_kinded_apply_IS_TyArgs_ground[OF state_env wk] .
   have interp_eq:
-    "interp_term d (Suc fuel) state (CoreTm_Default ty) = default_value fuel state ?gty"
+    "interp_term d (Suc fuel) state (CoreTm_Default ty)
+       = value_position state (default_value fuel state ?gty)"
     by simp
   from default_value_sound_main[OF state_env wf_env gty_wk gty_ground]
   have sound: "case default_value fuel state ?gty of
                  Inl err \<Rightarrow> sound_error_result err
                | Inr val \<Rightarrow> value_has_type env val ?gty" .
-  show ?thesis
+  \<comment> \<open>The default value is then checked (R3), which keeps the result sound.\<close>
+  have "sound_term_result state env ty (default_value fuel state ?gty)"
   proof (cases "default_value fuel state ?gty")
     case (Inl err)
-    with sound interp_eq ty_eq show ?thesis by simp
+    with sound show ?thesis by simp
   next
     case (Inr val)
-    with sound interp_eq ty_eq
-    have "value_has_type env val ?gty" by simp
-    with Inr interp_eq ty_eq show ?thesis by simp
+    with sound have "value_has_type env val ?gty" by simp
+    with Inr show ?thesis by simp
   qed
+  hence "sound_term_result state env ty (value_position state (default_value fuel state ?gty))"
+    by (rule sound_term_result_value_position)
+  with interp_eq ty_eq show ?thesis by simp
 qed
 
 
