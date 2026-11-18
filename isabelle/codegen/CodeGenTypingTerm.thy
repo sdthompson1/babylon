@@ -486,7 +486,7 @@ qed
 lemma let_typed:
   assumes "core_term_type env NotGhost (CoreTm_Let x t1 t2) = Some ty"
   obtains ty1 where "core_term_type env NotGhost t1 = Some ty1" and "core_term_type (let_env env x ty1) NotGhost t2 = Some ty"
-  using assms by (auto simp: let_env_def Let_def split: option.splits intro: that)
+  using assms by (auto simp: let_env_def Let_def split: option.splits if_splits intro: that)
 
 lemma variant_ctor_typed:
   assumes "core_term_type env NotGhost (CoreTm_VariantCtor c tys t) = Some ty"

@@ -573,7 +573,7 @@ proof (rule term_simI)
                                   TE_GhostLocals := fminus (TE_GhostLocals env) {|x|},
                                   TE_ConstLocals := finsert x (TE_ConstLocals env) \<rparr>)
                 NotGhost body = Some ty"
-    by (auto simp: Let_def split: option.splits)
+    by (auto simp: Let_def split: option.splits if_splits)
   let ?env' = "env \<lparr> TE_LocalVars := fmupd x rhsTy (TE_LocalVars env),
                      TE_GhostLocals := fminus (TE_GhostLocals env) {|x|},
                      TE_ConstLocals := finsert x (TE_ConstLocals env) \<rparr>"

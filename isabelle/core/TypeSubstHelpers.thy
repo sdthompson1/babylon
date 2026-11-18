@@ -601,8 +601,13 @@ next
     elemTy_rt: "ghost = NotGhost \<longrightarrow> is_runtime_type calleeEnv elemTy" and
     tms_typed: "list_all (\<lambda>tm. core_term_type calleeEnv ghost tm = Some elemTy) tms" and
     len_ok: "int_in_range (int_range Unsigned IntBits_64) (int (length tms))" and
-    ty_eq: "ty = CoreTy_Array elemTy [CoreDim_Fixed (int (length tms))]"
+    ty_eq: "ty = CoreTy_Array elemTy [CoreDim_Fixed (int (length tms))]" and
+    elemTy_cp: "complete_if_executable ghost elemTy"
     by (auto split: if_splits)
+
+  \<comment> \<open>The element type stays complete (the substitution's range is complete). \<close>
+  have elemTy_cp_subst: "complete_if_executable ghost (apply_subst subst elemTy)"
+    using elemTy_cp apply_subst_preserves_complete[OF _ CoreTm_LitArray.prems(7)] by blast
 
   have elemTy_wk_subst: "is_well_kinded (apply_subst_to_callee_env subst callerEnv calleeEnv)
                                         (apply_subst subst elemTy)"
@@ -641,7 +646,7 @@ next
   have len_eq: "length (map (apply_subst_to_term subst) tms) = length tms" by simp
 
   show ?case
-    using elemTy_wk_subst elemTy_rt_subst tms_subst len_eq len_ok ty_eq by simp
+    using elemTy_wk_subst elemTy_rt_subst elemTy_cp_subst tms_subst len_eq len_ok ty_eq by simp
 next
   case (CoreTm_Var name)
   \<comment> \<open>Var: looks up the variable in locals (substituted types) or globals (closed
@@ -894,8 +899,13 @@ next
                                                   then finsert var (TE_GhostLocals calleeEnv)
                                                   else fminus (TE_GhostLocals calleeEnv) {|var|}),
                                 TE_ConstLocals := finsert var (TE_ConstLocals calleeEnv) \<rparr>)
-                   ghost body = Some ty"
-    by (auto split: option.splits simp: Let_def)
+                   ghost body = Some ty" and
+    body_cp: "complete_if_executable ghost ty"
+    by (auto split: option.splits if_splits simp: Let_def)
+
+  \<comment> \<open>The body type stays complete (the substitution's range is complete). \<close>
+  have body_cp_subst: "complete_if_executable ghost (apply_subst subst ty)"
+    using body_cp apply_subst_preserves_complete[OF _ CoreTm_Let.prems(7)] by blast
 
   let ?env_ext = "calleeEnv \<lparr> TE_LocalVars := fmupd var rhsTy (TE_LocalVars calleeEnv),
                               TE_GhostLocals := (if ghost = Ghost
@@ -957,7 +967,7 @@ next
     unfolding apply_subst_to_callee_env_def by (simp add: fmmap_fmupd)
 
   show ?case
-    using rhs_subst body_subst ext_subst_eq by (simp add: Let_def)
+    using rhs_subst body_subst ext_subst_eq body_cp_subst by (simp add: Let_def)
 next
   case (CoreTm_Quantifier quant var varTy body)
   \<comment> \<open>Quantifier: ghost-only. Body typechecks in env extended with (var, varTy)
@@ -1166,8 +1176,16 @@ next
                                           \<and> dtName \<notin> ghost_datatypes calleeEnv" and
     payload_typed: "core_term_type calleeEnv ghost payload
                       = Some (apply_subst (fmap_of_list (zip tyvars tyArgs)) payloadTy)" and
+    payload_cp: "complete_if_executable ghost
+                   (apply_subst (fmap_of_list (zip tyvars tyArgs)) payloadTy)" and
     ty_eq: "ty = CoreTy_Datatype dtName tyArgs"
     by (auto split: option.splits if_splits prod.splits)
+
+  \<comment> \<open>The payload type stays complete (the substitution's range is complete). \<close>
+  have payload_cp_subst:
+    "complete_if_executable ghost
+       (apply_subst subst (apply_subst (fmap_of_list (zip tyvars tyArgs)) payloadTy))"
+    using payload_cp apply_subst_preserves_complete[OF _ CoreTm_VariantCtor.prems(7)] by blast
 
   let ?be = "apply_subst_to_callee_env subst callerEnv calleeEnv"
   let ?subst_tyArgs = "map (apply_subst subst) tyArgs"
@@ -1253,7 +1271,8 @@ next
 
   show ?case
     using ctor_lookup_subst tyArgs_wk_subst tyArgs_cp_subst tyArgs_rt_subst ng_dt_subst
-          payload_subst_compose len_eq_subst ty_eq by simp
+          payload_subst_compose payload_cp_subst[unfolded payload_compose] len_eq_subst ty_eq
+    by simp
 next
   case (CoreTm_Record flds)
   \<comment> \<open>Record: each field typechecks; result is a Record type of the field types.
@@ -1262,8 +1281,15 @@ next
     distinct_names: "distinct (map fst flds)" and
     flds_typed: "those (map (\<lambda>(name, tm). core_term_type calleeEnv ghost tm) flds)
                    = Some fieldTys" and
+    flds_cp: "list_all (complete_if_executable ghost) fieldTys" and
     ty_eq: "ty = CoreTy_Record (zip (map fst flds) fieldTys)"
     by (auto split: option.splits if_splits)
+
+  \<comment> \<open>The field types stay complete (the substitution's range is complete). \<close>
+  have flds_cp_subst:
+    "list_all (complete_if_executable ghost) (map (apply_subst subst) fieldTys)"
+    using flds_cp apply_subst_preserves_complete[OF _ CoreTm_Record.prems(7)]
+    by (auto simp: list_all_iff)
 
   \<comment> \<open>The IH for CoreTm_Record is per-field: for any pair (n, t) in flds and any
       type ty', if t typechecks to ty', then the substituted t typechecks to the
@@ -1330,7 +1356,7 @@ next
     "distinct (map fst (map (\<lambda>(name, tm). (name, apply_subst_to_term subst tm)) flds))"
     using distinct_names by (simp add: comp_def case_prod_beta)
   show ?case
-    using fields_subst ty_eq zip_eq distinct_names_subst by simp
+    using fields_subst ty_eq zip_eq distinct_names_subst flds_cp_subst by simp
 next
   case (CoreTm_RecordProj tm fldName)
   \<comment> \<open>RecordProj: inner term has type CoreTy_Record fieldTypes; result is
@@ -1468,8 +1494,13 @@ next
     pats_compat: "list_all (\<lambda>p. pattern_compatible calleeEnv p scrutTy) (map fst arms)" and
     hd_typed: "core_term_type calleeEnv ghost (snd (hd arms)) = Some ty" and
     rest_typed: "list_all (\<lambda>body. core_term_type calleeEnv ghost body = Some ty)
-                          (tl (map snd arms))"
+                          (tl (map snd arms))" and
+    arms_cp: "complete_if_executable ghost ty"
     by (auto simp: Let_def split: option.splits if_splits)
+
+  \<comment> \<open>The type of the arms stays complete (the substitution's range is complete). \<close>
+  have arms_cp_subst: "complete_if_executable ghost (apply_subst subst ty)"
+    using arms_cp apply_subst_preserves_complete[OF _ CoreTm_Match.prems(7)] by blast
 
   let ?be = "apply_subst_to_callee_env subst callerEnv calleeEnv"
   let ?subst_arms = "map (\<lambda>(pat, body). (pat, apply_subst_to_term subst body)) arms"
@@ -1554,7 +1585,7 @@ next
 
   show ?case
     using scrut_subst arms_nonempty_subst pats_compat_subst
-          hd_subst hd_subst_arms_eq tl_subst
+          hd_subst hd_subst_arms_eq tl_subst arms_cp_subst
     by (auto simp: Let_def)
 next
   case (CoreTm_Sizeof tm)

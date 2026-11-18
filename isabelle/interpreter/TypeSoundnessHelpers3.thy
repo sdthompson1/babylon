@@ -907,7 +907,7 @@ proof -
                TE_GhostLocals := ?G,
                TE_ConstLocals := finsert var (TE_ConstLocals env) \<rparr>)
         (IS_Ghost state) body = Some ty"
-    by (auto simp: Let_def split: option.splits)
+    by (auto simp: Let_def split: option.splits if_splits)
 
   let ?env' = "env \<lparr> TE_LocalVars := fmupd var rhsTy (TE_LocalVars env),
                      TE_GhostLocals := ?G,
@@ -1408,6 +1408,7 @@ proof -
       None \<Rightarrow> None
     | Some actualPayloadTy \<Rightarrow>
         if actualPayloadTy = apply_subst tySubst payloadTy
+           \<and> complete_if_executable (IS_Ghost state) actualPayloadTy
         then Some (CoreTy_Datatype dtName tyArgs) else None) = Some ty"
     unfolding payloadTyOpt_def tySubst_def by (simp add: Let_def split: if_splits)
 
@@ -1511,6 +1512,7 @@ proof -
                    None \<Rightarrow> None
                  | Some resultTy \<Rightarrow>
                      if list_all (\<lambda>body. core_term_type env (IS_Ghost state) body = Some resultTy) (tl bodies)
+                        \<and> complete_if_executable (IS_Ghost state) resultTy
                      then Some resultTy else None)) = Some ty"
     unfolding scrutTyOpt_def by simp
 
@@ -1530,6 +1532,7 @@ proof -
                | Some resultTy \<Rightarrow>
                    if list_all (\<lambda>body. core_term_type env (IS_Ghost state) body = Some resultTy)
                                (tl (map snd arms))
+                      \<and> complete_if_executable (IS_Ghost state) resultTy
                    then Some resultTy else None)) = Some ty"
     by simp
 
@@ -1544,6 +1547,7 @@ proof -
     | Some resultTy \<Rightarrow>
         if list_all (\<lambda>body. core_term_type env (IS_Ghost state) body = Some resultTy)
                     (tl (map snd arms))
+           \<and> complete_if_executable (IS_Ghost state) resultTy
         then Some resultTy else None) = Some ty"
     unfolding hd_ty_opt_def Let_def by (simp split: if_splits)
 

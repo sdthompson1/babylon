@@ -442,7 +442,8 @@ next
       rt: "is_runtime_type env elemTy" and
       all: "list_all (\<lambda>tm. core_term_type env NotGhost tm = Some elemTy) tms" and
       len: "int_in_range (int_range Unsigned IntBits_64) (int (length tms))" and
-      ty_eq: "ty = CoreTy_Array elemTy [CoreDim_Fixed (int (length tms))]"
+      ty_eq: "ty = CoreTy_Array elemTy [CoreDim_Fixed (int (length tms))]" and
+      elem_cp: "is_complete_type elemTy"
     by (auto split: if_splits)
   note t = tyenv_erased_runtime_type[OF rel wk rt]
   have allE: "list_all (\<lambda>tm. core_term_type envE NotGhost tm = Some elemTy) (map ?E tms)"
@@ -457,7 +458,7 @@ next
     thus "core_term_type envE NotGhost tmE = Some elemTy" unfolding tmE .
   qed
   have "core_term_type envE NotGhost (CoreTm_LitArray elemTy (map ?E tms)) = Some ty"
-    using t allE len ty_eq by simp
+    using t allE len ty_eq elem_cp by simp
   then show ?case by simp
 next
   case (CoreTm_Var name)
@@ -519,8 +520,9 @@ next
             (env \<lparr> TE_LocalVars := fmupd var rhsTy (TE_LocalVars env),
                    TE_GhostLocals := TE_GhostLocals env |-| {|var|},
                    TE_ConstLocals := finsert var (TE_ConstLocals env) \<rparr>)
-            NotGhost body = Some ty"
-    by (auto simp: Let_def split: option.splits)
+            NotGhost body = Some ty" and
+      body_cp: "is_complete_type ty"
+    by (auto simp: Let_def split: option.splits if_splits)
   have rk: "is_well_kinded env rhsTy" by (rule core_term_type_well_kinded[OF r wf])
   have rr: "is_runtime_type env rhsTy" by (rule core_term_type_notghost_runtime[OF r wf])
   have wf': "tyenv_well_formed
@@ -540,7 +542,7 @@ next
                       TE_ConstLocals := finsert var (TE_ConstLocals envE) \<rparr>)
               NotGhost (erase_ghost_term (TE_Functions env) body) = Some ty"
     using CoreTm_Let.IH(2)[OF b wf' tyenv_erased_add_const_var[OF rel]] by simp
-  show ?case using rE bE by (simp add: Let_def)
+  show ?case using rE bE body_cp by (simp add: Let_def)
 next
   case (CoreTm_Quantifier quant var varTy body)
   then show ?case by simp
@@ -621,6 +623,7 @@ next
       ng: "dtName \<notin> ghost_datatypes env" and
       p: "core_term_type env NotGhost payload
             = Some (apply_subst (fmap_of_list (zip tyvars tyArgs)) payloadTy)" and
+      p_cp: "is_complete_type (apply_subst (fmap_of_list (zip tyvars tyArgs)) payloadTy)" and
       ty_eq: "ty = CoreTy_Datatype dtName tyArgs"
     by (auto simp: Let_def split: option.splits if_splits)
   have lkE: "fmlookup (TE_DataCtors envE) ctorName = Some (dtName, tyvars, payloadTy)"
@@ -630,7 +633,7 @@ next
               = Some (apply_subst (fmap_of_list (zip tyvars tyArgs)) payloadTy)"
     by (rule CoreTm_VariantCtor.IH[OF p wf rel])
   show ?case
-    using lkE len tysE cps tyenv_erased_no_ghost_datatype[OF rel, of dtName] pE ty_eq
+    using lkE len tysE cps tyenv_erased_no_ghost_datatype[OF rel, of dtName] pE p_cp ty_eq
     by (simp add: Let_def)
 next
   case (CoreTm_Record flds)
@@ -638,6 +641,7 @@ next
   from CoreTm_Record.prems(1) obtain tys where
       d: "distinct (map fst flds)" and
       th: "those (map (\<lambda>(name, tm). core_term_type env NotGhost tm) flds) = Some tys" and
+      flds_cp: "list_all is_complete_type tys" and
       ty_eq: "ty = CoreTy_Record (zip (map fst flds) tys)"
     by (auto split: option.splits if_splits)
   let ?E = "erase_ghost_term (TE_Functions env)"
@@ -670,7 +674,7 @@ next
     unfolding compE map_eq by (rule th)
   have recE: "core_term_type envE NotGhost (CoreTm_Record ?fldsE)
                 = Some (CoreTy_Record (zip (map fst ?fldsE) tys))"
-    using dE thE by simp
+    using dE thE flds_cp by simp
   have eq: "?E (CoreTm_Record flds) = CoreTm_Record ?fldsE" by simp
   show ?case unfolding eq ty_eq using recE unfolding fstE .
 next
@@ -752,7 +756,8 @@ next
       pats: "list_all (\<lambda>p. pattern_compatible env p scrutTy) (map fst arms)" and
       hdT: "core_term_type env NotGhost (snd (hd arms)) = Some ty" and
       tlT: "list_all (\<lambda>body. core_term_type env NotGhost body = Some ty)
-                    (tl (map snd arms))"
+                    (tl (map snd arms))" and
+      arms_cp: "is_complete_type ty"
     by (auto simp: Let_def split: option.splits if_splits)
   have sE: "core_term_type envE NotGhost (?E scrut) = Some scrutTy"
     by (rule CoreTm_Match.IH(1)[OF s wf rel])
@@ -800,7 +805,7 @@ next
     unfolding sndE
     by (cases arms) (use tlE in \<open>auto simp: list_all_iff\<close>)
   have matchE: "core_term_type envE NotGhost (CoreTm_Match (?E scrut) ?armsE) = Some ty"
-    using sE neE patsE' hdE' tlE' by (simp add: Let_def)
+    using sE neE patsE' hdE' tlE' arms_cp by (simp add: Let_def)
   have eq: "?E (CoreTm_Match scrut arms) = CoreTm_Match (?E scrut) ?armsE" by simp
   show ?case unfolding eq by (rule matchE)
 next

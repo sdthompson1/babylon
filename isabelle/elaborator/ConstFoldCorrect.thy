@@ -260,7 +260,7 @@ next
               TE_GhostLocals := fminus (TE_GhostLocals env) {|var|},
               TE_ConstLocals := finsert var (TE_ConstLocals env) \<rparr>)
        NotGhost body = Some ty"
-    by (auto simp: Let_def split: option.splits)
+    by (auto simp: Let_def split: option.splits if_splits)
   define env' where
     "env' = env \<lparr> TE_LocalVars := fmupd var rhsTy (TE_LocalVars env),
                   TE_GhostLocals := fminus (TE_GhostLocals env) {|var|},

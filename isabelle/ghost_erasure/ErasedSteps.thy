@@ -2101,7 +2101,8 @@ lemma notghost_typed_Let:
                     TE_ConstLocals := finsert var (TE_ConstLocals env) \<rparr>)
              body"
   using assms
-  by (cases "core_term_type env NotGhost rhs") (simp_all add: notghost_typed_def Let_def)
+  by (cases "core_term_type env NotGhost rhs")
+     (auto simp: notghost_typed_def Let_def split: option.splits if_splits)
 
 (* What the simulation needs to know about the arguments of a call in
    executable code, given the signature of the function called.

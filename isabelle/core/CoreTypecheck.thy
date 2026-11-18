@@ -107,6 +107,32 @@ definition cast_ok :: "CoreTyEnv \<Rightarrow> CoreType \<Rightarrow> CoreType \
 
 
 (* ========================================================================== *)
+(* Value positions must have a complete type (rule R2) *)
+(* ========================================================================== *)
+
+(* Every subterm sits in a place position (the construct only needs to know
+   where the thing is) or a value position (the construct needs the contents);
+   see "Place positions and value positions" in CoreInterp.thy for the table.
+
+   R2: in executable code, a term in a value position must have a complete
+   type. (R1, the run-time half, says that its value must not be allocated;
+   that one is checked by the interpreter, see value_position.) Ghost code is
+   exempt, as it is from R1.
+
+   complete_if_executable is the condition, used wherever core_term_type has to
+   state it: the element type of an array literal, the payload of a variant
+   constructor, the fields of a record, the body of a let and the arms of a
+   match. At the other value positions of a term it follows from the existing
+   constraints: the operands of unary and binary operators and of non-array
+   casts, and array indexes, are bool or numeric in executable code. The
+   value positions of statements (the right-hand side of a variable declaration
+   or an assignment, the result of a call statement, the returned value) have
+   the condition in CoreStmtTypecheck.thy and in tyenv_return_type_complete. *)
+abbreviation complete_if_executable :: "GhostOrNot \<Rightarrow> CoreType \<Rightarrow> bool" where
+  "complete_if_executable ghost ty \<equiv> (ghost = NotGhost \<longrightarrow> is_complete_type ty)"
+
+
+(* ========================================================================== *)
 (* Main type-checking function *)
 (* ========================================================================== *)
 
@@ -123,10 +149,11 @@ function core_term_type :: "CoreTyEnv \<Rightarrow> GhostOrNot \<Rightarrow> Cor
       Some (sign, bits) \<Rightarrow> Some (CoreTy_FiniteInt sign bits)
     | None \<Rightarrow> None)"
 
-  (* Array literals - fixed sized array type *)
+  (* Array literals - fixed sized array type. The elements are value positions. *)
 | "core_term_type env ghost (CoreTm_LitArray elemTy tms) =
     (if is_well_kinded env elemTy
        \<and> (ghost = NotGhost \<longrightarrow> is_runtime_type env elemTy)
+       \<and> complete_if_executable ghost elemTy
        \<and> list_all (\<lambda>tm. core_term_type env ghost tm = Some elemTy) tms
        \<and> int_in_range (int_range Unsigned IntBits_64) (int (length tms))
      then Some (CoreTy_Array elemTy [CoreDim_Fixed (int (length tms))])
@@ -189,7 +216,8 @@ function core_term_type :: "CoreTyEnv \<Rightarrow> GhostOrNot \<Rightarrow> Cor
         else None
     | _ \<Rightarrow> None)"
 
-  (* Let *)
+  (* Let. The right-hand side is a place position (its type may be incomplete);
+     the body is a value position. *)
 | "core_term_type env ghost (CoreTm_Let var rhs body) =
     (case core_term_type env ghost rhs of
       Some rhsTy \<Rightarrow>
@@ -198,7 +226,10 @@ function core_term_type :: "CoreTyEnv \<Rightarrow> GhostOrNot \<Rightarrow> Cor
                                           then finsert var (TE_GhostLocals env)
                                           else fminus (TE_GhostLocals env) {|var|}),
                          TE_ConstLocals := finsert var (TE_ConstLocals env) \<rparr>
-        in core_term_type env' ghost body
+        in (case core_term_type env' ghost body of
+              Some bodyTy \<Rightarrow>
+                if complete_if_executable ghost bodyTy then Some bodyTy else None
+            | None \<Rightarrow> None)
     | None \<Rightarrow> None)"
 
   (* Quantifier - Ghost mode only. The bound variable is a const local, as for Let. *)
@@ -254,7 +285,8 @@ function core_term_type :: "CoreTyEnv \<Rightarrow> GhostOrNot \<Rightarrow> Cor
    - Number of type arguments must match the constructor's type-vars
    - Type arguments must be well-kinded and complete
    - In NotGhost mode: type arguments must be runtime types
-   - Payload must typecheck to the expected payload type (after substitution) *)
+   - Payload must typecheck to the expected payload type (after substitution)
+   - The payload is a value position: in NotGhost mode its type must be complete *)
 | "core_term_type env ghost (CoreTm_VariantCtor ctorName tyArgs payload) =
     (case fmlookup (TE_DataCtors env) ctorName of
       None \<Rightarrow> None
@@ -269,15 +301,19 @@ function core_term_type :: "CoreTyEnv \<Rightarrow> GhostOrNot \<Rightarrow> Cor
                   None \<Rightarrow> None
                 | Some actualPayloadTy \<Rightarrow>
                     if actualPayloadTy = apply_subst tySubst payloadTy
+                       \<and> complete_if_executable ghost actualPayloadTy
                     then Some (CoreTy_Datatype dtName tyArgs)
                     else None))"
 
-  (* Record construction *)
+  (* Record construction. The field values are value positions. *)
 | "core_term_type env ghost (CoreTm_Record flds) =
     (if \<not> distinct (map fst flds) then None
      else case those (map (\<lambda>(name, tm). core_term_type env ghost tm) flds) of
        None \<Rightarrow> None
-     | Some tys \<Rightarrow> Some (CoreTy_Record (zip (map fst flds) tys)))"
+     | Some tys \<Rightarrow>
+         if list_all (complete_if_executable ghost) tys
+         then Some (CoreTy_Record (zip (map fst flds) tys))
+         else None)"
 
   (* Record field projection *)
 | "core_term_type env ghost (CoreTm_RecordProj tm fldName) =
@@ -313,7 +349,9 @@ function core_term_type :: "CoreTyEnv \<Rightarrow> GhostOrNot \<Rightarrow> Cor
    - All patterns must be compatible with scrutinee type
    - All arm bodies must have the same type
      (Note: exhaustiveness is NOT checked; a non-exhaustive match that fails to
-     find a matching pattern is a runtime error, not a type error.) *)
+     find a matching pattern is a runtime error, not a type error.)
+   - The scrutinee is a place position; the arm bodies are value positions, so
+     in NotGhost mode their common type must be complete *)
 | "core_term_type env ghost (CoreTm_Match scrut arms) =
     (case core_term_type env ghost scrut of
       None \<Rightarrow> None
@@ -327,6 +365,7 @@ function core_term_type :: "CoreTyEnv \<Rightarrow> GhostOrNot \<Rightarrow> Cor
                None \<Rightarrow> None
              | Some resultTy \<Rightarrow>
                  if list_all (\<lambda>body. core_term_type env ghost body = Some resultTy) (tl bodies)
+                    \<and> complete_if_executable ghost resultTy
                  then Some resultTy
                  else None))"
 

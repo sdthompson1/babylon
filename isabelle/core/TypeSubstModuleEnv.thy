@@ -972,8 +972,12 @@ next
     elemTy_rt: "ghost = NotGhost \<longrightarrow> is_runtime_type env elemTy" and
     tms_typed: "list_all (\<lambda>tm. core_term_type env ghost tm = Some elemTy) tms" and
     len_ok: "int_in_range (int_range Unsigned IntBits_64) (int (length tms))" and
-    ty_eq: "ty = CoreTy_Array elemTy [CoreDim_Fixed (int (length tms))]"
+    ty_eq: "ty = CoreTy_Array elemTy [CoreDim_Fixed (int (length tms))]" and
+    elemTy_cp: "complete_if_executable ghost elemTy"
     by (auto split: if_splits)
+
+  have elemTy_cp_subst: "complete_if_executable ghost (apply_subst subst elemTy)"
+    using elemTy_cp apply_subst_preserves_complete[OF _ CoreTm_LitArray.prems(5)] by blast
 
   have elemTy_wk_subst: "is_well_kinded (apply_subst_to_module_env subst targetEnv env)
                                         (apply_subst subst elemTy)"
@@ -1011,7 +1015,7 @@ next
   have len_eq: "length (map (apply_subst_to_term subst) tms) = length tms" by simp
 
   show ?case
-    using elemTy_wk_subst elemTy_rt_subst tms_subst len_eq len_ok ty_eq by simp
+    using elemTy_wk_subst elemTy_rt_subst elemTy_cp_subst tms_subst len_eq len_ok ty_eq by simp
 next
   case (CoreTm_Var name)
   \<comment> \<open>Var: both locals and globals are substituted, so lookup commutes with the
@@ -1212,8 +1216,12 @@ next
                                             then finsert var (TE_GhostLocals env)
                                             else fminus (TE_GhostLocals env) {|var|}),
                           TE_ConstLocals := finsert var (TE_ConstLocals env) \<rparr>)
-                   ghost body = Some ty"
-    by (auto split: option.splits simp: Let_def)
+                   ghost body = Some ty" and
+    body_cp: "complete_if_executable ghost ty"
+    by (auto split: option.splits if_splits simp: Let_def)
+
+  have body_cp_subst: "complete_if_executable ghost (apply_subst subst ty)"
+    using body_cp apply_subst_preserves_complete[OF _ CoreTm_Let.prems(5)] by blast
 
   let ?env_ext = "env \<lparr> TE_LocalVars := fmupd var rhsTy (TE_LocalVars env),
                         TE_GhostLocals := (if ghost = Ghost
@@ -1259,7 +1267,7 @@ next
     unfolding apply_subst_to_module_env_def by (simp add: fmmap_fmupd)
 
   show ?case
-    using rhs_subst body_subst ext_subst_eq by (simp add: Let_def)
+    using rhs_subst body_subst ext_subst_eq body_cp_subst by (simp add: Let_def)
 next
   case (CoreTm_Quantifier quant var varTy body)
   show ?case
@@ -1459,8 +1467,15 @@ next
                                           \<and> dtName \<notin> ghost_datatypes env" and
     payload_typed: "core_term_type env ghost payload
                       = Some (apply_subst (fmap_of_list (zip tyvars tyArgs)) payloadTy)" and
+    payload_cp: "complete_if_executable ghost
+                   (apply_subst (fmap_of_list (zip tyvars tyArgs)) payloadTy)" and
     ty_eq: "ty = CoreTy_Datatype dtName tyArgs"
     by (auto split: option.splits if_splits prod.splits)
+
+  have payload_cp_subst:
+    "complete_if_executable ghost
+       (apply_subst subst (apply_subst (fmap_of_list (zip tyvars tyArgs)) payloadTy))"
+    using payload_cp apply_subst_preserves_complete[OF _ CoreTm_VariantCtor.prems(5)] by blast
 
   let ?me = "apply_subst_to_module_env subst targetEnv env"
   let ?subst_tyArgs = "map (apply_subst subst) tyArgs"
@@ -1518,7 +1533,7 @@ next
 
   show ?case
     using ctor_lookup tyArgs_wk_subst tyArgs_cp_subst tyArgs_rt_subst ng_dt_subst
-          payload_subst_compose len_eq_subst ty_eq
+          payload_subst_compose payload_cp_subst[folded payload_compose] len_eq_subst ty_eq
     by (auto simp: Let_def)
 next
   case (CoreTm_Record flds)
@@ -1526,8 +1541,14 @@ next
     distinct_names: "distinct (map fst flds)" and
     flds_typed: "those (map (\<lambda>(name, tm). core_term_type env ghost tm) flds)
                    = Some fieldTys" and
+    flds_cp: "list_all (complete_if_executable ghost) fieldTys" and
     ty_eq: "ty = CoreTy_Record (zip (map fst flds) fieldTys)"
     by (auto split: option.splits if_splits)
+
+  have flds_cp_subst:
+    "list_all (complete_if_executable ghost) (map (apply_subst subst) fieldTys)"
+    using flds_cp apply_subst_preserves_complete[OF _ CoreTm_Record.prems(5)]
+    by (auto simp: list_all_iff)
 
   have field_IH:
     "\<And>fld ty'. fld \<in> set flds \<Longrightarrow>
@@ -1591,7 +1612,7 @@ next
     "distinct (map fst (map (\<lambda>(name, tm). (name, apply_subst_to_term subst tm)) flds))"
     using distinct_names by (simp add: comp_def case_prod_beta)
   show ?case
-    using fields_subst ty_eq zip_eq distinct_names_subst by simp
+    using fields_subst ty_eq zip_eq distinct_names_subst flds_cp_subst by simp
 next
   case (CoreTm_RecordProj tm fldName)
   from CoreTm_RecordProj.prems(1) obtain fieldTypes where
@@ -1688,8 +1709,12 @@ next
     pats_compat: "list_all (\<lambda>p. pattern_compatible env p scrutTy) (map fst arms)" and
     hd_typed: "core_term_type env ghost (snd (hd arms)) = Some ty" and
     rest_typed: "list_all (\<lambda>body. core_term_type env ghost body = Some ty)
-                          (tl (map snd arms))"
+                          (tl (map snd arms))" and
+    arms_cp: "complete_if_executable ghost ty"
     by (auto simp: Let_def split: option.splits if_splits)
+
+  have arms_cp_subst: "complete_if_executable ghost (apply_subst subst ty)"
+    using arms_cp apply_subst_preserves_complete[OF _ CoreTm_Match.prems(5)] by blast
 
   let ?me = "apply_subst_to_module_env subst targetEnv env"
   let ?subst_arms = "map (\<lambda>(pat, body). (pat, apply_subst_to_term subst body)) arms"
@@ -1769,7 +1794,7 @@ next
 
   show ?case
     using scrut_subst arms_nonempty_subst pats_compat_subst
-          hd_subst hd_subst_arms_eq tl_subst
+          hd_subst hd_subst_arms_eq tl_subst arms_cp_subst
     by (auto simp: Let_def)
 next
   case (CoreTm_Sizeof tm)
