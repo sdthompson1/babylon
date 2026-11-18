@@ -282,11 +282,11 @@ next
         proof (cases vr)
           case Var
           from Var H CoreStmt_VarDecl obtain initVal where
-            iv: "interp_term d fuel (state \<lparr> IS_Ghost := g \<rparr>) initTm = Inr initVal"
+            vp: "value_position (state \<lparr> IS_Ghost := g \<rparr>)
+                   (interp_term d fuel (state \<lparr> IS_Ghost := g \<rparr>) initTm) = Inr initVal"
             by (auto split: sum.splits)
-          from Var H CoreStmt_VarDecl iv have
-            cc: "copy_check g state initVal = None"
-            by (auto split: option.splits)
+          note iv = value_position_InrD[OF vp]
+          note cc = vp[unfolded iv]
           from Var H[symmetric] CoreStmt_VarDecl iv cc show ?thesis
             by (simp add: static_parts_eq_def Let_def)
         next
@@ -326,8 +326,9 @@ next
         hence call_eq: "static_parts_eq state (newState \<lparr> IS_Ghost := IS_Ghost state \<rparr>)"
           by (rule static_parts_eq_reset_ghost)
         from H CoreStmt_VarDeclCall call obtain initVal where
-          cast: "apply_cast_opt castOpt retVal = Inr initVal"
+          vp0: "value_position (state \<lparr> IS_Ghost := g \<rparr>) (apply_cast_opt castOpt retVal) = Inr initVal"
           by (auto split: sum.splits)
+        note cast = value_position_InrD[OF vp0] vp0[unfolded value_position_InrD[OF vp0]]
         from H[symmetric] CoreStmt_VarDeclCall call cast
         have "static_parts_eq (newState \<lparr> IS_Ghost := IS_Ghost state \<rparr>) (result_state res)"
           by (simp add: static_parts_eq_def Let_def)
@@ -356,11 +357,11 @@ next
           lv: "interp_writable_lvalue d fuel (state \<lparr> IS_Ghost := g \<rparr>) lhsLv = Inr (addr, path)"
           by (auto split: sum.splits)
         from H CoreStmt_Assign lv obtain rhsVal where
-          rv: "interp_term d fuel (state \<lparr> IS_Ghost := g \<rparr>) rhsTm = Inr rhsVal"
+          vp: "value_position (state \<lparr> IS_Ghost := g \<rparr>)
+                 (interp_term d fuel (state \<lparr> IS_Ghost := g \<rparr>) rhsTm) = Inr rhsVal"
           by (auto split: sum.splits)
-        from H CoreStmt_Assign lv rv have
-          cc: "copy_check g state rhsVal = None"
-          by (auto split: option.splits)
+        note rv = value_position_InrD[OF vp]
+        note cc = vp[unfolded rv]
         from H CoreStmt_Assign lv rv cc obtain newVal where
           upd: "update_value_at_path (IS_Store state ! addr) path rhsVal = Inr newVal"
           by (auto simp: Let_def split: sum.splits)
@@ -378,8 +379,9 @@ next
         hence call_eq: "static_parts_eq state (newState \<lparr> IS_Ghost := IS_Ghost state \<rparr>)"
           by (rule static_parts_eq_reset_ghost)
         from H CoreStmt_AssignCall call obtain rhsVal where
-          cast: "apply_cast_opt castOpt retVal = Inr rhsVal"
+          vp0: "value_position (state \<lparr> IS_Ghost := g \<rparr>) (apply_cast_opt castOpt retVal) = Inr rhsVal"
           by (auto split: sum.splits)
+        note cast = value_position_InrD[OF vp0] vp0[unfolded value_position_InrD[OF vp0]]
         from H CoreStmt_AssignCall call cast obtain addr path where
           lv: "interp_writable_lvalue d fuel newState lhsLv = Inr (addr, path)"
           by (auto split: sum.splits)
@@ -442,8 +444,10 @@ next
           by (auto split: sum.splits option.splits)
         note [simp] = iv ie
         from H CoreStmt_While obtain condVal where
-          cv: "interp_term d fuel (state \<lparr> IS_Ghost := g \<rparr>) condTm = Inr condVal"
+          vp: "value_position (state \<lparr> IS_Ghost := g \<rparr>)
+                 (interp_term d fuel (state \<lparr> IS_Ghost := g \<rparr>) condTm) = Inr condVal"
           by (auto split: sum.splits)
+        note cv = value_position_InrD[OF vp] vp[unfolded value_position_InrD[OF vp]]
         show ?thesis
         proof (cases condVal)
           case (CV_Bool b)
@@ -646,7 +650,7 @@ next
           with Return have body_eq: "static_parts_eq preCallState postCallState" by simp
           from body Inl bodyEval Return
           have state'_eq: "state' = restore_scope state postCallState"
-            by (simp add: call_body_def split: option.splits)
+            by (simp add: call_body_def split: sum.splits)
           from state'_eq static_parts_eqD[OF body_eq] pre_gf show ?thesis
             by (simp add: static_parts_eq_def)
         qed
@@ -666,7 +670,7 @@ next
           "apply_ref_updates ?stateW ?refs refUpdates = Inr finalState"
           and state'_eq: "state' = finalState" and "retVal = externRetVal"
           by (cases "apply_ref_updates ?stateW ?refs refUpdates")
-             (simp_all add: call_body_def Let_def)
+             (simp_all add: call_body_def Let_def split: sum.splits)
         from apply_ref_updates_preserves_globals_funs[OF final_eq] state'_eq show ?thesis
           by (simp add: static_parts_eq_def)
       qed

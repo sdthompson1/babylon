@@ -747,11 +747,11 @@ next
         proof (cases vr)
           case Var
           from Var H CoreStmt_VarDecl obtain initVal where
-            iv: "interp_term d fuel (state \<lparr>IS_Ghost := g\<rparr>) initTm = Inr initVal"
+            vp: "value_position (state \<lparr>IS_Ghost := g\<rparr>)
+                   (interp_term d fuel (state \<lparr>IS_Ghost := g\<rparr>) initTm) = Inr initVal"
             by (auto split: sum.splits)
-          from Var H CoreStmt_VarDecl iv have
-            cc: "copy_check g state initVal = None"
-            by (auto split: option.splits)
+          note iv = value_position_InrD[OF vp]
+          note cc = vp[unfolded iv]
           from Var H[symmetric] CoreStmt_VarDecl iv cc have
             store': "IS_Store (result_state res) = IS_Store state @ [initVal]" and
             locals': "IS_Locals (result_state res)
@@ -808,9 +808,12 @@ next
         have "call_frame (state \<lparr>IS_Ghost := g\<rparr>) fnName argTms newState" by blast
         hence cf: "call_frame state fnName argTms newState" by simp
         from H CoreStmt_VarDeclCall call obtain initVal where
-          cast: "apply_cast_opt castOpt retVal = Inr initVal"
+          vp0: "value_position (state \<lparr>IS_Ghost := g\<rparr>) (apply_cast_opt castOpt retVal)
+                = Inr initVal"
           by (auto split: sum.splits)
-        from H[symmetric] CoreStmt_VarDeclCall call cast have
+        note cast = value_position_InrD[OF vp0]
+        note vp = vp0[unfolded cast]
+        from H[symmetric] CoreStmt_VarDeclCall call cast vp have
           store': "IS_Store (result_state res) = IS_Store newState @ [initVal]" and
           locals': "IS_Locals (result_state res)
                       = fmupd varName (length (IS_Store newState)) (IS_Locals newState)" and
@@ -843,11 +846,11 @@ next
           lv: "interp_writable_lvalue d fuel (state \<lparr>IS_Ghost := g\<rparr>) lhsLv = Inr (addr, path)"
           by (auto split: sum.splits)
         from H CoreStmt_Assign lv obtain rhsVal where
-          rv: "interp_term d fuel (state \<lparr>IS_Ghost := g\<rparr>) rhsTm = Inr rhsVal"
+          vp: "value_position (state \<lparr>IS_Ghost := g\<rparr>)
+                 (interp_term d fuel (state \<lparr>IS_Ghost := g\<rparr>) rhsTm) = Inr rhsVal"
           by (auto split: sum.splits)
-        from H CoreStmt_Assign lv rv have
-          cc: "copy_check g state rhsVal = None"
-          by (auto split: option.splits)
+        note rv = value_position_InrD[OF vp]
+        note cc = vp[unfolded rv]
         from H CoreStmt_Assign lv rv cc obtain newVal where
           upd: "update_value_at_path (IS_Store state ! addr) path rhsVal = Inr newVal"
           by (auto simp: Let_def split: sum.splits)
@@ -869,8 +872,10 @@ next
         have "call_frame (state \<lparr>IS_Ghost := g\<rparr>) fnName argTms newState" by blast
         hence cf: "call_frame state fnName argTms newState" by simp
         from H CoreStmt_AssignCall call obtain rhsVal where
-          cast: "apply_cast_opt castOpt retVal = Inr rhsVal"
+          vp0: "value_position (state \<lparr>IS_Ghost := g\<rparr>) (apply_cast_opt castOpt retVal)
+                = Inr rhsVal"
           by (auto split: sum.splits)
+        note cast = value_position_InrD[OF vp0] vp0[unfolded value_position_InrD[OF vp0]]
         from H CoreStmt_AssignCall call cast obtain addr path where
           lv: "interp_writable_lvalue d fuel newState lhsLv = Inr (addr, path)"
           by (auto split: sum.splits)
@@ -946,8 +951,10 @@ next
           by (auto split: sum.splits option.splits)
         note [simp] = iv ie
         from H CoreStmt_While obtain condVal where
-          cv: "interp_term d fuel (state \<lparr>IS_Ghost := g\<rparr>) condTm = Inr condVal"
+          vp: "value_position (state \<lparr>IS_Ghost := g\<rparr>)
+                 (interp_term d fuel (state \<lparr>IS_Ghost := g\<rparr>) condTm) = Inr condVal"
           by (auto split: sum.splits)
+        note cv = value_position_InrD[OF vp] vp[unfolded value_position_InrD[OF vp]]
         show ?thesis
         proof (cases condVal)
           case (CV_Bool b)
@@ -1176,7 +1183,7 @@ next
           with Return have body_fs: "frame_step preCallState postCallState" by simp
           from body Inl bodyEval Return
           have state'_eq: "state' = restore_scope state postCallState"
-            by (simp add: call_body_def split: option.splits)
+            by (simp add: call_body_def split: sum.splits)
           have len2: "length (IS_Store preCallState) \<le> length (IS_Store postCallState)"
             by (rule frame_stepD(1)[OF body_fs])
           have len: "length (IS_Store state) \<le> length (IS_Store postCallState)"
@@ -1227,7 +1234,7 @@ next
           "apply_ref_updates ?stateW ?refs refUpdates = Inr finalState"
           and state'_eq: "state' = finalState" and "retVal = externRetVal"
           by (cases "apply_ref_updates ?stateW ?refs refUpdates")
-             (simp_all add: call_body_def Let_def)
+             (simp_all add: call_body_def Let_def split: sum.splits)
         note upd = apply_ref_updates_frame[OF final_eq]
         show ?thesis
           unfolding call_frame_def

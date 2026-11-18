@@ -936,6 +936,36 @@ lemma value_position_list_Inl_iff:
                             \<and> (\<exists>v \<in> set vs. is_allocated (IS_ExternAlloc state) v)))"
   by (auto simp: value_position_list_def list_ex_iff split: sum.splits)
 
+(* In particular the check neither adds nor hides a TypeError or an
+   InsufficientFuel. *)
+lemma value_position_eq_InsufficientFuel [simp]:
+  "value_position state r = Inl InsufficientFuel \<longleftrightarrow> r = Inl InsufficientFuel"
+  by (auto simp: value_position_Inl_iff)
+
+lemma value_position_eq_TypeError [simp]:
+  "value_position state r = Inl TypeError \<longleftrightarrow> r = Inl TypeError"
+  by (auto simp: value_position_Inl_iff)
+
+lemma value_position_list_eq_InsufficientFuel [simp]:
+  "value_position_list state r = Inl InsufficientFuel \<longleftrightarrow> r = Inl InsufficientFuel"
+  by (auto simp: value_position_list_Inl_iff)
+
+lemma value_position_list_eq_TypeError [simp]:
+  "value_position_list state r = Inl TypeError \<longleftrightarrow> r = Inl TypeError"
+  by (auto simp: value_position_list_Inl_iff)
+
+(* A value that is checked is the result of the check or is replaced by
+   RuntimeError. *)
+lemma value_position_Inr_cases:
+  obtains (ok) "value_position state (Inr v) = Inr v"
+  | (error) "value_position state (Inr v) = Inl RuntimeError"
+  by (rule value_position_cases[of state "Inr v"]) auto
+
+lemma value_position_list_Inr_cases:
+  obtains (ok) "value_position_list state (Inr vs) = Inr vs"
+  | (error) "value_position_list state (Inr vs) = Inl RuntimeError"
+  by (rule value_position_list_cases[of state "Inr vs"]) auto
+
 (* The check only looks at the mode and the allocation oracle of the state. *)
 lemma value_position_cong_state:
   assumes "IS_Ghost state' = IS_Ghost state" and "IS_ExternAlloc state' = IS_ExternAlloc state"
