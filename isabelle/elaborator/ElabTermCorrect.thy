@@ -717,6 +717,12 @@ proof -
                simp: fmran'I split: option.splits)
   qed
 
+  \<comment> \<open>The elements are value positions. Their type is complete (in any mode): it
+      is what the substitution makes of a metavariable, and the range of the
+      substitution is complete.\<close>
+  have finalElemTy_cp: "is_complete_type ?finalElemTy"
+    by (rule apply_subst_preserves_complete[OF _ U(6)]) simp
+
   \<comment> \<open>Length of coerced list equals length of tms, so length check carries over\<close>
   have len_tms: "length tms = length elabTms"
     using elab_term_list_length[OF elab_elems] by simp
@@ -725,7 +731,7 @@ proof -
 
   \<comment> \<open>Assemble\<close>
   show ?thesis
-    using newTm_eq ty_eq finalElemTy_wk finalElemTy_rt elems_typed_list len_ok'
+    using newTm_eq ty_eq finalElemTy_wk finalElemTy_rt finalElemTy_cp elems_typed_list len_ok'
     by simp
 qed
 
@@ -781,7 +787,14 @@ proof -
   have result_eq:
     "newTm = fst (build_updated_record finalSubst parentTm parentFields ?coercedUpdates)"
     "ty = snd (build_updated_record finalSubst parentTm parentFields ?coercedUpdates)"
-    by (auto simp: Let_def split: prod.splits)
+    by (auto simp: Let_def split: prod.splits if_splits)
+  \<comment> \<open>The fields of the new record are value positions: the check that the
+      type of the result is complete passed. \<close>
+  from elab_eq no_dup elab_parent parent_rec fields_exist elab_updates unify_result
+  have result_cp:
+    "complete_if_executable ghost
+       (snd (build_updated_record finalSubst parentTm parentFields ?coercedUpdates))"
+    by (auto simp: Let_def split: prod.splits if_splits)
 
   \<comment> \<open>Specialize IH results to parentFields\<close>
   have ih_parent': "core_term_type ?env' ghost parentTm = Some (CoreTy_Record parentFields)"
@@ -966,8 +979,11 @@ proof -
   have zip_reconstruct: "zip (map fst ?resultFlds) (map snd ?finalParentFields) = ?finalParentFields"
     using fst_result by (metis zip_map_fst_snd)
 
+  have flds_cp: "list_all (complete_if_executable ghost) (map snd ?finalParentFields)"
+    using result_cp by (auto simp: build_updated_record_def Let_def list_all_iff)
+
   have "core_term_type ?env' ghost (CoreTm_Record ?resultFlds) = Some (CoreTy_Record ?finalParentFields)"
-    using distinct_result those_ok zip_reconstruct by simp
+    using distinct_result those_ok zip_reconstruct flds_cp by simp
 
   thus ?thesis using result_eq
     by (simp add: build_updated_record_def Let_def)
@@ -1269,6 +1285,8 @@ lemma finalize_match_term_correct:
            = Some bodyTy"
       \<comment> \<open>dps is non-empty (mirrored from arms_ne in BabTm_Match). \<close>
       and dps_ne: "dps \<noteq> []"
+      \<comment> \<open>The arms, and the bodies of the Lets, are value positions (R2). \<close>
+      and body_cp: "complete_if_executable ghost bodyTy"
   shows "core_term_type envAmbient ghost resultTm = Some bodyTy
        \<and> resultTy = bodyTy
        \<and> nextMv' = nextMv + 1"
@@ -1443,7 +1461,7 @@ proof -
         "core_term_type ?env' ghost (wrap_lets freshName ?dp ?body) = Some bodyTy"
         using wrap_lets_preserves_typing[OF dp_compat_env' base_var_typed env'_wf
                                             scrutTy_wk_env' base_fresh_disjoint
-                                            body_at_pat_env'_foldr dp_distinct] .
+                                            body_at_pat_env'_foldr dp_distinct body_cp] .
 
       show "case (zip armPats armBodies) ! i of (p, body) \<Rightarrow>
               pattern_compatible ?env' p scrutTy
@@ -1490,14 +1508,14 @@ proof -
       using all_body_ty
       by (cases "map snd (zip armPats armBodies)") (auto simp: list_all_iff)
     show ?thesis
-      using arms_ne base_var_typed all_compat hd_arm_eq hd_typed tl_typed
+      using arms_ne base_var_typed all_compat hd_arm_eq hd_typed tl_typed body_cp
       by (simp add: Let_def)
   qed
 
   \<comment> \<open>Result is the outer Let wrapping ?match. \<close>
   have result_typed: "core_term_type envAmbient ghost resultTm = Some bodyTy"
     unfolding resultTm_eq
-    using scrut_typed match_typed
+    using scrut_typed match_typed body_cp
     by (simp add: Let_def extend_env_one_var_def)
 
   show ?thesis using result_typed resultTy_eq nextMv'_eq by simp
@@ -1962,7 +1980,9 @@ next
 
     from "4.prems"(1) elab_cond elab_then elab_else cond_unify Some have
       branchSubst_complete: "typesubst_complete branchSubst" and
-      result_eq: "newTm = CoreTm_Match finalCond ?matchArms" "ty = ?resultTy"
+      result_eq: "newTm = CoreTm_Match finalCond ?matchArms" "ty = ?resultTy" and
+      \<comment> \<open>The branches are value positions: the check for a complete type passed. \<close>
+      result_cp: "complete_if_executable ghost ?resultTy"
       by (auto simp: finalCond_def Let_def split: option.splits if_splits)
     have branchSubst_cp: "\<forall>ty' \<in> fmran' branchSubst. is_complete_type ty'"
       using branchSubst_complete unfolding typesubst_complete_def .
@@ -2012,7 +2032,7 @@ next
       have bodies_typed: "list_all (\<lambda>body. core_term_type ?env' ghost body = Some ?resultTy) (map snd ?matchArms)"
         using then'_typed else'_typed by simp
       show ?thesis
-        using finalCond_typed \<open>?matchArms \<noteq> []\<close> pats_compat bodies_typed
+        using finalCond_typed \<open>?matchArms \<noteq> []\<close> pats_compat bodies_typed result_cp
         by (simp add: then'_typed)
     qed
     thus ?thesis using result_eq by simp
@@ -2049,6 +2069,7 @@ next
         using coerced_then_typed coerced_else_typed by simp
       show ?thesis
         using finalCond_typed \<open>?matchArms \<noteq> []\<close> pats_compat bodies_typed
+              coerce_to_common_int_type_complete[OF coerce]
         by (simp add: coerced_then_typed)
     qed
     thus ?thesis using result_eq by simp
@@ -2317,12 +2338,14 @@ next
 
   from "7.prems"(1) elab_rhs rhs_resolved obtain bodyTm bodyTy next_mv2 where
     elab_body: "elab_term ?body_env elabEnv ghost body next_mv1 = Inr (bodyTm, bodyTy, next_mv2)" and
-    result_eq: "newTm = CoreTm_Let varName rhsTm bodyTm" "ty = bodyTy"
-    by (auto simp: Let_def split: sum.splits)
+    result_eq: "newTm = CoreTm_Let varName rhsTm bodyTm" "ty = bodyTy" and
+    \<comment> \<open>The body is a value position: the check for a complete type passed. \<close>
+    body_cp: "complete_if_executable ghost bodyTy"
+    by (auto simp: Let_def split: sum.splits if_splits)
 
   \<comment> \<open>Let forwards body's next_mv\<close>
   from "7.prems"(1) elab_rhs rhs_resolved elab_body have next_mv_eq: "next_mv' = next_mv2"
-    by (auto simp: Let_def split: sum.splits)
+    by (auto simp: Let_def split: sum.splits if_splits)
 
   \<comment> \<open>Monotonicity\<close>
   have mono_1: "next_mv \<le> next_mv1"
@@ -2393,7 +2416,7 @@ next
 
   \<comment> \<open>Final: core_term_type of CoreTm_Let unfolds to the check on rhs and body in ?core_body_env\<close>
   show ?case
-    using result_eq rhs_typing body_typing
+    using result_eq rhs_typing body_typing body_cp
     by (simp add: Let_def)
 next
   \<comment> \<open>Case: BabTm_Quantifier\<close>
@@ -2656,8 +2679,12 @@ next
     elab_list: "elab_term_list env elabEnv ghost tms next_mv
                 = Inr (newTms, tys, next_mv')" and
     newTm_eq: "newTm = CoreTm_Record (zip ?names newTms)" and
-    ty_eq: "ty = CoreTy_Record (zip ?names tys)"
-    by (auto simp: Let_def split: sum.splits)
+    ty_eq: "ty = CoreTy_Record (zip ?names tys)" and
+    tys_cp0: "ghost = NotGhost \<longrightarrow> list_all is_complete_type tys"
+    by (auto simp: Let_def split: sum.splits if_splits)
+  \<comment> \<open>The components are value positions: the check for complete types passed. \<close>
+  have tys_cp: "list_all (complete_if_executable ghost) tys"
+    using tys_cp0 by (auto simp: list_all_iff)
 
   \<comment> \<open>IH on the element list\<close>
   have ih: "list_all2 (\<lambda>tm ty. core_term_type ?env' ghost tm = Some ty) newTms tys"
@@ -2720,7 +2747,7 @@ next
     using fst_zip_eq distinct_tuple_field_names by simp
 
   show ?case
-    using newTm_eq ty_eq those_ok distinct_zipped fst_zip_eq
+    using newTm_eq ty_eq those_ok distinct_zipped fst_zip_eq tys_cp
     by simp
 next
   \<comment> \<open>Case: BabTm_Record\<close>
@@ -2736,8 +2763,12 @@ next
     elab_list: "elab_term_list env elabEnv ghost (map snd flds) next_mv
                 = Inr (newTms, tys, next_mv')" and
     newTm_eq: "newTm = CoreTm_Record (zip ?names newTms)" and
-    ty_eq: "ty = CoreTy_Record (zip ?names tys)"
-    by (auto simp: Let_def split: sum.splits)
+    ty_eq: "ty = CoreTy_Record (zip ?names tys)" and
+    tys_cp0: "ghost = NotGhost \<longrightarrow> list_all is_complete_type tys"
+    by (auto simp: Let_def split: sum.splits if_splits)
+  \<comment> \<open>The field values are value positions: the check for complete types passed. \<close>
+  have tys_cp: "list_all (complete_if_executable ghost) tys"
+    using tys_cp0 by (auto simp: list_all_iff)
 
   \<comment> \<open>IH on the field term list\<close>
   have ih: "list_all2 (\<lambda>tm ty. core_term_type ?env' ghost tm = Some ty) newTms tys"
@@ -2804,7 +2835,7 @@ next
 
   \<comment> \<open>Put it all together\<close>
   show ?case
-    using newTm_eq ty_eq those_ok distinct_zipped fst_zip_eq
+    using newTm_eq ty_eq those_ok distinct_zipped fst_zip_eq tys_cp
     by simp
 
 next
@@ -3029,12 +3060,16 @@ next
            (replicate (length bodyTms) (hd bodyTys)) fmempty
          = Inr (coercedBodies, finalSubst)"
     by (auto simp: Let_def split: sum.splits prod.splits)
+  \<comment> \<open>The arms are value positions: the check for a complete type passed. \<close>
+  have match_cp: "complete_if_executable ghost (apply_subst finalSubst (hd bodyTys))"
+    using "16.prems"(1) arms_ne elab_scrut scrut_inf decorate_eq elab_bodies uc
+    by (auto simp: Let_def split: sum.splits if_splits)
   have final_term_eq:
     "finalize_match_term loc scrutTm ?dps coercedBodies
                          (apply_subst finalSubst (hd bodyTys)) mv2
      = Inr (newTm, ty, next_mv')"
     using "16.prems"(1) arms_ne elab_scrut scrut_inf decorate_eq elab_bodies uc
-    by (auto simp: Let_def split: sum.splits)
+    by (auto simp: Let_def split: sum.splits if_splits)
 
   \<comment> \<open>Monotonicity facts. \<close>
   have mono_1: "next_mv \<le> mv1"
@@ -3248,7 +3283,7 @@ next
      \<and> next_mv' = mv2 + 1"
     by (rule finalize_match_term_correct[OF final_term_eq envAmbient_wf scrut_typed_amb
                                             len_coerced dps_compat_amb dma(4)
-                                            coerced_typed dps_ne])
+                                            coerced_typed dps_ne match_cp])
 
   show ?case
     using ft_concl

@@ -194,7 +194,7 @@ proof -
         by (rule compile_match_tree_arm_patterns_compatible[OF scrut ne pats wf])
       show "match_tree_tests_ok (\<lambda>_. True) (compile_match_tree scrut arms)"
         by (rule compile_match_tree_tests_ok[OF _ _ ne]) simp_all
-    qed (rule bodies', rule cp)
+    qed (rule bodies', assumption, rule cp)
     thus ?thesis unfolding compile_match_term_def MT_Test by simp
   qed
 qed
