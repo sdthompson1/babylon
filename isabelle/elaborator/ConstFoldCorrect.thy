@@ -11,7 +11,11 @@ begin
 
    2) eval_const_interp_agree, fold_const_interp_agree, fold_const_is_core_evaluation:
       These basically say that eval_const and fold_const are equivalent to running the
-      normal Core interpreter (interp_term) in a suitable InterpState.
+      normal Core interpreter (interp_term) in a suitable InterpState, provided that
+      the values of the constants are well typed and none of them is allocated. (The
+      interpreter gives RuntimeError where an allocated value is copied in executable
+      code; eval_const makes no such check. eval_const_not_allocated shows that the
+      proviso carries over from the constants to every value a constant term yields.)
 
    Note: eval_const type preservation is proved directly by induction. We can't directly
    use the interpreter's type_soundness theorem (because that only applies to "fully
@@ -568,6 +572,405 @@ qed
 
 
 (* ========================================================================== *)
+(* Values with no allocated part                                              *)
+(* ========================================================================== *)
+
+(* The interpreter gives RuntimeError when a value in a value position is
+   allocated (value_position in CoreInterp.thy); eval_const makes no such check.
+   So the two can agree only where no checked value is allocated. This section
+   shows that a constant term yields no allocated value if the values of the
+   constants it reads are not allocated.
+
+   "Not allocated" (is_allocated) is not itself preserved by eval_const. An array
+   that is not allocated may hold an allocated element at an index outside its
+   sizes (is_allocated looks only at the indices within the sizes), and an array
+   projection would return that element. A well-typed array has no such element
+   (fmap_matches_sizes). Rather than carry the types of all intermediate values
+   through the inductions, we use a stronger property that is preserved with no
+   typing assumption at all: deep_unallocated says that no part of the value is
+   allocated, looking at every entry of every element map. On a well-typed value
+   the two properties are the same (deep_unallocated_not_allocated and
+   value_has_type_deep_unallocated). *)
+
+function deep_unallocated :: "(string \<Rightarrow> CoreAllocLevel \<Rightarrow> nat \<Rightarrow> bool) \<Rightarrow> CoreValue \<Rightarrow> bool" where
+  "deep_unallocated extAlloc (CV_Bool _) = True"
+| "deep_unallocated extAlloc (CV_FiniteInt _ _ _) = True"
+| "deep_unallocated extAlloc (CV_Int _) = True"
+| "deep_unallocated extAlloc (CV_Real _) = True"
+| "deep_unallocated extAlloc (CV_Record fieldValues) =
+    list_all (\<lambda>fld. deep_unallocated extAlloc (snd fld)) fieldValues"
+| "deep_unallocated extAlloc (CV_Variant ctor payload) = deep_unallocated extAlloc payload"
+| "deep_unallocated extAlloc (CV_Array allocatable sizes valuesMap) =
+    (\<not> (allocatable \<and> list_all (\<lambda>s. s \<noteq> 0) sizes) \<and>
+     (\<forall>idx v. fmlookup valuesMap idx = Some v \<longrightarrow> deep_unallocated extAlloc v))"
+| "deep_unallocated extAlloc (CV_Extern n l k) = (\<not> is_allocated extAlloc (CV_Extern n l k))"
+  by pat_completeness auto
+
+termination deep_unallocated
+proof (relation "measure (\<lambda>(extAlloc, val). size val)", goal_cases)
+  case 1
+  show ?case by simp
+next
+  case (2 extAlloc fieldValues fld)
+  hence "(fst fld, snd fld) \<in> set fieldValues" by simp
+  hence "size (snd fld) < size (CV_Record fieldValues)" by (rule size_record_field)
+  thus ?case by simp
+next
+  case (3 extAlloc ctor payload)
+  show ?case by simp
+next
+  case (4 extAlloc allocatable sizes valuesMap idx v)
+  hence "size v < size (CV_Array allocatable sizes valuesMap)" by (rule size_array_lookup)
+  thus ?case by simp
+qed
+
+lemma deep_unallocated_not_allocated:
+  "deep_unallocated extAlloc v \<Longrightarrow> \<not> is_allocated extAlloc v"
+proof (induction extAlloc v rule: deep_unallocated.induct)
+  case (5 extAlloc fieldValues)
+  then show ?case by (auto simp: list_all_iff list_ex_iff)
+next
+  case (7 extAlloc allocatable sizes valuesMap)
+  then show ?case by (auto simp: list_ex_iff split: option.splits)
+qed simp_all
+
+lemma all_indices_zero_size:
+  "0 \<in> set sizes \<Longrightarrow> all_indices sizes = []"
+  by (induction sizes) (auto simp: Let_def)
+
+lemma value_has_type_deep_unallocated:
+  assumes "value_has_type env v ty" and "\<not> is_allocated extAlloc v"
+  shows "deep_unallocated extAlloc v"
+  using assms
+proof (induction extAlloc v arbitrary: ty rule: deep_unallocated.induct)
+  case (5 extAlloc fieldValues)
+  from "5.prems"(1) obtain fieldTypes where
+    all2: "list_all2 (\<lambda>(name1, fldVal) (name2, fldTy). name1 = name2 \<and> value_has_type env fldVal fldTy)
+             fieldValues fieldTypes"
+    by (auto split: CoreType.splits)
+  have "\<And>fld. fld \<in> set fieldValues \<Longrightarrow> deep_unallocated extAlloc (snd fld)"
+  proof -
+    fix fld assume mem: "fld \<in> set fieldValues"
+    then obtain i where i: "i < length fieldValues" "fieldValues ! i = fld"
+      by (auto simp: in_set_conv_nth)
+    from list_all2_nthD[OF all2 i(1)] i(2)
+    have "value_has_type env (snd fld) (snd (fieldTypes ! i))"
+      by (cases fld; cases "fieldTypes ! i") auto
+    moreover from "5.prems"(2) mem have "\<not> is_allocated extAlloc (snd fld)"
+      by (auto simp: list_ex_iff)
+    ultimately show "deep_unallocated extAlloc (snd fld)"
+      using "5.IH"[OF mem] by blast
+  qed
+  then show ?case by (simp add: list_all_iff)
+next
+  case (6 extAlloc ctor payload)
+  from "6.prems"(1) obtain pty where "value_has_type env payload pty"
+    by (auto split: CoreType.splits option.splits)
+  with "6.IH" "6.prems"(2) show ?case by simp
+next
+  case (7 extAlloc allocatable sizes valuesMap)
+  from "7.prems"(1) obtain elemTy dims where
+    elems: "\<forall>idx val. fmlookup valuesMap idx = Some val \<longrightarrow> value_has_type env val elemTy" and
+    fms: "fmap_matches_sizes sizes valuesMap"
+    by (auto split: CoreType.splits)
+  from fms have dom: "fmdom valuesMap = fset_of_list (all_indices sizes)"
+    by (simp add: fmap_matches_sizes_def)
+  have in_sizes: "\<And>idx val. fmlookup valuesMap idx = Some val \<Longrightarrow> idx \<in> set (all_indices sizes)"
+  proof -
+    fix idx val assume "fmlookup valuesMap idx = Some val"
+    hence "idx |\<in>| fmdom valuesMap" by (rule fmdomI)
+    with dom show "idx \<in> set (all_indices sizes)" by (simp add: fset_of_list_elem)
+  qed
+  show ?case
+  proof (cases allocatable)
+    case True
+    with "7.prems"(2) have "\<not> list_all (\<lambda>s. s \<noteq> 0) sizes" by simp
+    hence "0 \<in> set sizes" by (auto simp: list_all_iff)
+    hence "all_indices sizes = []" by (rule all_indices_zero_size)
+    with in_sizes have "\<And>idx val. fmlookup valuesMap idx = Some val \<Longrightarrow> False" by fastforce
+    with True \<open>\<not> list_all (\<lambda>s. s \<noteq> 0) sizes\<close> show ?thesis by auto
+  next
+    case False
+    have "\<And>idx val. fmlookup valuesMap idx = Some val \<Longrightarrow> deep_unallocated extAlloc val"
+    proof -
+      fix idx val assume lk: "fmlookup valuesMap idx = Some val"
+      from "7.prems"(2) False in_sizes[OF lk] lk have "\<not> is_allocated extAlloc val"
+        by (auto simp: list_ex_iff)
+      with "7.IH"[OF lk] elems lk show "deep_unallocated extAlloc val" by blast
+    qed
+    with False show ?thesis by auto
+  qed
+qed simp_all
+
+(* Preservation by the helpers that eval_const shares with the interpreter. *)
+
+lemma make_1d_array_deep_unallocated:
+  assumes "\<And>v. v \<in> set vs \<Longrightarrow> deep_unallocated extAlloc v"
+  shows "deep_unallocated extAlloc (make_1d_array vs)"
+proof -
+  have "\<And>idx v. fmlookup (fmap_of_list (zip (map (\<lambda>i. [int i]) [0..<length vs]) vs)) idx = Some v
+          \<Longrightarrow> v \<in> set vs"
+    by (auto simp: fmlookup_of_list dest!: map_of_SomeD set_zip_rightD)
+  with assms show ?thesis by auto
+qed
+
+lemma cast_value_deep_unallocated:
+  assumes "cast_value ty v = Inr v'" and "deep_unallocated extAlloc v"
+  shows "deep_unallocated extAlloc v'"
+  using assms
+  by (cases "(ty, v)" rule: cast_value.cases) (auto split: if_splits)
+
+lemma generic_finite_int_binop_deep_unallocated:
+  "generic_finite_int_binop f a b = Inr r \<Longrightarrow> deep_unallocated extAlloc r"
+  by (cases "(f, a, b)" rule: generic_finite_int_binop.cases) (auto simp: Let_def split: if_splits)
+
+lemma generic_finite_int_cmp_binop_deep_unallocated:
+  "generic_finite_int_cmp_binop f a b = Inr r \<Longrightarrow> deep_unallocated extAlloc r"
+  by (cases "(f, a, b)" rule: generic_finite_int_cmp_binop.cases) (auto split: if_splits)
+
+lemma generic_integer_binop_deep_unallocated:
+  "generic_integer_binop f a b = Inr r \<Longrightarrow> deep_unallocated extAlloc r"
+  by (cases a; cases b)
+     (auto simp: Let_def split: if_splits
+           dest: generic_finite_int_binop_deep_unallocated[where extAlloc = extAlloc])
+
+lemma generic_numeric_binop_deep_unallocated:
+  "generic_numeric_binop fi fr a b = Inr r \<Longrightarrow> deep_unallocated extAlloc r"
+  by (cases a; cases b)
+     (auto simp: Let_def split: if_splits
+           dest: generic_integer_binop_deep_unallocated[where extAlloc = extAlloc])
+
+lemma generic_numeric_cmp_binop_deep_unallocated:
+  "generic_numeric_cmp_binop fi fr a b = Inr r \<Longrightarrow> deep_unallocated extAlloc r"
+  by (cases a; cases b)
+     (auto simp: Let_def split: if_splits
+           dest: generic_finite_int_cmp_binop_deep_unallocated[where extAlloc = extAlloc])
+
+lemma generic_bool_binop_deep_unallocated:
+  "generic_bool_binop f a b = Inr r \<Longrightarrow> deep_unallocated extAlloc r"
+  by (cases "(f, a, b)" rule: generic_bool_binop.cases) auto
+
+lemma eval_binop_deep_unallocated:
+  "eval_binop op a b = Inr r \<Longrightarrow> deep_unallocated extAlloc r"
+  by (cases op)
+     (auto split: if_splits sum.splits
+           dest: generic_finite_int_binop_deep_unallocated[where extAlloc = extAlloc]
+                 generic_integer_binop_deep_unallocated[where extAlloc = extAlloc]
+                 generic_numeric_binop_deep_unallocated[where extAlloc = extAlloc]
+                 generic_numeric_cmp_binop_deep_unallocated[where extAlloc = extAlloc]
+                 generic_bool_binop_deep_unallocated[where extAlloc = extAlloc])
+
+lemma eval_unop_deep_unallocated:
+  "eval_unop op a = Inr r \<Longrightarrow> deep_unallocated extAlloc r"
+  by (cases op) (auto split: CoreValue.splits if_splits)
+
+lemma short_circuit_deep_unallocated:
+  "short_circuit op a = Some r \<Longrightarrow> deep_unallocated extAlloc r"
+  by (auto elim!: short_circuit.elims split: if_splits)
+
+lemma array_size_to_value_deep_unallocated:
+  "deep_unallocated extAlloc (array_size_to_value sizes)"
+  by (cases sizes rule: array_size_to_value.cases)
+     (auto simp: list_all_iff dest!: set_zip_rightD)
+
+(* eval_const preserves it, whatever the term. *)
+lemma eval_const_deep_unallocated_aux:
+  shows "(\<forall>name v'. fmlookup vals name = Some v' \<longrightarrow> deep_unallocated extAlloc v')
+           \<longrightarrow> (\<forall>v. eval_const vals tm = Inr v \<longrightarrow> deep_unallocated extAlloc v)"
+    and "(\<forall>name v'. fmlookup vals name = Some v' \<longrightarrow> deep_unallocated extAlloc v')
+           \<longrightarrow> (\<forall>vs. eval_const_list vals tms = Inr vs
+                  \<longrightarrow> (\<forall>v \<in> set vs. deep_unallocated extAlloc v))"
+proof (induction vals tm and vals tms rule: eval_const_eval_const_list.induct)
+  case (3 vals uu tms)
+  then show ?case
+    by (auto split: sum.splits simp del: make_1d_array.simps
+             intro!: make_1d_array_deep_unallocated)
+next
+  case (4 vals varName)
+  then show ?case by (auto split: option.splits)
+next
+  case (5 vals targetTy tm)
+  then show ?case
+    by (auto split: sum.splits dest: cast_value_deep_unallocated[where extAlloc = extAlloc])
+next
+  case (6 vals op tm)
+  then show ?case
+    by (auto split: sum.splits dest: eval_unop_deep_unallocated[where extAlloc = extAlloc])
+next
+  case (7 vals op lhsTm rhsTm)
+  \<comment> \<open>The result of an operator is a scalar, whatever the operands are.\<close>
+  show ?case
+  proof (intro impI allI)
+    fix v
+    assume ev: "eval_const vals (CoreTm_Binop op lhsTm rhsTm) = Inr v"
+    from ev obtain lhsVal where lhs: "eval_const vals lhsTm = Inr lhsVal"
+      by (auto split: sum.splits)
+    show "deep_unallocated extAlloc v"
+    proof (cases "short_circuit op lhsVal")
+      case (Some result)
+      with ev lhs have "v = result" by simp
+      with Some show ?thesis by (simp add: short_circuit_deep_unallocated)
+    next
+      case None
+      with ev lhs obtain rhsVal where "eval_binop op lhsVal rhsVal = Inr v"
+        by (auto split: sum.splits)
+      thus ?thesis by (rule eval_binop_deep_unallocated)
+    qed
+  qed
+next
+  case (8 vals varName rhsTm bodyTm)
+  show ?case
+  proof (intro impI allI)
+    fix v
+    assume ua: "\<forall>name v'. fmlookup vals name = Some v' \<longrightarrow> deep_unallocated extAlloc v'"
+       and ev: "eval_const vals (CoreTm_Let varName rhsTm bodyTm) = Inr v"
+    from ev obtain rhsVal where
+      rhs: "eval_const vals rhsTm = Inr rhsVal" and
+      body: "eval_const (fmupd varName rhsVal vals) bodyTm = Inr v"
+      by (auto split: sum.splits)
+    from "8.IH"(1) ua rhs have "deep_unallocated extAlloc rhsVal" by blast
+    with ua have "\<forall>name v'. fmlookup (fmupd varName rhsVal vals) name = Some v'
+                    \<longrightarrow> deep_unallocated extAlloc v'" by auto
+    with "8.IH"(2)[OF rhs] body show "deep_unallocated extAlloc v" by blast
+  qed
+next
+  case (10 vals ctorName uw payloadTm)
+  then show ?case by (auto split: sum.splits)
+next
+  case (11 vals nameTermPairs)
+  then show ?case
+    by (auto split: sum.splits simp: list_all_iff dest!: set_zip_rightD)
+next
+  case (12 vals tm fldName)
+  then show ?case
+    by (auto split: sum.splits CoreValue.splits option.splits simp: list_all_iff
+             dest!: map_of_SomeD)
+       (metis snd_conv)
+next
+  case (13 vals tm expectedCtorName)
+  then show ?case by (auto split: sum.splits CoreValue.splits if_splits)
+next
+  case (14 vals arrayTm idxTms)
+  \<comment> \<open>Every entry of the element map has no allocated part, whether or not its
+      index is within the sizes of the array.\<close>
+  show ?case
+  proof (intro impI allI)
+    fix v
+    assume ua: "\<forall>name v'. fmlookup vals name = Some v' \<longrightarrow> deep_unallocated extAlloc v'"
+       and ev: "eval_const vals (CoreTm_ArrayProj arrayTm idxTms) = Inr v"
+    from ev obtain al sizes elementMap indices where
+      arr: "eval_const vals arrayTm = Inr (CV_Array al sizes elementMap)" and
+      lk: "fmlookup elementMap indices = Some v"
+      by (auto split: sum.splits CoreValue.splits option.splits)
+    from "14.IH"(1) ua arr
+    have "deep_unallocated extAlloc (CV_Array al sizes elementMap)" by blast
+    with lk show "deep_unallocated extAlloc v" by simp
+  qed
+next
+  case (15 vals scrutTm arms)
+  show ?case
+  proof (intro impI allI)
+    fix v
+    assume ua: "\<forall>name v'. fmlookup vals name = Some v' \<longrightarrow> deep_unallocated extAlloc v'"
+       and ev: "eval_const vals (CoreTm_Match scrutTm arms) = Inr v"
+    from ev obtain scrutVal armTm where
+      scrut: "eval_const vals scrutTm = Inr scrutVal" and
+      fma: "find_matching_arm scrutVal arms = Inr armTm" and
+      arm: "eval_const vals armTm = Inr v"
+      by (auto split: sum.splits)
+    from "15.IH"(2) scrut fma ua arm show "deep_unallocated extAlloc v" by blast
+  qed
+next
+  case (16 vals tm)
+  then show ?case
+    by (auto split: sum.splits CoreValue.splits intro: array_size_to_value_deep_unallocated)
+next
+  case (21 vals tm tms)
+  show ?case
+  proof (intro impI allI ballI)
+    fix vs v
+    assume ua: "\<forall>name v'. fmlookup vals name = Some v' \<longrightarrow> deep_unallocated extAlloc v'"
+       and ev: "eval_const_list vals (tm # tms) = Inr vs"
+       and mem: "v \<in> set vs"
+    from ev obtain v1 vs' where
+      hd: "eval_const vals tm = Inr v1" and
+      tl: "eval_const_list vals tms = Inr vs'" and
+      vs: "vs = v1 # vs'"
+      by (auto split: sum.splits)
+    from "21.IH"(1) ua hd have d1: "deep_unallocated extAlloc v1" by blast
+    from "21.IH"(2) hd ua tl have d2: "\<forall>v\<in>set vs'. deep_unallocated extAlloc v" by blast
+    from mem vs d1 d2 show "deep_unallocated extAlloc v" by auto
+  qed
+qed (auto split: option.splits)
+
+lemma eval_const_deep_unallocated:
+  assumes "\<forall>name c. fmlookup vals name = Some c \<longrightarrow> deep_unallocated extAlloc c"
+      and "eval_const vals tm = Inr v"
+  shows "deep_unallocated extAlloc v"
+  using eval_const_deep_unallocated_aux(1) assms by blast
+
+lemma eval_const_list_deep_unallocated:
+  assumes "\<forall>name c. fmlookup vals name = Some c \<longrightarrow> deep_unallocated extAlloc c"
+      and "eval_const_list vals tms = Inr vs"
+      and "v \<in> set vs"
+  shows "deep_unallocated extAlloc v"
+  using eval_const_deep_unallocated_aux(2) assms by blast
+
+(* The same in terms of is_allocated: if every value of the map is well typed
+   and not allocated, then the result of eval_const is not allocated. The oracle
+   is arbitrary, and the term need not be typed. (There is no is_constant_term
+   premise either: on any other term eval_const gives no value.) *)
+theorem eval_const_not_allocated:
+  assumes typed: "\<And>name c. fmlookup vals name = Some c \<Longrightarrow> \<exists>cty. value_has_type env c cty"
+      and unalloc: "\<And>name c. fmlookup vals name = Some c \<Longrightarrow> \<not> is_allocated extAlloc c"
+      and ev: "eval_const vals tm = Inr v"
+  shows "\<not> is_allocated extAlloc v"
+proof -
+  have "\<forall>name c. fmlookup vals name = Some c \<longrightarrow> deep_unallocated extAlloc c"
+  proof (intro allI impI)
+    fix name c assume lk: "fmlookup vals name = Some c"
+    from typed[OF lk] obtain cty where "value_has_type env c cty" ..
+    thus "deep_unallocated extAlloc c"
+      using unalloc[OF lk] by (rule value_has_type_deep_unallocated)
+  qed
+  from eval_const_deep_unallocated[OF this ev] show ?thesis
+    by (rule deep_unallocated_not_allocated)
+qed
+
+(* Consequently the value_position check (R1) of the interpreter does nothing to
+   a result of eval_const. *)
+lemma value_position_eval_const:
+  fixes st :: "'w InterpState"
+  assumes "\<forall>name c. fmlookup vals name = Some c
+             \<longrightarrow> deep_unallocated (IS_ExternAlloc st) c"
+  shows "value_position st (eval_const vals tm) = eval_const vals tm"
+proof (cases "eval_const vals tm")
+  case (Inl err)
+  then show ?thesis by simp
+next
+  case (Inr v)
+  have "\<not> is_allocated (IS_ExternAlloc st) v"
+    by (rule deep_unallocated_not_allocated[OF eval_const_deep_unallocated[OF assms Inr]])
+  with Inr show ?thesis by (simp add: value_position_def)
+qed
+
+lemma value_position_list_eval_const_list:
+  fixes st :: "'w InterpState"
+  assumes "\<forall>name c. fmlookup vals name = Some c
+             \<longrightarrow> deep_unallocated (IS_ExternAlloc st) c"
+  shows "value_position_list st (eval_const_list vals tms) = eval_const_list vals tms"
+proof (cases "eval_const_list vals tms")
+  case (Inl err)
+  then show ?thesis by simp
+next
+  case (Inr vs)
+  have "\<And>v. v \<in> set vs \<Longrightarrow> \<not> is_allocated (IS_ExternAlloc st) v"
+    by (rule deep_unallocated_not_allocated[OF eval_const_list_deep_unallocated[OF assms Inr]])
+  with Inr show ?thesis by (simp add: value_position_list_def list_ex_iff)
+qed
+
+
+(* ========================================================================== *)
 (* Agreement with the interpreter                                             *)
 (* ========================================================================== *)
 
@@ -805,7 +1208,14 @@ qed
 (* Generalized over the Let-extended value map and state. Structural
    induction; every case is: obtain agreement for the subterms (IH), then
    the clause-level computation is the same case expression on both sides
-   (shared helpers), discharged by simp.
+   (shared helpers), discharged by simp. The interpreter's value_position
+   checks disappear by value_position_eval_const: no value of the map has an
+   allocated part (the fourth premise), so no subterm yields an allocated value.
+   That premise is kept through CoreTm_Let by eval_const_deep_unallocated,
+   because nothing checks the right-hand side of a let.
+
+   The premise makes the check vacuous whatever the mode of the state, so
+   IS_Ghost is not mentioned. (In ghost mode there is no check at all.)
 
    The depth `d` is arbitrary, because a constant term has no quantifier. *)
 theorem eval_const_interp_agree_gen:
@@ -813,6 +1223,8 @@ theorem eval_const_interp_agree_gen:
   assumes "is_constant_term tm"
       and "core_term_free_vars tm |\<subseteq>| fmdom vals"
       and "vals_agree st vals"
+      and "\<forall>name c. fmlookup vals name = Some c
+             \<longrightarrow> deep_unallocated (IS_ExternAlloc st) c"
   shows "\<exists>N. \<forall>f\<ge>N. interp_term d f st tm = eval_const vals tm"
   using assms
 proof (induction tm arbitrary: vals st)
@@ -833,14 +1245,14 @@ next
       using CoreTm_LitArray.prems(2) mem
       by (fastforce simp: fsubset_iff fmember_ffUnion_fimage_fset_of_list_iff)
     show "\<exists>N. \<forall>f\<ge>N. interp_term d f st t = eval_const vals t"
-      using CoreTm_LitArray.IH mem c fv CoreTm_LitArray.prems(3) by blast
+      using CoreTm_LitArray.IH mem c fv CoreTm_LitArray.prems(3,4) by blast
   qed
   show ?case
   proof (rule agree_lift_list[OF agree_list[OF members]])
     fix f assume h: "interp_term_list d f st tms = eval_const_list vals tms"
     show "interp_term d (Suc f) st (CoreTm_LitArray elemTy tms)
             = eval_const vals (CoreTm_LitArray elemTy tms)"
-      by (simp add: h)
+      by (simp add: h value_position_list_eval_const_list[OF CoreTm_LitArray.prems(4)])
   qed
 next
   case (CoreTm_Var name)
@@ -862,13 +1274,13 @@ next
   have fv: "core_term_free_vars operand |\<subseteq>| fmdom vals"
     using CoreTm_Cast.prems(2) by simp
   have sub: "\<exists>N. \<forall>f\<ge>N. interp_term d f st operand = eval_const vals operand"
-    by (rule CoreTm_Cast.IH[OF c fv CoreTm_Cast.prems(3)])
+    by (rule CoreTm_Cast.IH[OF c fv CoreTm_Cast.prems(3,4)])
   show ?case
   proof (rule agree_lift1[OF sub])
     fix f assume h: "interp_term d f st operand = eval_const vals operand"
     show "interp_term d (Suc f) st (CoreTm_Cast targetTy operand)
             = eval_const vals (CoreTm_Cast targetTy operand)"
-      by (simp add: h)
+      by (simp add: h Let_def value_position_eval_const[OF CoreTm_Cast.prems(4)])
   qed
 next
   case (CoreTm_Unop op operand)
@@ -876,13 +1288,13 @@ next
   have fv: "core_term_free_vars operand |\<subseteq>| fmdom vals"
     using CoreTm_Unop.prems(2) by simp
   have sub: "\<exists>N. \<forall>f\<ge>N. interp_term d f st operand = eval_const vals operand"
-    by (rule CoreTm_Unop.IH[OF c fv CoreTm_Unop.prems(3)])
+    by (rule CoreTm_Unop.IH[OF c fv CoreTm_Unop.prems(3,4)])
   show ?case
   proof (rule agree_lift1[OF sub])
     fix f assume h: "interp_term d f st operand = eval_const vals operand"
     show "interp_term d (Suc f) st (CoreTm_Unop op operand)
             = eval_const vals (CoreTm_Unop op operand)"
-      by (simp add: h)
+      by (simp add: h value_position_eval_const[OF CoreTm_Unop.prems(4)])
   qed
 next
   case (CoreTm_Binop op lhs rhs)
@@ -892,16 +1304,17 @@ next
    and fv2: "core_term_free_vars rhs |\<subseteq>| fmdom vals"
     using CoreTm_Binop.prems(2) by (auto simp: fsubset_iff)
   have sub1: "\<exists>N. \<forall>f\<ge>N. interp_term d f st lhs = eval_const vals lhs"
-    by (rule CoreTm_Binop.IH(1)[OF c1 fv1 CoreTm_Binop.prems(3)])
+    by (rule CoreTm_Binop.IH(1)[OF c1 fv1 CoreTm_Binop.prems(3,4)])
   have sub2: "\<exists>N. \<forall>f\<ge>N. interp_term d f st rhs = eval_const vals rhs"
-    by (rule CoreTm_Binop.IH(2)[OF c2 fv2 CoreTm_Binop.prems(3)])
+    by (rule CoreTm_Binop.IH(2)[OF c2 fv2 CoreTm_Binop.prems(3,4)])
   show ?case
   proof (rule agree_lift2[OF sub1 sub2])
     fix f assume h1: "interp_term d f st lhs = eval_const vals lhs"
              and h2: "interp_term d f st rhs = eval_const vals rhs"
     show "interp_term d (Suc f) st (CoreTm_Binop op lhs rhs)
             = eval_const vals (CoreTm_Binop op lhs rhs)"
-      by (simp add: h1 h2 split: sum.split option.split)
+      by (simp add: h1 h2 value_position_eval_const[OF CoreTm_Binop.prems(4)]
+               split: sum.split option.split)
   qed
 next
   case (CoreTm_Let var rhs body)
@@ -910,7 +1323,7 @@ next
   have fv_rhs: "core_term_free_vars rhs |\<subseteq>| fmdom vals"
     using CoreTm_Let.prems(2) by (auto simp: fsubset_iff)
   have sub_rhs: "\<exists>N. \<forall>f\<ge>N. interp_term d f st rhs = eval_const vals rhs"
-    by (rule CoreTm_Let.IH(1)[OF c_rhs fv_rhs CoreTm_Let.prems(3)])
+    by (rule CoreTm_Let.IH(1)[OF c_rhs fv_rhs CoreTm_Let.prems(3,4)])
   show ?case
   proof (cases "eval_const vals rhs")
     case (Inl err)
@@ -934,15 +1347,29 @@ next
       by (rule vals_agree_extend[OF CoreTm_Let.prems(3)]) (simp_all add: st''_def)
     have fv_body: "core_term_free_vars body |\<subseteq>| fmdom vals'"
       using CoreTm_Let.prems(2) by (auto simp: vals'_def fsubset_iff)
+    \<comment> \<open>The right-hand side is in a place position, so the interpreter did not check
+        its value. It has no allocated part all the same, so the extended map
+        still satisfies the premise.\<close>
+    have "deep_unallocated (IS_ExternAlloc st) rhsVal"
+      by (rule eval_const_deep_unallocated[OF CoreTm_Let.prems(4) Inr])
+    with CoreTm_Let.prems(4)
+    have ua': "\<forall>name c. fmlookup vals' name = Some c
+                 \<longrightarrow> deep_unallocated (IS_ExternAlloc st) c"
+      by (auto simp: vals'_def)
+    have ua'': "\<forall>name c. fmlookup vals' name = Some c
+                  \<longrightarrow> deep_unallocated (IS_ExternAlloc st'') c"
+      using ua' by (simp add: st''_def)
     have sub_body: "\<exists>N. \<forall>f\<ge>N. interp_term d f st'' body = eval_const vals' body"
-      by (rule CoreTm_Let.IH(2)[OF c_body fv_body ag'])
+      by (rule CoreTm_Let.IH(2)[OF c_body fv_body ag' ua''])
     show ?thesis
     proof (rule agree_lift2[OF sub_rhs sub_body])
       fix f assume h1: "interp_term d f st rhs = eval_const vals rhs"
                and h2: "interp_term d f st'' body = eval_const vals' body"
-      have "interp_term d (Suc f) st (CoreTm_Let var rhs body) = interp_term d f st'' body"
+      have "interp_term d (Suc f) st (CoreTm_Let var rhs body)
+              = value_position st (interp_term d f st'' body)"
         by (simp add: h1 Inr st''_def Let_def)
-      also have "... = eval_const vals' body" by (rule h2)
+      also have "... = eval_const vals' body"
+        by (simp add: h2 value_position_eval_const[OF ua'])
       finally show "interp_term d (Suc f) st (CoreTm_Let var rhs body)
                       = eval_const vals (CoreTm_Let var rhs body)"
         by (simp add: Inr vals'_def)
@@ -960,13 +1387,13 @@ next
   have fv: "core_term_free_vars payload |\<subseteq>| fmdom vals"
     using CoreTm_VariantCtor.prems(2) by simp
   have sub: "\<exists>N. \<forall>f\<ge>N. interp_term d f st payload = eval_const vals payload"
-    by (rule CoreTm_VariantCtor.IH[OF c fv CoreTm_VariantCtor.prems(3)])
+    by (rule CoreTm_VariantCtor.IH[OF c fv CoreTm_VariantCtor.prems(3,4)])
   show ?case
   proof (rule agree_lift1[OF sub])
     fix f assume h: "interp_term d f st payload = eval_const vals payload"
     show "interp_term d (Suc f) st (CoreTm_VariantCtor ctorName tyArgs payload)
             = eval_const vals (CoreTm_VariantCtor ctorName tyArgs payload)"
-      by (simp add: h)
+      by (simp add: h value_position_eval_const[OF CoreTm_VariantCtor.prems(4)])
   qed
 next
   case (CoreTm_Record flds)
@@ -981,7 +1408,7 @@ next
       using CoreTm_Record.prems(2) mem
       by (fastforce simp: fsubset_iff fmember_ffUnion_fimage_fset_of_list_iff)
     show "\<exists>N. \<forall>f\<ge>N. interp_term d f st t = eval_const vals t"
-      using CoreTm_Record.IH mem c fv CoreTm_Record.prems(3) by fastforce
+      using CoreTm_Record.IH mem c fv CoreTm_Record.prems(3,4) by fastforce
   qed
   show ?case
   proof (rule agree_lift_list[OF agree_list[OF members]])
@@ -989,7 +1416,7 @@ next
                        = eval_const_list vals (map snd flds)"
     show "interp_term d (Suc f) st (CoreTm_Record flds)
             = eval_const vals (CoreTm_Record flds)"
-      by (simp add: h)
+      by (simp add: h value_position_list_eval_const_list[OF CoreTm_Record.prems(4)])
   qed
 next
   case (CoreTm_RecordProj tm fldName)
@@ -997,7 +1424,7 @@ next
   have fv: "core_term_free_vars tm |\<subseteq>| fmdom vals"
     using CoreTm_RecordProj.prems(2) by simp
   have sub: "\<exists>N. \<forall>f\<ge>N. interp_term d f st tm = eval_const vals tm"
-    by (rule CoreTm_RecordProj.IH[OF c fv CoreTm_RecordProj.prems(3)])
+    by (rule CoreTm_RecordProj.IH[OF c fv CoreTm_RecordProj.prems(3,4)])
   show ?case
   proof (rule agree_lift1[OF sub])
     fix f assume h: "interp_term d f st tm = eval_const vals tm"
@@ -1011,7 +1438,7 @@ next
   have fv: "core_term_free_vars tm |\<subseteq>| fmdom vals"
     using CoreTm_VariantProj.prems(2) by simp
   have sub: "\<exists>N. \<forall>f\<ge>N. interp_term d f st tm = eval_const vals tm"
-    by (rule CoreTm_VariantProj.IH[OF c fv CoreTm_VariantProj.prems(3)])
+    by (rule CoreTm_VariantProj.IH[OF c fv CoreTm_VariantProj.prems(3,4)])
   show ?case
   proof (rule agree_lift1[OF sub])
     fix f assume h: "interp_term d f st tm = eval_const vals tm"
@@ -1026,7 +1453,7 @@ next
   have fv_arr: "core_term_free_vars arr |\<subseteq>| fmdom vals"
     using CoreTm_ArrayProj.prems(2) by (auto simp: fsubset_iff)
   have sub_arr: "\<exists>N. \<forall>f\<ge>N. interp_term d f st arr = eval_const vals arr"
-    by (rule CoreTm_ArrayProj.IH(1)[OF c_arr fv_arr CoreTm_ArrayProj.prems(3)])
+    by (rule CoreTm_ArrayProj.IH(1)[OF c_arr fv_arr CoreTm_ArrayProj.prems(3,4)])
   have members: "\<And>t. t \<in> set idxTms \<Longrightarrow>
                    \<exists>N. \<forall>f\<ge>N. interp_term d f st t = eval_const vals t"
   proof -
@@ -1037,7 +1464,7 @@ next
       using CoreTm_ArrayProj.prems(2) mem
       by (fastforce simp: fsubset_iff fmember_ffUnion_fimage_fset_of_list_iff)
     show "\<exists>N. \<forall>f\<ge>N. interp_term d f st t = eval_const vals t"
-      using CoreTm_ArrayProj.IH(2) mem c fv CoreTm_ArrayProj.prems(3) by blast
+      using CoreTm_ArrayProj.IH(2) mem c fv CoreTm_ArrayProj.prems(3,4) by blast
   qed
   show ?case
   proof (rule agree_lift_tm_list[OF sub_arr agree_list[OF members]])
@@ -1045,7 +1472,8 @@ next
              and h2: "interp_term_list d f st idxTms = eval_const_list vals idxTms"
     show "interp_term d (Suc f) st (CoreTm_ArrayProj arr idxTms)
             = eval_const vals (CoreTm_ArrayProj arr idxTms)"
-      by (simp add: h1 h2 split: sum.split CoreValue.split)
+      by (simp add: h1 h2 value_position_list_eval_const_list[OF CoreTm_ArrayProj.prems(4)]
+               split: sum.split CoreValue.split)
   qed
 next
   case (CoreTm_Match scrut arms)
@@ -1054,7 +1482,7 @@ next
   have fv_scrut: "core_term_free_vars scrut |\<subseteq>| fmdom vals"
     using CoreTm_Match.prems(2) by (auto simp: fsubset_iff)
   have sub_scrut: "\<exists>N. \<forall>f\<ge>N. interp_term d f st scrut = eval_const vals scrut"
-    by (rule CoreTm_Match.IH(1)[OF c_scrut fv_scrut CoreTm_Match.prems(3)])
+    by (rule CoreTm_Match.IH(1)[OF c_scrut fv_scrut CoreTm_Match.prems(3,4)])
   show ?case
   proof (cases "eval_const vals scrut")
     case (Inl err)
@@ -1088,14 +1516,15 @@ next
         using CoreTm_Match.prems(2) mem
         by (fastforce simp: fsubset_iff fmember_ffUnion_fimage_fset_of_list_iff)
       have sub_arm: "\<exists>N. \<forall>f\<ge>N. interp_term d f st armTm = eval_const vals armTm"
-        using CoreTm_Match.IH(2) mem c_arm fv_arm CoreTm_Match.prems(3) by fastforce
+        using CoreTm_Match.IH(2) mem c_arm fv_arm CoreTm_Match.prems(3,4) by fastforce
       show ?thesis
       proof (rule agree_lift2[OF sub_scrut sub_arm])
         fix f assume h1: "interp_term d f st scrut = eval_const vals scrut"
                  and h2: "interp_term d f st armTm = eval_const vals armTm"
         show "interp_term d (Suc f) st (CoreTm_Match scrut arms)
                 = eval_const vals (CoreTm_Match scrut arms)"
-          by (simp add: h1 h2 \<open>eval_const vals scrut = Inr scrutVal\<close> fma)
+          by (simp add: h1 h2 \<open>eval_const vals scrut = Inr scrutVal\<close> fma
+                   value_position_eval_const[OF CoreTm_Match.prems(4)])
       qed
     qed
   qed
@@ -1105,7 +1534,7 @@ next
   have fv: "core_term_free_vars tm |\<subseteq>| fmdom vals"
     using CoreTm_Sizeof.prems(2) by simp
   have sub: "\<exists>N. \<forall>f\<ge>N. interp_term d f st tm = eval_const vals tm"
-    by (rule CoreTm_Sizeof.IH[OF c fv CoreTm_Sizeof.prems(3)])
+    by (rule CoreTm_Sizeof.IH[OF c fv CoreTm_Sizeof.prems(3,4)])
   show ?case
   proof (rule agree_lift1[OF sub])
     fix f assume h: "interp_term d f st tm = eval_const vals tm"
@@ -1126,17 +1555,104 @@ qed
 (* Main results for eval_const/interp_term agreement *)
 (* ========================================================================== *)
 
+(* In a well-typed state, every value that the map tracks is well typed: it is
+   a slot of the store, a part of a slot reached by a reference path, or a
+   global. *)
+lemma vals_agree_value_typed:
+  fixes st :: "'w InterpState"
+  assumes sme: "state_matches_env st env storeTyping"
+      and ag: "vals_agree st vals"
+      and lk: "fmlookup vals name = Some v"
+  shows "\<exists>ty. value_has_type env v ty"
+proof -
+  from ag lk have base: "(case fmlookup (IS_Locals st) name of
+      Some addr \<Rightarrow> addr < length (IS_Store st) \<and> IS_Store st ! addr = v
+    | None \<Rightarrow>
+      (case fmlookup (IS_Refs st) name of
+         Some (addr, path) \<Rightarrow> addr < length (IS_Store st)
+                              \<and> get_value_at_path (IS_Store st ! addr) path = Inr v
+       | None \<Rightarrow> fmlookup (IS_Globals st) name = Some v))"
+    unfolding vals_agree_def by blast
+  from sme have swt: "store_well_typed st env storeTyping"
+    and lve: "local_vars_exist_in_state st env storeTyping"
+    and gve: "global_vars_exist_in_state st env"
+    and nel: "no_extra_local_vars st env"
+    and neg: "no_extra_global_vars st env"
+    unfolding state_matches_env_def by simp_all
+  have slot: "\<And>addr. addr < length (IS_Store st)
+                \<Longrightarrow> value_has_type env (IS_Store st ! addr) (storeTyping ! addr)"
+    using swt unfolding store_well_typed_def by blast
+  show ?thesis
+  proof (cases "fmlookup (IS_Locals st) name")
+    case (Some addr)
+    with base have "addr < length (IS_Store st)" and "IS_Store st ! addr = v" by simp_all
+    with slot[of addr] show ?thesis by blast
+  next
+    case None
+    show ?thesis
+    proof (cases "fmlookup (IS_Refs st) name")
+      case (Some ap)
+      obtain addr path where ap: "ap = (addr, path)" by (cases ap)
+      from base None Some ap have valid: "addr < length (IS_Store st)"
+        and gv: "get_value_at_path (IS_Store st ! addr) path = Inr v" by simp_all
+      from nel Some obtain lty where lty: "fmlookup (TE_LocalVars env) name = Some lty"
+        unfolding no_extra_local_vars_def
+        by (cases "fmlookup (TE_LocalVars env) name") auto
+      from lve lty have "local_var_in_state_with_type st env storeTyping name lty"
+        unfolding local_vars_exist_in_state_def by blast
+      with None Some ap
+      have pt: "type_at_path env (storeTyping ! addr) path
+                  = Some (apply_subst (IS_TyArgs st) lty)"
+        unfolding local_var_in_state_with_type_def by (simp add: Let_def)
+      from get_value_at_path_type[OF slot[OF valid] pt gv] show ?thesis by blast
+    next
+      case None2: None
+      from base None None2 have g: "fmlookup (IS_Globals st) name = Some v" by simp
+      from neg g obtain gty where gty: "fmlookup (TE_GlobalVars env) name = Some gty"
+        unfolding no_extra_global_vars_def
+        by (cases "fmlookup (TE_GlobalVars env) name") auto
+      from gve gty have "global_var_in_state_with_type st env name gty"
+        unfolding global_vars_exist_in_state_def by blast
+      with g show ?thesis unfolding global_var_in_state_with_type_def by auto
+    qed
+  qed
+qed
+
 (* Compile-time evaluation equals runtime interpretation (for SOME fuel, at
-   any depth) at any state that agrees with the constants' value map. *)
+   any depth) at any well-typed state that agrees with the constants' value map,
+   provided that no constant's value is allocated.
+
+   The last premise cannot be dropped. The interpreter gives RuntimeError when a
+   value in a value position is allocated (in executable code), and eval_const
+   makes no such check. For example, let globalVals map c to an allocatable array
+   of size 1 and let st hold c with that value among its globals and be in
+   executable mode: on CoreTm_Record [(x, CoreTm_Var c)] eval_const gives the
+   record, and interp_term gives RuntimeError at every sufficient fuel. Nor is the
+   premise enough without the typing of the state: see the comment at
+   deep_unallocated above.
+
+   That the global constants of an elaborated module are never allocated is not
+   proved here. *)
 theorem eval_const_interp_agree:
   fixes st :: "'w InterpState"
-  assumes "is_constant_term tm"
-      and "core_term_free_vars tm |\<subseteq>| fmdom globalVals"
-      and "vals_agree st globalVals"
+  assumes const: "is_constant_term tm"
+      and fv: "core_term_free_vars tm |\<subseteq>| fmdom globalVals"
+      and ag: "vals_agree st globalVals"
+      and sme: "state_matches_env st env storeTyping"
+      and unalloc: "\<And>name c. fmlookup globalVals name = Some c
+                      \<Longrightarrow> \<not> is_allocated (IS_ExternAlloc st) c"
   shows "\<exists>fuel. interp_term d fuel st tm = eval_const globalVals tm"
 proof -
+  have ua: "\<forall>name c. fmlookup globalVals name = Some c
+              \<longrightarrow> deep_unallocated (IS_ExternAlloc st) c"
+  proof (intro allI impI)
+    fix name c assume lk: "fmlookup globalVals name = Some c"
+    from vals_agree_value_typed[OF sme ag lk] obtain cty where "value_has_type env c cty" ..
+    thus "deep_unallocated (IS_ExternAlloc st) c"
+      using unalloc[OF lk] by (rule value_has_type_deep_unallocated)
+  qed
   obtain N where "\<forall>f\<ge>N. interp_term d f st tm = eval_const globalVals tm"
-    using eval_const_interp_agree_gen[where d = d, OF assms] by blast
+    using eval_const_interp_agree_gen[where d = d, OF const fv ag ua] by blast
   thus ?thesis by (meson order_refl)
 qed
 
@@ -1146,6 +1662,9 @@ corollary fold_const_interp_agree:
   assumes const: "is_constant_term tm"
       and fold_ok: "fold_const globalVals loc tm = Inr v"
       and ag: "vals_agree st globalVals"
+      and sme: "state_matches_env st env storeTyping"
+      and unalloc: "\<And>name c. fmlookup globalVals name = Some c
+                      \<Longrightarrow> \<not> is_allocated (IS_ExternAlloc st) c"
   shows "\<exists>fuel. interp_term d fuel st tm = Inr v"
 proof -
   from fold_ok have
@@ -1155,11 +1674,12 @@ proof -
   have fv: "core_term_free_vars tm |\<subseteq>| fmdom globalVals"
     using miss by (metis fempty_iff fminus_iff fsubsetI)
   show ?thesis
-    using eval_const_interp_agree[where d = d, OF const fv ag] ev by simp
+    using eval_const_interp_agree[where d = d, OF const fv ag sme unalloc] ev by simp
 qed
 
 (* A canonical witness for vals_agree: globals hold exactly the constants' value map,
-   and all other fields are empty. The world type is fixed to `unit`. *)
+   and all other fields are empty. The world type is fixed to `unit`. The state is in
+   executable mode, and its oracle says that no extern value is allocated. *)
 definition const_eval_state :: "(string, CoreValue) fmap \<Rightarrow> unit InterpState" where
   "const_eval_state vals =
      \<lparr> IS_Globals = vals,
@@ -1180,7 +1700,13 @@ lemma const_eval_state_agrees: "vals_agree (const_eval_state vals) vals"
   by (simp add: vals_agree_def const_eval_state_def)
 
 (* A successful fold_const is the same (on compile-time constant terms) as a call to
-   the term interpreter, in a specific InterpState.
+   the term interpreter, in a specific InterpState, provided that the constants' values
+   are well typed and none of them is allocated.
+
+   const_eval_state has no functions and no datatype tables, so it does not match a type
+   environment in general (state_matches_env); the typing of the constants' values is
+   therefore asked for directly, as module_globals_well_typed. "Not allocated" is
+   judged with the oracle of const_eval_state.
 
    This theorem could be used to justify a claim (e.g. in a language specification
    document) that the elaborator evaluates constants at compile time using the ordinary
@@ -1189,7 +1715,34 @@ lemma const_eval_state_agrees: "vals_agree (const_eval_state vals) vals"
 corollary fold_const_is_core_evaluation:
   assumes const: "is_constant_term tm"
       and fold_ok: "fold_const globalVals loc tm = Inr v"
+      and gvals: "module_globals_well_typed env globalVals"
+      and unalloc: "\<And>name c. fmlookup globalVals name = Some c
+                      \<Longrightarrow> \<not> is_allocated (\<lambda>_ _ _. False) c"
   shows "\<exists>fuel. interp_term d fuel (const_eval_state globalVals) tm = Inr v"
-  by (rule fold_const_interp_agree[OF const fold_ok const_eval_state_agrees])
+proof -
+  from fold_ok have
+    miss: "core_term_free_vars tm |-| fmdom globalVals = {||}" and
+    ev: "eval_const globalVals tm = Inr v"
+    unfolding fold_const_def by (auto simp: Let_def split: if_splits sum.splits)
+  have fv: "core_term_free_vars tm |\<subseteq>| fmdom globalVals"
+    using miss by (metis fempty_iff fminus_iff fsubsetI)
+  have orc: "IS_ExternAlloc (const_eval_state globalVals) = (\<lambda>_ _ _. False)"
+    by (simp add: const_eval_state_def)
+  have ua: "\<forall>name c. fmlookup globalVals name = Some c
+              \<longrightarrow> deep_unallocated (IS_ExternAlloc (const_eval_state globalVals)) c"
+    unfolding orc
+  proof (intro allI impI)
+    fix name c assume lk: "fmlookup globalVals name = Some c"
+    from gvals lk obtain cty where "value_has_type env c cty"
+      unfolding module_globals_well_typed_def by blast
+    thus "deep_unallocated (\<lambda>_ _ _. False) c"
+      using unalloc[OF lk] by (rule value_has_type_deep_unallocated)
+  qed
+  obtain N where
+    "\<forall>f\<ge>N. interp_term d f (const_eval_state globalVals) tm = eval_const globalVals tm"
+    using eval_const_interp_agree_gen[where d = d, OF const fv const_eval_state_agrees ua]
+    by blast
+  with ev show ?thesis by (metis order_refl)
+qed
 
 end
