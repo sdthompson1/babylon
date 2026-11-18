@@ -1385,7 +1385,8 @@ next
       next
         case (CoreStmt_Assign assignGhost lhsTy lhsTm rhsTm)
           \<comment> \<open>Assign (ghost or not): rhs is an ordinary (pure) term. Evaluate lhs
-              lvalue and rhs term, check the copy, then update the store.
+              lvalue and rhs term (the rhs is in a value position, so its value
+              is checked by value_position), then update the store.
               (Impure-call rhs's are handled by CoreStmt_AssignCall.)\<close>
           from typing CoreStmt_Assign have
             lhs_writable: "is_writable_lvalue env lhsTm" and
