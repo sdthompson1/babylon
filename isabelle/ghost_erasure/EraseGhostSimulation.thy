@@ -129,6 +129,67 @@ qed
 
 
 (* ========================================================================== *)
+(* The mode of the two states *)
+(* ========================================================================== *)
+
+(* Related states are in the same mode, and stay related when both are put in
+   another mode. A statement does this to evaluate its own terms, and a call
+   statement to put its own mode back after the call. *)
+lemma state_erased_set_ghost:
+  assumes "state_erased env emb full erased"
+  shows "state_erased env emb (full \<lparr> IS_Ghost := g \<rparr>) (erased \<lparr> IS_Ghost := g \<rparr>)"
+proof -
+  let ?f = "full \<lparr> IS_Ghost := g \<rparr>" and ?e = "erased \<lparr> IS_Ghost := g \<rparr>"
+  have 1: "heap_erased env emb ?f ?e = heap_erased env emb full erased"
+    by (simp add: heap_erased_def funs_erased_def store_erased_def)
+  have 2: "locals_erased env emb ?f ?e = locals_erased env emb full erased"
+    by (simp add: locals_erased_def)
+  have 3: "ghost_locals_separate env emb ?f = ghost_locals_separate env emb full"
+    by (simp add: ghost_locals_separate_def)
+  show ?thesis using assms by (simp add: state_erased_def 1 2 3)
+qed
+
+lemma state_erased_reset_ghost:
+  assumes "state_erased env emb full erased"
+    and "state_erased env emb' newFull newErased"
+  shows "state_erased env emb' (newFull \<lparr> IS_Ghost := IS_Ghost full \<rparr>)
+           (newErased \<lparr> IS_Ghost := IS_Ghost erased \<rparr>)"
+  using state_erased_set_ghost[OF assms(2), of "IS_Ghost full"] state_erasedD(11)[OF assms(1)]
+  by simp
+
+
+(* ========================================================================== *)
+(* The arguments of a call *)
+(* ========================================================================== *)
+
+(* A call evaluates each argument in the mode of its parameter (map_args), so
+   the proof below pairs each argument with its parameter. An element of the
+   list of those pairs, taken together with the parameter at the same
+   position, is paired with that parameter. *)
+lemma zip_zip_self_memD:
+  assumes "((a, t), (b, c)) \<in> set (zip (zip xs ts) (zip xs fs))"
+  shows "a = b" and "(t, (b, c)) \<in> set (zip ts (zip xs fs))"
+  using assms by (auto simp: in_set_zip)
+
+(* The ghost flag that a parameter of the state's function carries is the one
+   of the signature. *)
+lemma param_flag_memD:
+  assumes "map snd params = map snd (FI_TmArgs info)"
+    and "((name, vr, pgh), gh) \<in> set (zip params (param_ghost_flags info))"
+  shows "pgh = gh"
+proof -
+  from assms(2) obtain n where n: "params ! n = (name, vr, pgh)"
+    and g: "param_ghost_flags info ! n = gh"
+    and lt: "n < length params" and lt2: "n < length (param_ghost_flags info)"
+    by (auto simp: in_set_zip)
+  from lt2 have lt3: "n < length (FI_TmArgs info)" by (simp add: param_ghost_flags_def)
+  from assms(1) have "map snd params ! n = map snd (FI_TmArgs info) ! n" by simp
+  with lt lt3 n have "snd (FI_TmArgs info ! n) = (vr, pgh)" by simp
+  with g lt3 show ?thesis by (simp add: param_ghost_flags_def case_prod_beta)
+qed
+
+
+(* ========================================================================== *)
 (* The induction *)
 (* ========================================================================== *)
 
@@ -620,6 +681,14 @@ next
       note D = state_erasedD[OF rel]
       note sub = IH_term[OF fn_eq funs_eq rel]
       note lvs = IH_lv[OF fn_eq funs_eq rel]
+      \<comment> \<open>A statement that is not ghost evaluates its own terms in executable
+          mode, in both states. \<close>
+      let ?fX = "full \<lparr> IS_Ghost := NotGhost \<rparr>"
+      let ?eX = "erased \<lparr> IS_Ghost := NotGhost \<rparr>"
+      have relX: "state_erased env emb ?fX ?eX" by (rule state_erased_set_ghost[OF rel])
+      have funsX: "IS_Functions ?fX = funs" using funs_eq by simp
+      note subX = IH_term[OF fn_eq funsX relX]
+      note lvsX = IH_lv[OF fn_eq funsX relX]
       have fx: "tyenv_fixed_eq env env'" by (rule core_statement_type_fixed_eq[OF T])
       have fns: "TE_Functions env' = TE_Functions env"
         using fx by (simp add: tyenv_fixed_eq_def)
@@ -642,6 +711,7 @@ next
           with E CoreStmt_VarDecl show ?thesis by simp
         next
           case NotGhost
+          note CoreStmt_VarDecl = CoreStmt_VarDecl[unfolded NotGhost]
           from E CoreStmt_VarDecl NotGhost
           have stmt'_eq: "stmt' = CoreStmt_VarDecl NotGhost varName vr ty (?er initTm)"
             by auto
@@ -656,9 +726,9 @@ next
             have iW: "notghost_typed env initTm" by (rule notghost_typedI[OF iT])
             note decl = notghost_decl_var_ghost[OF tlv tgl]
             from Var H CoreStmt_VarDecl obtain initVal where
-              iv: "interp_term d fuel full initTm = Inr initVal"
+              iv: "interp_term d fuel ?fX initTm = Inr initVal"
               by (auto split: sum.splits)
-            note ivE = sub[OF iW iv]
+            note ivE = subX[OF iW iv]
             \<comment> \<open>The copy check passed in the full run; it passes in the erased
                 run too, which has the same allocation oracle. \<close>
             from Var H CoreStmt_VarDecl NotGhost iv
@@ -716,9 +786,9 @@ next
                               \<and> fmlookup (IS_Refs erased) baseName = None)"
                 unfolding condEq by (rule True)
               from Ref H CoreStmt_VarDecl base True obtain val where
-                iv: "interp_term d fuel full initTm = Inr val"
+                iv: "interp_term d fuel ?fX initTm = Inr val"
                 by (auto split: sum.splits)
-              note ivE = sub[OF iW iv]
+              note ivE = subX[OF iW iv]
               from Ref H[symmetric] CoreStmt_VarDecl base True iv
               have cF: "is_continue res"
                 and stepF: "fresh_binding_step varName val full (result_state res)"
@@ -749,14 +819,14 @@ next
                                  \<and> fmlookup (IS_Refs erased) baseName = None))"
                 unfolding condEq by (rule False)
               from Ref H CoreStmt_VarDecl base False obtain addrPath where
-                lv0: "interp_writable_lvalue d fuel full initTm = Inr addrPath"
+                lv0: "interp_writable_lvalue d fuel ?fX initTm = Inr addrPath"
                 by (auto split: sum.splits)
               obtain addr path where ap: "addrPath = (addr, path)" by (cases addrPath)
               from lv0 ap
-              have wl: "interp_writable_lvalue d fuel full initTm = Inr (addr, path)"
+              have wl: "interp_writable_lvalue d fuel ?fX initTm = Inr (addr, path)"
                 by simp
-              from lvs[OF iW wl] obtain i where
-                wlE: "interp_writable_lvalue d fuel erased (?er initTm) = Inr (i, path)" and
+              from lvsX[OF iW wl] obtain i where
+                wlE: "interp_writable_lvalue d fuel ?eX (?er initTm) = Inr (i, path)" and
                 i_lt: "i < length emb" and ei: "emb ! i = addr"
                 by blast
               from Ref H[symmetric] CoreStmt_VarDecl base False wl
@@ -793,6 +863,7 @@ next
           with E CoreStmt_VarDeclCall show ?thesis by simp
         next
           case NotGhost
+          note CoreStmt_VarDeclCall = CoreStmt_VarDeclCall[unfolded NotGhost]
           \<comment> \<open>The erased call: the same call, without its ghost arguments. \<close>
           let ?argsE = "erase_ghost_args ?ft fnName (map ?er argTms)"
           from E CoreStmt_VarDeclCall NotGhost
@@ -814,22 +885,28 @@ next
             by blast
           \<comment> \<open>Run the call in both states, then apply the cast, allocate and bind. \<close>
           from H CoreStmt_VarDeclCall obtain newFull retVal where
-            call: "interp_function_call d fuel full fnName argTys argTms
+            call: "interp_function_call d fuel ?fX fnName argTys argTms
                      = Inr (newFull, retVal)"
             by (auto split: sum.splits prod.splits)
-          from IH_call[OF fn_eq funs_eq rel info ngI cargs call] obtain newErased where
-            callE: "interp_function_call d fuel erased fnName argTys ?argsE
+          from IH_call[OF fn_eq funsX relX info ngI cargs call] obtain newErased where
+            callE: "interp_function_call d fuel ?eX fnName argTys ?argsE
                       = Inr (newErased, retVal)" and
-            rel1: "state_erased env emb newFull newErased"
+            rel0: "state_erased env emb newFull newErased"
             by blast
+          \<comment> \<open>The states that come back are in the mode of the call; both
+              statements put the mode of their own state back. \<close>
+          define nf where "nf = newFull \<lparr> IS_Ghost := IS_Ghost full \<rparr>"
+          define ne where "ne = newErased \<lparr> IS_Ghost := IS_Ghost erased \<rparr>"
+          have rel1: "state_erased env emb nf ne"
+            unfolding nf_def ne_def by (rule state_erased_reset_ghost[OF rel rel0])
           from H CoreStmt_VarDeclCall call obtain initVal where
             cast: "apply_cast_opt castOpt retVal = Inr initVal"
             by (auto split: sum.splits)
           from H[symmetric] CoreStmt_VarDeclCall call cast
           have cF: "is_continue res"
-            and stepF: "fresh_binding_step varName initVal newFull (result_state res)"
+            and stepF: "fresh_binding_step varName initVal nf (result_state res)"
             and ncF: "varName |\<notin>| IS_ConstLocals (result_state res)"
-            by (simp_all add: fresh_binding_step_def static_parts_eq_def Let_def)
+            by (simp_all add: nf_def fresh_binding_step_def static_parts_eq_def Let_def)
           have "\<exists>resE. interp_statement d (Suc fuel) erased stmt' = Inr resE"
             using callE cast by (simp add: stmt'_eq Let_def)
           then obtain resE where
@@ -837,10 +914,10 @@ next
             by blast
           from HE[symmetric] stmt'_eq callE cast
           have cE: "is_continue resE"
-            and stepE: "fresh_binding_step varName initVal newErased (result_state resE)"
+            and stepE: "fresh_binding_step varName initVal ne (result_state resE)"
             and ncE: "varName |\<notin>| IS_ConstLocals (result_state resE)"
-            by (simp_all add: fresh_binding_step_def static_parts_eq_def Let_def)
-          have rel': "state_erased env' (emb @ [length (IS_Store newFull)])
+            by (simp_all add: ne_def fresh_binding_step_def static_parts_eq_def Let_def)
+          have rel': "state_erased env' (emb @ [length (IS_Store nf)])
                         (result_state res) (result_state resE)"
             by (rule state_erased_bind_both_fresh[OF rel1 decl(1) decl(2) fns stepF stepE])
                (simp_all add: ncF ncE)
@@ -865,6 +942,7 @@ next
           with E CoreStmt_Assign show ?thesis by simp
         next
           case NotGhost
+          note CoreStmt_Assign = CoreStmt_Assign[unfolded NotGhost]
           from E CoreStmt_Assign NotGhost
           have stmt'_eq: "stmt' = CoreStmt_Assign NotGhost ty (?er lhsLv) (?er rhsTm)" by auto
           from T CoreStmt_Assign NotGhost
@@ -874,10 +952,10 @@ next
           from T CoreStmt_Assign have env'_eq: "env' = env"
             by (auto split: if_splits)
           from H CoreStmt_Assign obtain addr path where
-            wl: "interp_writable_lvalue d fuel full lhsLv = Inr (addr, path)"
+            wl: "interp_writable_lvalue d fuel ?fX lhsLv = Inr (addr, path)"
             by (auto split: sum.splits)
           from H CoreStmt_Assign wl obtain rhsVal where
-            rv: "interp_term d fuel full rhsTm = Inr rhsVal"
+            rv: "interp_term d fuel ?fX rhsTm = Inr rhsVal"
             by (auto split: sum.splits)
           \<comment> \<open>The copy check passed in the full run; it passes in the erased
               run too (same allocation oracle). \<close>
@@ -889,11 +967,11 @@ next
           from H CoreStmt_Assign NotGhost wl rv cc obtain newVal where
             upd: "update_value_at_path (IS_Store full ! addr) path rhsVal = Inr newVal"
             by (auto simp: Let_def split: sum.splits)
-          from lvs[OF lW wl] obtain i where
-            wlE: "interp_writable_lvalue d fuel erased (?er lhsLv) = Inr (i, path)" and
+          from lvsX[OF lW wl] obtain i where
+            wlE: "interp_writable_lvalue d fuel ?eX (?er lhsLv) = Inr (i, path)" and
             i_lt: "i < length emb" and ei: "emb ! i = addr"
             by blast
-          note rvE = sub[OF rW rv]
+          note rvE = subX[OF rW rv]
           have cell: "IS_Store erased ! i = IS_Store full ! addr"
             by (rule erased_cell[OF rel i_lt ei])
           from H[symmetric] CoreStmt_Assign NotGhost wl rv cc upd
@@ -923,6 +1001,7 @@ next
           with E CoreStmt_AssignCall show ?thesis by simp
         next
           case NotGhost
+          note CoreStmt_AssignCall = CoreStmt_AssignCall[unfolded NotGhost]
           let ?argsE = "erase_ghost_args ?ft fnName (map ?er argTms)"
           from E CoreStmt_AssignCall NotGhost
           have stmt'_eq:
@@ -944,7 +1023,7 @@ next
           \<comment> \<open>Run the call, apply the cast, resolve the lhs in the post-call
               state, store. \<close>
           from H CoreStmt_AssignCall obtain newFull retVal where
-            call: "interp_function_call d fuel full fnName argTys argTms
+            call: "interp_function_call d fuel ?fX fnName argTys argTms
                      = Inr (newFull, retVal)"
             by (auto split: sum.splits prod.splits)
           from H CoreStmt_AssignCall call obtain rhsVal where
@@ -956,12 +1035,18 @@ next
           from H CoreStmt_AssignCall wl call cast obtain newVal where
             upd: "update_value_at_path (IS_Store newFull ! addr) path rhsVal = Inr newVal"
             by (auto simp: Let_def split: sum.splits)
-          from IH_call[OF fn_eq funs_eq rel info ngI cargs call] obtain newErased where
-            callE: "interp_function_call d fuel erased fnName argTys ?argsE
+          from IH_call[OF fn_eq funsX relX info ngI cargs call] obtain newErased where
+            callE: "interp_function_call d fuel ?eX fnName argTys ?argsE
                       = Inr (newErased, retVal)" and
             rel1: "state_erased env emb newFull newErased"
             by blast
-          \<comment> \<open>The lvalue simulation is applied to the related post-call states. \<close>
+          \<comment> \<open>The lvalue simulation is applied to the related post-call states,
+              which are in the mode of the call. The final states are those with
+              the mode of the statements' own states put back. \<close>
+          define nf where "nf = newFull \<lparr> IS_Ghost := IS_Ghost full \<rparr>"
+          define ne where "ne = newErased \<lparr> IS_Ghost := IS_Ghost erased \<rparr>"
+          have rel2: "state_erased env emb nf ne"
+            unfolding nf_def ne_def by (rule state_erased_reset_ghost[OF rel rel1])
           have funs_eq1: "IS_Functions newFull = funs"
             using static_parts_eqD(2)[OF interp_function_call_static[OF call]] funs_eq by simp
           from IH_lv[OF fn_eq funs_eq1 rel1 lW wl] obtain i where
@@ -972,8 +1057,8 @@ next
             by (rule erased_cell[OF rel1 i_lt ei])
           from H[symmetric] CoreStmt_AssignCall wl call cast upd
           have cF: "is_continue res"
-            and stepF: "store_write_step addr newVal newFull (result_state res)"
-            by (simp_all add: store_write_step_def static_parts_eq_def Let_def)
+            and stepF: "store_write_step addr newVal nf (result_state res)"
+            by (simp_all add: nf_def store_write_step_def static_parts_eq_def Let_def)
           have "\<exists>resE. interp_statement d (Suc fuel) erased stmt' = Inr resE"
             using wlE callE cast upd by (simp add: stmt'_eq cell Let_def)
           then obtain resE where
@@ -981,10 +1066,10 @@ next
             by blast
           from HE[symmetric] wlE callE cast upd
           have cE: "is_continue resE"
-            and stepE: "store_write_step i newVal newErased (result_state resE)"
-            by (simp_all add: stmt'_eq cell store_write_step_def static_parts_eq_def Let_def)
+            and stepE: "store_write_step i newVal ne (result_state resE)"
+            by (simp_all add: ne_def stmt'_eq cell store_write_step_def static_parts_eq_def Let_def)
           have rel': "state_erased env emb (result_state res) (result_state resE)"
-            by (rule state_erased_write_both[OF rel1 i_lt ei stepF stepE])
+            by (rule state_erased_write_both[OF rel2 i_lt ei stepF stepE])
           have re: "result_erased env' emb res resE"
             unfolding env'_eq by (rule result_erased_state_same[OF cF cE rel'])
           from HE re show ?thesis by blast
@@ -997,6 +1082,7 @@ next
           with E CoreStmt_Swap show ?thesis by simp
         next
           case NotGhost
+          note CoreStmt_Swap = CoreStmt_Swap[unfolded NotGhost]
           from E CoreStmt_Swap NotGhost
           have stmt'_eq: "stmt' = CoreStmt_Swap NotGhost (?er lhsTm) (?er rhsTm)" by auto
           from T CoreStmt_Swap NotGhost
@@ -1006,10 +1092,10 @@ next
           from T CoreStmt_Swap have env'_eq: "env' = env"
             by (auto split: if_splits option.splits)
           from H CoreStmt_Swap obtain lhsLv where
-            lhs: "interp_writable_lvalue d fuel full lhsTm = Inr lhsLv"
+            lhs: "interp_writable_lvalue d fuel ?fX lhsTm = Inr lhsLv"
             by (auto split: sum.splits)
           with H CoreStmt_Swap obtain rhsLv where
-            rhs: "interp_writable_lvalue d fuel full rhsTm = Inr rhsLv"
+            rhs: "interp_writable_lvalue d fuel ?fX rhsTm = Inr rhsLv"
             by (auto split: sum.splits)
           with H CoreStmt_Swap lhs obtain newFull where
             sw: "perform_swap full lhsLv rhsLv = Inr newFull"
@@ -1017,12 +1103,12 @@ next
             by (auto split: sum.splits)
           obtain addr1 path1 where l_eq: "lhsLv = (addr1, path1)" by (cases lhsLv)
           obtain addr2 path2 where r_eq: "rhsLv = (addr2, path2)" by (cases rhsLv)
-          from lvs[OF lW lhs[unfolded l_eq]] obtain i1 where
-            lhsE: "interp_writable_lvalue d fuel erased (?er lhsTm) = Inr (i1, path1)" and
+          from lvsX[OF lW lhs[unfolded l_eq]] obtain i1 where
+            lhsE: "interp_writable_lvalue d fuel ?eX (?er lhsTm) = Inr (i1, path1)" and
             i1_lt: "i1 < length emb" and e1: "emb ! i1 = addr1"
             by blast
-          from lvs[OF rW rhs[unfolded r_eq]] obtain i2 where
-            rhsE: "interp_writable_lvalue d fuel erased (?er rhsTm) = Inr (i2, path2)" and
+          from lvsX[OF rW rhs[unfolded r_eq]] obtain i2 where
+            rhsE: "interp_writable_lvalue d fuel ?eX (?er rhsTm) = Inr (i2, path2)" and
             i2_lt: "i2 < length emb" and e2: "emb ! i2 = addr2"
             by blast
           from perform_swap_erased[OF rel i1_lt e1 i2_lt e2 sw[unfolded l_eq r_eq]]
@@ -1068,6 +1154,7 @@ next
           with E CoreStmt_While show ?thesis by simp
         next
           case NotGhost
+          note CoreStmt_While = CoreStmt_While[unfolded NotGhost]
           from E CoreStmt_While NotGhost
           have stmt'_eq: "stmt' = CoreStmt_While NotGhost (?er condTm) [] None
                                     (erase_ghost_statement_list ?ft body)"
@@ -1085,18 +1172,18 @@ next
               held. The erased loop has no invariants, so its check passes
               trivially (given some fuel, which the full run shows there is). \<close>
           from H CoreStmt_While obtain invarVals where
-            iv: "interp_term_list d fuel full invars = Inr invarVals" and
+            iv: "interp_term_list d fuel (full \<lparr> IS_Ghost := Ghost \<rparr>) invars = Inr invarVals" and
             ie: "conditions_error invarVals = None"
             by (auto split: sum.splits option.splits)
-          from iv have ivE: "interp_term_list d fuel erased [] = Inr []"
+          from iv have ivE: "interp_term_list d fuel (erased \<lparr> IS_Ghost := Ghost \<rparr>) [] = Inr []"
             by (cases fuel) simp_all
           have ieE: "conditions_error [] = None"
             by (simp add: conditions_error_def)
           note [simp] = iv ie ivE ieE
           from H CoreStmt_While obtain condVal where
-            cv: "interp_term d fuel full condTm = Inr condVal"
+            cv: "interp_term d fuel ?fX condTm = Inr condVal"
             by (auto split: sum.splits)
-          note cvE = sub[OF cW cv]
+          note cvE = subX[OF cW cv]
           show ?thesis
           proof (cases condVal)
             case (CV_Bool b)
@@ -1114,7 +1201,8 @@ next
               \<comment> \<open>The full run evaluated its decreases-term (if any) before the
                   body. The erased loop has none, so its check passes trivially. \<close>
               with CoreStmt_While H cv CV_Bool obtain decrVal where
-                dv: "eval_decreases (interp_term d fuel full) decr = Inr decrVal"
+                dv: "eval_decreases (interp_term d fuel (full \<lparr> IS_Ghost := Ghost \<rparr>)) decr
+                       = Inr decrVal"
                 by (auto split: sum.splits)
               note [simp] = dv
               from CoreStmt_While H cv CV_Bool True obtain bodyRes where
@@ -1169,13 +1257,14 @@ next
                     body, and the check passed. \<close>
                 from CoreStmt_While H cv CV_Bool True body Continue
                 obtain decrVal' where
-                  dv': "eval_decreases (interp_term d fuel (restore_scope full state1)) decr
-                          = Inr decrVal'" and
+                  dv': "eval_decreases
+                          (interp_term d fuel ((restore_scope full state1) \<lparr> IS_Ghost := Ghost \<rparr>))
+                          decr = Inr decrVal'" and
                   de: "decreases_error decrVal decrVal' = None"
                   by (auto split: sum.splits option.splits)
                 from CoreStmt_While H cv CV_Bool True body Continue dv' de
                 have rec_eq: "interp_statement d fuel (restore_scope full state1)
-                                (CoreStmt_While g condTm invars decr body) = Inr res"
+                                (CoreStmt_While NotGhost condTm invars decr body) = Inr res"
                   by simp
                 note T' = T[unfolded CoreStmt_While]
                 note E' = E[unfolded CoreStmt_While]
@@ -1201,6 +1290,7 @@ next
           with E CoreStmt_Match show ?thesis by simp
         next
           case NotGhost
+          note CoreStmt_Match = CoreStmt_Match[unfolded NotGhost]
           from E CoreStmt_Match NotGhost
           have stmt'_eq:
             "stmt' = CoreStmt_Match NotGhost (?er scrutTm)
@@ -1212,7 +1302,7 @@ next
           have sW: "notghost_typed env scrutTm"
             by (auto simp: notghost_typed_def split: if_splits option.splits)
           from H CoreStmt_Match obtain scrutVal where
-            sv: "interp_term d fuel full scrutTm = Inr scrutVal"
+            sv: "interp_term d fuel ?fX scrutTm = Inr scrutVal"
             by (auto split: sum.splits)
           from H CoreStmt_Match sv obtain armStmts where
             arm: "find_matching_arm scrutVal arms = Inr armStmts"
@@ -1229,7 +1319,7 @@ next
             using H[unfolded CoreStmt_Match interp_Match_scope_result[OF sv arm body]]
             by simp
           \<comment> \<open>The erased Match chooses the erasure of the same arm. \<close>
-          note svE = sub[OF sW sv]
+          note svE = subX[OF sW sv]
           note armE = find_matching_arm_map
                         [where f = "erase_ghost_statement_list (TE_Functions genv)", OF arm]
           from IH_stmts[OF fnB funs_eq fgB relB armT body] obtain bodyResE where
@@ -1420,26 +1510,49 @@ next
           bound, and the body's result. The contract checks of the full call passed
           and did not change the state, so the body's result is the call's result.
           (The erased function has no contract, see lookE below.) \<close>
-      let ?refsF = "map (interp_writable_lvalue d fuel full) argTms"
-      let ?valsF = "map (interp_term d fuel full) argTms"
       from interp_function_call_InrE[OF H0] obtain f preF where
         f_lookup: "fmlookup (IS_Functions full) fnName = Some f" and
         len_eq: "length argTms = length (IF_Args f)" and
         tyLen_eq: "length argTys = length (IF_TyArgs f)" and
-        foldF: "fold process_one_arg (zip (IF_Args f) (zip ?refsF ?valsF))
-                  (Inr (full \<lparr> IS_Locals := fmempty, IS_Refs := fmempty,
-                               IS_ConstLocals := {||},
-                               IS_TyArgs := fmap_of_list (zip (IF_TyArgs f)
-                                              (map (apply_subst (IS_TyArgs full)) argTys)) \<rparr>))
-                = Inr preF" and
-        bodyF: "call_body (interp_statement_list d fuel) full f ?refsF ?valsF preF
-                  = Inr (newFull, retVal)" .
+        foldF0: "fold process_one_arg
+                   (zip (IF_Args f)
+                        (zip (map_args (interp_writable_lvalue d fuel) full (IF_Args f) argTms)
+                             (map_args (interp_term d fuel) full (IF_Args f) argTms)))
+                   (Inr (full \<lparr> IS_Locals := fmempty, IS_Refs := fmempty,
+                                IS_ConstLocals := {||},
+                                IS_TyArgs := fmap_of_list (zip (IF_TyArgs f)
+                                               (map (apply_subst (IS_TyArgs full)) argTys)),
+                                IS_Ghost := IF_Ghost f \<rparr>))
+                 = Inr preF" and
+        bodyF0: "call_body (interp_statement_list d fuel) full f
+                   (map_args (interp_writable_lvalue d fuel) full (IF_Args f) argTms)
+                   (map_args (interp_term d fuel) full (IF_Args f) argTms) preF
+                 = Inr (newFull, retVal)" and
+        ghF: "IS_Ghost full = NotGhost \<Longrightarrow> IF_Ghost f = NotGhost"
+        by blast
+      \<comment> \<open>Each argument is evaluated in the mode of its parameter. So the
+          arguments are taken as pairs (parameter, term), and the evaluators as
+          functions of such a pair. \<close>
+      let ?pts = "zip (IF_Args f) argTms"
+      let ?lvF = "\<lambda>(arg, tm). interp_writable_lvalue d fuel (arg_state full arg) tm"
+      let ?tmF = "\<lambda>(arg, tm). interp_term d fuel (arg_state full arg) tm"
+      let ?refsF = "map ?lvF ?pts"
+      let ?valsF = "map ?tmF ?pts"
+      have refsF_eq: "map_args (interp_writable_lvalue d fuel) full (IF_Args f) argTms = ?refsF"
+        by (simp add: map_args_def)
+      have valsF_eq: "map_args (interp_term d fuel) full (IF_Args f) argTms = ?valsF"
+        by (simp add: map_args_def)
+      note foldF = foldF0[unfolded refsF_eq valsF_eq]
+      note bodyF = bodyF0[unfolded refsF_eq valsF_eq]
+      have lenPts: "length ?pts = length (IF_Args f)" using len_eq by simp
       let ?tyArgs = "fmap_of_list (zip (IF_TyArgs f)
                                        (map (apply_subst (IS_TyArgs full)) argTys))"
       let ?clearedF = "full \<lparr> IS_Locals := fmempty, IS_Refs := fmempty,
-                              IS_ConstLocals := {||}, IS_TyArgs := ?tyArgs \<rparr>"
+                              IS_ConstLocals := {||}, IS_TyArgs := ?tyArgs,
+                              IS_Ghost := IF_Ghost f \<rparr>"
       let ?clearedE = "erased \<lparr> IS_Locals := fmempty, IS_Refs := fmempty,
-                                IS_ConstLocals := {||}, IS_TyArgs := ?tyArgs \<rparr>"
+                                IS_ConstLocals := {||}, IS_TyArgs := ?tyArgs,
+                                IS_Ghost := IF_Ghost f \<rparr>"
 
       \<comment> \<open>The function in the state, against its signature: the same Var/Ref
           flags, and distinct parameter names. The ghost flags of the
@@ -1447,10 +1560,12 @@ next
       have infoG: "fmlookup (TE_Functions genv) fnName = Some info"
         using info fn_eq by simp
       have f_lookup': "fmlookup funs fnName = Some f" using f_lookup funs_eq by simp
-      note flags = fun_param_flags_agreeD[OF agree infoG f_lookup']
+      note flags2 = fun_param_flags_agreeD[OF agree infoG f_lookup']
+      have flags: "map (fst \<circ> snd) (IF_Args f) = map (fst \<circ> snd) (FI_TmArgs info)"
+        using arg_cong[OF flags2, of "map fst"] by simp
       have distF: "distinct (map fst (IF_Args f))"
         using dist infoG f_lookup' unfolding fun_param_names_distinct_def by blast
-      from flags have lenF: "length (IF_Args f) = length (FI_TmArgs info)"
+      from flags2 have lenF: "length (IF_Args f) = length (FI_TmArgs info)"
         by (rule map_eq_imp_length_eq)
       let ?flagsF = "param_ghost_flags info"
       have lenFlags: "length (IF_Args f) = length ?flagsF"
@@ -1461,8 +1576,8 @@ next
           those parameters. \<close>
       let ?paramsE = "drop_ghost ?flagsF (IF_Args f)"
       let ?argsE = "erase_ghost_args ?ft fnName (map ?er argTms)"
-      let ?lvE = "\<lambda>tm. interp_writable_lvalue d fuel erased (?er tm)"
-      let ?tmE = "\<lambda>tm. interp_term d fuel erased (?er tm)"
+      let ?lvE = "\<lambda>(arg, tm). interp_writable_lvalue d fuel (arg_state erased arg) (?er tm)"
+      let ?tmE = "\<lambda>(arg, tm). interp_term d fuel (arg_state erased arg) (?er tm)"
       have paramsE_eq': "erase_ghost_args ?ft fnName (IF_Args f) = ?paramsE"
         by (simp add: erase_ghost_args_def infoG)
       have argsE_eq: "?argsE = map ?er (drop_ghost ?flagsF argTms)"
@@ -1472,12 +1587,15 @@ next
         using length_drop_ghost_params[OF len_eq[unfolded lenF]]
               length_drop_ghost_params[OF lenF]
         by simp
-      have refsE_eq: "map (interp_writable_lvalue d fuel erased) ?argsE
-                        = map ?lvE (drop_ghost ?flagsF argTms)"
-        unfolding argsE_eq by (simp add: comp_def)
-      have valsE_eq: "map (interp_term d fuel erased) ?argsE
-                        = map ?tmE (drop_ghost ?flagsF argTms)"
-        unfolding argsE_eq by (simp add: comp_def)
+      have ptsE_eq: "zip ?paramsE ?argsE
+                       = map (\<lambda>(arg, tm). (arg, ?er tm)) (drop_ghost ?flagsF ?pts)"
+        unfolding argsE_eq by (simp add: zip_map2 zip_drop_ghost)
+      have refsE_eq: "map_args (interp_writable_lvalue d fuel) erased ?paramsE ?argsE
+                        = map ?lvE (drop_ghost ?flagsF ?pts)"
+        unfolding map_args_def ptsE_eq by (simp add: comp_def case_prod_beta)
+      have valsE_eq: "map_args (interp_term d fuel) erased ?paramsE ?argsE
+                        = map ?tmE (drop_ghost ?flagsF ?pts)"
+        unfolding map_args_def ptsE_eq by (simp add: comp_def case_prod_beta)
 
       \<comment> \<open>The erased state holds the erased function. Its contract is empty, so
           the erased call has no contract checks (checked_call_no_contract). \<close>
@@ -1490,11 +1608,11 @@ next
       have fnB: "TE_Functions ?envB = TE_Functions env" by (simp add: body_env_for_facts fn_eq)
       have fgB: "TE_FunctionGhost ?envB = NotGhost"
         by (rule body_env_for_notghost[OF ngI])
-      have pg: "\<forall>name vr gh. ((name, vr), gh) \<in> set (zip (IF_Args f) ?flagsF) \<longrightarrow>
+      have pg: "\<forall>name vr pgh gh. ((name, vr, pgh), gh) \<in> set (zip (IF_Args f) ?flagsF) \<longrightarrow>
                   (tyenv_var_ghost ?envB name \<longleftrightarrow> gh = Ghost)"
       proof (intro allI impI)
-        fix name vr gh assume mem: "((name, vr), gh) \<in> set (zip (IF_Args f) ?flagsF)"
-        from mem obtain n where "IF_Args f ! n = (name, vr)" and "?flagsF ! n = gh"
+        fix name vr pgh gh assume mem: "((name, vr, pgh), gh) \<in> set (zip (IF_Args f) ?flagsF)"
+        from mem obtain n where "IF_Args f ! n = (name, vr, pgh)" and "?flagsF ! n = gh"
           and "n < length (IF_Args f)" and "n < length ?flagsF"
           by (auto simp: in_set_zip)
         then have mem': "(name, gh) \<in> set (zip (map fst (IF_Args f)) ?flagsF)"
@@ -1505,51 +1623,75 @@ next
           by (rule body_env_for_param_ghost[OF ngI distF lenN mem'])
       qed
 
-      \<comment> \<open>The argument of a parameter that is not ghost evaluates
-          correspondingly in the two states. \<close>
-      have vals: "\<forall>tm name vr. (tm, ((name, vr), NotGhost))
-                                 \<in> set (zip argTms (zip (IF_Args f) ?flagsF)) \<longrightarrow>
-                    (\<forall>x. interp_term d fuel full tm = Inr x
-                         \<longrightarrow> interp_term d fuel erased (?er tm) = Inr x)"
-      proof (intro allI impI)
-        fix tm name vr x
-        assume mem: "(tm, ((name, vr), NotGhost)) \<in> set (zip argTms (zip (IF_Args f) ?flagsF))"
-          and s: "interp_term d fuel full tm = Inr x"
+      \<comment> \<open>The argument of a parameter that is not ghost is evaluated in the
+          mode of the call, in both states, and is typed in executable mode. \<close>
+      have ng_arg: "\<exists>tm. pt = ((name, vr, NotGhost), tm) \<and> pgh = NotGhost
+                         \<and> notghost_typed env tm"
+        if mem: "(pt, ((name, vr, pgh), NotGhost)) \<in> set (zip ?pts (zip (IF_Args f) ?flagsF))"
+        for pt name vr pgh
+      proof -
+        obtain arg tm where pt: "pt = (arg, tm)" by (cases pt)
+        note z = zip_zip_self_memD[OF mem[unfolded pt]]
+        have pgh: "pgh = NotGhost"
+          by (rule param_flag_memD[OF flags2 set_zip_rightD[OF z(2)]])
         have Wtm: "notghost_typed env tm"
-          by (rule call_args_notghostD(1)[OF cargs flags mem refl])
-        show "interp_term d fuel erased (?er tm) = Inr x"
-          by (rule IH_term[OF fn_eq funs_eq rel Wtm s])
+          by (rule call_args_notghostD(1)[OF cargs flags z(2) refl])
+        from pt z(1) pgh Wtm show ?thesis by simp
       qed
-      have refs: "\<forall>tm name vr. (tm, ((name, vr), NotGhost))
-                                 \<in> set (zip argTms (zip (IF_Args f) ?flagsF)) \<longrightarrow>
-                    (\<forall>addr path. interp_writable_lvalue d fuel full tm = Inr (addr, path)
-                       \<longrightarrow> (\<exists>i. interp_writable_lvalue d fuel erased (?er tm) = Inr (i, path)
-                                \<and> i < length emb \<and> emb ! i = addr))"
+      have vals: "\<forall>pt name vr pgh. (pt, ((name, vr, pgh), NotGhost))
+                                 \<in> set (zip ?pts (zip (IF_Args f) ?flagsF)) \<longrightarrow>
+                    (\<forall>x. ?tmF pt = Inr x \<longrightarrow> ?tmE pt = Inr x)"
       proof (intro allI impI)
-        fix tm name vr addr path
-        assume mem: "(tm, ((name, vr), NotGhost)) \<in> set (zip argTms (zip (IF_Args f) ?flagsF))"
-          and s: "interp_writable_lvalue d fuel full tm = Inr (addr, path)"
-        have Wtm: "notghost_typed env tm"
-          by (rule call_args_notghostD(1)[OF cargs flags mem refl])
-        show "\<exists>i. interp_writable_lvalue d fuel erased (?er tm) = Inr (i, path)
+        fix pt name vr pgh x
+        assume mem: "(pt, ((name, vr, pgh), NotGhost)) \<in> set (zip ?pts (zip (IF_Args f) ?flagsF))"
+          and s0: "?tmF pt = Inr x"
+        from ng_arg[OF mem] obtain tm where pt: "pt = ((name, vr, NotGhost), tm)"
+          and Wtm: "notghost_typed env tm" by blast
+        from s0 pt have s: "interp_term d fuel full tm = Inr x" by simp
+        have "interp_term d fuel erased (?er tm) = Inr x"
+          by (rule IH_term[OF fn_eq funs_eq rel Wtm s])
+        then show "?tmE pt = Inr x" by (simp add: pt)
+      qed
+      have refs: "\<forall>pt name vr pgh. (pt, ((name, vr, pgh), NotGhost))
+                                 \<in> set (zip ?pts (zip (IF_Args f) ?flagsF)) \<longrightarrow>
+                    (\<forall>addr path. ?lvF pt = Inr (addr, path)
+                       \<longrightarrow> (\<exists>i. ?lvE pt = Inr (i, path) \<and> i < length emb \<and> emb ! i = addr))"
+      proof (intro allI impI)
+        fix pt name vr pgh addr path
+        assume mem: "(pt, ((name, vr, pgh), NotGhost)) \<in> set (zip ?pts (zip (IF_Args f) ?flagsF))"
+          and s0: "?lvF pt = Inr (addr, path)"
+        from ng_arg[OF mem] obtain tm where pt: "pt = ((name, vr, NotGhost), tm)"
+          and Wtm: "notghost_typed env tm" by blast
+        from s0 pt have s: "interp_writable_lvalue d fuel full tm = Inr (addr, path)" by simp
+        have "\<exists>i. interp_writable_lvalue d fuel erased (?er tm) = Inr (i, path)
                   \<and> i < length emb \<and> emb ! i = addr"
           by (rule IH_lv[OF fn_eq funs_eq rel Wtm s])
+        then show "\<exists>i. ?lvE pt = Inr (i, path) \<and> i < length emb \<and> emb ! i = addr"
+          by (simp add: pt)
       qed
       \<comment> \<open>An lvalue passed to a ghost Ref parameter is a ghost cell of the
-          caller. \<close>
+          caller. (It is resolved in ghost mode, which makes no difference to
+          where the caller's ghost variables live.) \<close>
+      have glsG: "ghost_locals_separate env emb (full \<lparr> IS_Ghost := gm \<rparr>)" for gm
+        using D(8) by (simp add: ghost_locals_separate_def)
       have ghost_refs:
-        "\<forall>tm name. (tm, ((name, Ref), Ghost)) \<in> set (zip argTms (zip (IF_Args f) ?flagsF)) \<longrightarrow>
-           (\<forall>addr path. interp_writable_lvalue d fuel full tm = Inr (addr, path)
+        "\<forall>pt name pgh. (pt, ((name, Ref, pgh), Ghost)) \<in> set (zip ?pts (zip (IF_Args f) ?flagsF)) \<longrightarrow>
+           (\<forall>addr path. ?lvF pt = Inr (addr, path)
               \<longrightarrow> addr < length (IS_Store full) \<and> addr \<notin> set emb)"
       proof (intro allI impI)
-        fix tm name addr path
-        assume mem: "(tm, ((name, Ref), Ghost)) \<in> set (zip argTms (zip (IF_Args f) ?flagsF))"
-          and s: "interp_writable_lvalue d fuel full tm = Inr (addr, path)"
+        fix pt name pgh addr path
+        assume mem: "(pt, ((name, Ref, pgh), Ghost)) \<in> set (zip ?pts (zip (IF_Args f) ?flagsF))"
+          and s0: "?lvF pt = Inr (addr, path)"
+        obtain arg tm where pt: "pt = (arg, tm)" by (cases pt)
+        note z = zip_zip_self_memD[OF mem[unfolded pt]]
         have glv: "ghost_lvalue_ok env Ghost tm"
-          by (rule call_args_notghostD(2)[OF cargs flags mem refl refl])
-        show "addr < length (IS_Store full) \<and> addr \<notin> set emb"
-          by (rule conjI[OF ghost_lvalue_addr_separate(1)[OF D(8) glv s]
-                            ghost_lvalue_addr_separate(2)[OF D(8) glv s]])
+          by (rule call_args_notghostD(2)[OF cargs flags z(2) refl refl])
+        from s0 pt
+        have s: "interp_writable_lvalue d fuel (arg_state full arg) tm = Inr (addr, path)"
+          by simp
+        from ghost_lvalue_addr_separate(1)[OF glsG glv s]
+             ghost_lvalue_addr_separate(2)[OF glsG glv s]
+        show "addr < length (IS_Store full) \<and> addr \<notin> set emb" by simp
       qed
 
       \<comment> \<open>So the arguments are bound, all of them in the full state and those
@@ -1561,24 +1703,20 @@ next
       have lo: "length (IS_Store full) \<le> length (IS_Store ?clearedF)" by simp
       have ex: "\<forall>a \<in> set ([] :: nat list). length (IS_Store full) \<le> a" by simp
       from fold_process_one_arg_erased
-             [where lvF = "interp_writable_lvalue d fuel full"
-                and tmF = "interp_term d fuel full"
-                and lvE = "\<lambda>tm. interp_writable_lvalue d fuel erased
-                                  (erase_ghost_term (TE_Functions genv) tm)"
-                and tmE = "\<lambda>tm. interp_term d fuel erased
-                                  (erase_ghost_term (TE_Functions genv) tm)",
+             [where lvF = ?lvF and tmF = ?tmF and lvE = ?lvE and tmE = ?tmE and tms = ?pts,
               OF lenFlags vals refs ghost_refs pg relC' lo ex foldF]
       obtain preE extraA where
         foldE0: "fold process_one_arg
-                   (zip ?paramsE (zip (map ?lvE (drop_ghost ?flagsF argTms))
-                                      (map ?tmE (drop_ghost ?flagsF argTms))))
+                   (zip ?paramsE (zip (map ?lvE (drop_ghost ?flagsF ?pts))
+                                      (map ?tmE (drop_ghost ?flagsF ?pts))))
                    (Inr ?clearedE)
                  = Inr preE" and
         relP: "state_erased ?envB (emb @ extraA) preF preE"
         by blast
       have foldE: "fold process_one_arg
-                     (zip ?paramsE (zip (map (interp_writable_lvalue d fuel erased) ?argsE)
-                                        (map (interp_term d fuel erased) ?argsE)))
+                     (zip ?paramsE
+                        (zip (map_args (interp_writable_lvalue d fuel) erased ?paramsE ?argsE)
+                             (map_args (interp_term d fuel) erased ?paramsE ?argsE)))
                      (Inr ?clearedE)
                    = Inr preE"
         by (simp only: refsE_eq valsE_eq foldE0)
@@ -1588,13 +1726,14 @@ next
           argument denotes, in the erased state, the embedded image of the
           lvalue it denotes in the full state, or no lvalue in both
           (interp_lvalue_rel). \<close>
-      have aliasF: "call_args_alias (IF_Args f) (map (interp_lvalue d fuel False full) argTms) = None"
+      have aliasF: "call_args_alias (IF_Args f)
+                      (map_args (interp_lvalue d fuel False) full (IF_Args f) argTms) = None"
         by (rule interp_function_call_Inr_no_alias[OF H0 f_lookup])
-      have allInr0: "\<exists>v. interp_term d fuel full tm = Inr v" if "tm \<in> set argTms" for tm
+      have allInr0: "\<exists>v. ?tmF pt = Inr v" if "pt \<in> set ?pts" for pt
       proof -
         have l1: "length (IF_Args f) = length ?refsF" using len_eq by simp
         have l2: "length ?refsF = length ?valsF" by simp
-        have "interp_term d fuel full tm \<in> set ?valsF" using that by simp
+        have "?tmF pt \<in> set ?valsF" using that by simp
         from fold_process_one_arg_all_ok[OF foldF l1 l2 this] show ?thesis by blast
       qed
       let ?sel = "notghost_positions ?flagsF"
@@ -1603,6 +1742,36 @@ next
         by (rule drop_ghost_positions[OF lenFlags])
       have argsE_sel: "?argsE = map (\<lambda>i. ?er (argTms ! i)) ?sel"
         unfolding argsE_eq drop_ghost_positions[OF lenTF] by simp
+      \<comment> \<open>The parameter at a position that erasure keeps is not ghost, so its
+          argument is evaluated in the mode of the call. \<close>
+      have selNG: "snd (snd (IF_Args f ! (?sel ! k))) = NotGhost" if k: "k < length ?sel" for k
+      proof -
+        let ?i = "?sel ! k"
+        have i_lt: "?i < length ?flagsF" by (rule notghost_positions_lt[OF k])
+        have ng: "?flagsF ! ?i = NotGhost" by (rule notghost_positions_NotGhost[OF k])
+        obtain name vr pgh where a: "IF_Args f ! ?i = (name, vr, pgh)" by (cases "IF_Args f ! ?i")
+        have mem: "((name, vr, pgh), NotGhost) \<in> set (zip (IF_Args f) ?flagsF)"
+          using i_lt lenFlags ng a by (auto simp: in_set_zip intro!: exI[where x = ?i])
+        from param_flag_memD[OF flags2 mem] a show ?thesis by simp
+      qed
+      have nthF: "map_args ev full (IF_Args f) argTms ! (?sel ! k) = ev full (argTms ! (?sel ! k))"
+        if k: "k < length ?sel" for k and ev :: "'w InterpState \<Rightarrow> CoreTerm \<Rightarrow> 'r"
+      proof -
+        have lt: "?sel ! k < length argTms" using notghost_positions_lt[OF k] lenTF by simp
+        show ?thesis using lt len_eq selNG[OF k]
+          by (simp add: param_mode_def IS_Ghost_update_same)
+      qed
+      have nthE: "map_args ev erased ?paramsE ?argsE ! k = ev erased (?er (argTms ! (?sel ! k)))"
+        if k: "k < length ?sel" for k and ev :: "'w InterpState \<Rightarrow> CoreTerm \<Rightarrow> 'r"
+      proof -
+        have l1: "k < length ?paramsE" unfolding paramsE_sel using k by simp
+        have l2: "k < length ?argsE" unfolding argsE_sel using k by simp
+        have p: "?paramsE ! k = IF_Args f ! (?sel ! k)" unfolding paramsE_sel using k by simp
+        have a: "?argsE ! k = ?er (argTms ! (?sel ! k))" unfolding argsE_sel using k by simp
+        show ?thesis
+          unfolding nth_map_args[OF l1 l2] p a using selNG[OF k]
+          by (simp add: param_mode_def IS_Ghost_update_same)
+      qed
       have lvrel: "(interp_lvalue d fuel False full (argTms ! (?sel ! k)) = Inl TypeError
                     \<and> interp_lvalue d fuel False erased (?er (argTms ! (?sel ! k))) = Inl TypeError)
                    \<or> (\<exists>a p i. interp_lvalue d fuel False full (argTms ! (?sel ! k)) = Inr (a, p)
@@ -1614,13 +1783,17 @@ next
         have i_lt: "?i < length ?flagsF" by (rule notghost_positions_lt[OF k])
         have ng: "?flagsF ! ?i = NotGhost" by (rule notghost_positions_NotGhost[OF k])
         have i_lt': "?i < length argTms" using i_lt lenTF by simp
-        have mem: "(argTms ! ?i, ((fst (IF_Args f ! ?i), snd (IF_Args f ! ?i)), NotGhost))
+        have mem: "(argTms ! ?i, ((fst (IF_Args f ! ?i), fst (snd (IF_Args f ! ?i)),
+                                   snd (snd (IF_Args f ! ?i))), NotGhost))
                      \<in> set (zip argTms (zip (IF_Args f) ?flagsF))"
           using i_lt' len_eq lenFlags ng by (auto simp: in_set_zip intro!: exI[where x = ?i])
         have W: "notghost_typed env (argTms ! ?i)"
           by (rule call_args_notghostD(1)[OF cargs flags mem refl])
-        from allInr0[OF nth_mem[OF i_lt']] obtain x where
-          evF: "interp_term d fuel full (argTms ! ?i) = Inr x" by blast
+        have ptmem: "(IF_Args f ! ?i, argTms ! ?i) \<in> set ?pts"
+          using i_lt' len_eq by (auto simp: in_set_zip intro!: exI[where x = ?i])
+        from allInr0[OF ptmem] selNG[OF k] obtain x where
+          evF: "interp_term d fuel full (argTms ! ?i) = Inr x"
+          by (auto simp: param_mode_def IS_Ghost_update_same)
         have evE: "interp_term d fuel erased (?er (argTms ! ?i)) = Inr x"
           by (rule IH_term[OF fn_eq funs_eq rel W evF])
         have Qsub3: "\<And>t idx. notghost_typed env (CoreTm_ArrayProj t idx)
@@ -1645,35 +1818,34 @@ next
                        locs refs' erase_ghost_term.simps(4,13,15,14,5) lvalue_shape_erase
                        idx evF le_refl le_refl evE le_refl le_refl W])
       qed
-      have aliasE: "call_args_alias ?paramsE (map (interp_lvalue d fuel False erased) ?argsE) = None"
+      let ?lvsF0 = "map_args (interp_lvalue d fuel False) full (IF_Args f) argTms"
+      let ?lvsE0 = "map_args (interp_lvalue d fuel False) erased ?paramsE ?argsE"
+      have aliasE: "call_args_alias ?paramsE ?lvsE0 = None"
       proof (rule call_args_alias_None_rel[where sel = ?sel, OF aliasF _ notghost_positions_distinct])
         fix k assume "k < length ?sel"
         thus "?sel ! k < length (IF_Args f)" using notghost_positions_lt[of k ?flagsF] lenFlags by simp
       next
         show "length ?paramsE = length ?sel" unfolding paramsE_sel by simp
       next
-        show "length (map (interp_lvalue d fuel False erased) ?argsE) = length ?sel" unfolding argsE_sel by simp
+        show "length ?lvsE0 = length ?sel" using lenE unfolding paramsE_sel by simp
       next
         fix k assume "k < length ?sel"
-        thus "snd (?paramsE ! k) = snd (IF_Args f ! (?sel ! k))" unfolding paramsE_sel by simp
+        thus "fst (snd (?paramsE ! k)) = fst (snd (IF_Args f ! (?sel ! k)))"
+          unfolding paramsE_sel by simp
       next
         fix k assume k: "k < length ?sel"
         from lvrel[OF k]
-        show "map (interp_lvalue d fuel False erased) ?argsE ! k \<noteq> Inl InsufficientFuel"
-          unfolding argsE_sel using k by auto
+        show "?lvsE0 ! k \<noteq> Inl InsufficientFuel"
+          unfolding nthE[OF k] by auto
       next
         fix k k' assume k: "k < length ?sel" and k': "k' < length ?sel"
-          and ra: "res_alias (map (interp_lvalue d fuel False erased) ?argsE ! k)
-                             (map (interp_lvalue d fuel False erased) ?argsE ! k')"
+          and ra: "res_alias (?lvsE0 ! k) (?lvsE0 ! k')"
         have ra': "res_alias (interp_lvalue d fuel False erased (?er (argTms ! (?sel ! k))))
                              (interp_lvalue d fuel False erased (?er (argTms ! (?sel ! k'))))"
-          using ra k k' by (simp add: argsE_sel)
-        have lt: "?sel ! k < length argTms" "?sel ! k' < length argTms"
-          using notghost_positions_lt[OF k] notghost_positions_lt[OF k'] lenTF by simp_all
+          using ra unfolding nthE[OF k] nthE[OF k'] .
         from lvrel[OF k] lvrel[OF k'] ra'
-        show "res_alias (map (interp_lvalue d fuel False full) argTms ! (?sel ! k))
-                        (map (interp_lvalue d fuel False full) argTms ! (?sel ! k'))"
-          using lt by (auto simp: res_alias_iff lvalues_alias_def)
+        show "res_alias (?lvsF0 ! (?sel ! k)) (?lvsF0 ! (?sel ! k'))"
+          unfolding nthF[OF k] nthF[OF k'] by (auto simp: res_alias_iff lvalues_alias_def)
       qed
 
       show "\<exists>newErased. interp_function_call d (Suc fuel) erased fnName argTys ?argsE
@@ -1753,19 +1925,19 @@ next
             unfolding newFull_eq by (rule relN)
           have callE: "interp_function_call d (Suc fuel) erased fnName argTys ?argsE
                          = Inr (restore_scope erased postE, retVal)"
-            using lookE lenE tyLen_eq foldE aliasE Inl bodyE bE_eq ret_eq ccE
-            by (simp add: checked_call_no_contract call_body_def Let_def paramsE_eq' D(6))
+            using lookE lenE tyLen_eq foldE aliasE Inl bodyE bE_eq ret_eq ccE ghF
+            by (simp add: checked_call_no_contract call_body_def Let_def paramsE_eq' D(6) D(11))
           from callE relN' show ?thesis by blast
         qed
       next
         case (Inr externFun)
         \<comment> \<open>Extern function. \<close>
-        let ?refsXF = "rights (map (\<lambda>((_, vr), refResult).
+        let ?refsXF = "rights (map (\<lambda>((_, vr, _), refResult).
                                         if vr = Ref then refResult else Inl TypeError)
                                    (zip (IF_Args f) ?refsF))"
-        let ?refsXE = "rights (map (\<lambda>((_, vr), refResult).
+        let ?refsXE = "rights (map (\<lambda>((_, vr, _), refResult).
                                         if vr = Ref then refResult else Inl TypeError)
-                                   (zip ?paramsE (map ?lvE (drop_ghost ?flagsF argTms))))"
+                                   (zip ?paramsE (map ?lvE (drop_ghost ?flagsF ?pts))))"
         obtain newWorld refUpdates externRetVal where
           ext_eq: "externFun (IS_World full) (rights ?valsF)
                      = (newWorld, refUpdates, externRetVal)"
@@ -1783,14 +1955,9 @@ next
         \<comment> \<open>Every argument has a value in the full state. \<close>
         have lenA: "length (IF_Args f) = length ?refsF" using len_eq by simp
         have lenB: "length ?refsF = length ?valsF" by simp
-        have lenC: "length argTms = length ?refsF" by simp
-        have allInr: "\<forall>tm \<in> set argTms. \<exists>v. interp_term d fuel full tm = Inr v"
-        proof
-          fix tm assume "tm \<in> set argTms"
-          then have "interp_term d fuel full tm \<in> set ?valsF" by auto
-          from fold_process_one_arg_all_ok[OF foldF lenA lenB this]
-          show "\<exists>v. interp_term d fuel full tm = Inr v" by blast
-        qed
+        have lenC: "length ?pts = length ?refsF" by simp
+        have allInr: "\<forall>pt \<in> set ?pts. \<exists>v. ?tmF pt = Inr v"
+          using allInr0 by blast
         have lenV: "length (rights ?valsF) = length (FI_TmArgs info)"
         proof -
           have "\<forall>x \<in> set ?valsF. \<exists>v. x = Inr v" using allInr by auto
@@ -1799,12 +1966,12 @@ next
 
         \<comment> \<open>The erased state passes the values of the arguments that erasure
             keeps, which are the values the full state computed for them. \<close>
-        have valsE_drop: "rights (map (interp_term d fuel erased) ?argsE)
+        have valsE_drop: "rights (map_args (interp_term d fuel) erased ?paramsE ?argsE)
                             = drop_ghost ?flagsF (rights ?valsF)"
           unfolding valsE_eq
           by (rule extern_vals_erased_ghost
-                     [where tmF = "interp_term d fuel full" and tmE = ?tmE,
-                      OF lenFlags len_eq allInr vals])
+                     [where tmF = ?tmF and tmE = ?tmE and tms = ?pts,
+                      OF lenFlags lenPts allInr vals])
 
         \<comment> \<open>The extern function does not depend on its ghost arguments. So the
             erased call returns the same world and value, and the ref updates
@@ -1820,57 +1987,57 @@ next
         \<comment> \<open>The lvalues passed in Ref positions: those of the parameters that
             are not ghost are at corresponding addresses in the two states;
             those of the ghost parameters are ghost cells of the full state. \<close>
-        have keepR: "\<forall>tm name. (tm, ((name, Ref), NotGhost))
-                                  \<in> set (zip argTms (zip (IF_Args f) ?flagsF)) \<longrightarrow>
-                       (\<exists>addr path i. interp_writable_lvalue d fuel full tm = Inr (addr, path) \<and>
-                                      interp_writable_lvalue d fuel erased (?er tm) = Inr (i, path) \<and>
+        have keepR: "\<forall>pt name pgh. (pt, ((name, Ref, pgh), NotGhost))
+                                  \<in> set (zip ?pts (zip (IF_Args f) ?flagsF)) \<longrightarrow>
+                       (\<exists>addr path i. ?lvF pt = Inr (addr, path) \<and>
+                                      ?lvE pt = Inr (i, path) \<and>
                                       i < length emb \<and> emb ! i = addr)"
         proof (intro allI impI)
-          fix tm name
-          assume mem: "(tm, ((name, Ref), NotGhost)) \<in> set (zip argTms (zip (IF_Args f) ?flagsF))"
-          have mem2: "(tm, (name, Ref)) \<in> set (zip argTms (IF_Args f))"
+          fix pt name pgh
+          assume mem: "(pt, ((name, Ref, pgh), NotGhost)) \<in> set (zip ?pts (zip (IF_Args f) ?flagsF))"
+          have mem2: "(pt, (name, Ref, pgh)) \<in> set (zip ?pts (IF_Args f))"
             by (rule in_set_zip_zipD[OF mem])
           from fold_process_one_arg_ref_lvalue_ok
-                 [OF foldF len_eq[symmetric] lenC lenB refl mem2]
-          obtain lval where lv0: "interp_writable_lvalue d fuel full tm = Inr lval"
+                 [OF foldF lenPts[symmetric] lenC lenB refl mem2]
+          obtain lval where lv0: "?lvF pt = Inr lval"
             by blast
           obtain addr path where ap: "lval = (addr, path)" by (cases lval)
-          from lv0 ap have s: "interp_writable_lvalue d fuel full tm = Inr (addr, path)"
+          from lv0 ap have s: "?lvF pt = Inr (addr, path)"
             by simp
           from refs[rule_format, OF mem s] obtain i where
-            sE: "interp_writable_lvalue d fuel erased (?er tm) = Inr (i, path)" and
+            sE: "?lvE pt = Inr (i, path)" and
             i_lt: "i < length emb" and ei: "emb ! i = addr"
             by blast
           from s sE i_lt ei
-          show "\<exists>addr path i. interp_writable_lvalue d fuel full tm = Inr (addr, path) \<and>
-                              interp_writable_lvalue d fuel erased (?er tm) = Inr (i, path) \<and>
+          show "\<exists>addr path i. ?lvF pt = Inr (addr, path) \<and>
+                              ?lvE pt = Inr (i, path) \<and>
                               i < length emb \<and> emb ! i = addr"
             by blast
         qed
-        have ghostR: "\<forall>tm name. (tm, ((name, Ref), Ghost))
-                                   \<in> set (zip argTms (zip (IF_Args f) ?flagsF)) \<longrightarrow>
-                        (\<exists>addr path. interp_writable_lvalue d fuel full tm = Inr (addr, path) \<and>
+        have ghostR: "\<forall>pt name pgh. (pt, ((name, Ref, pgh), Ghost))
+                                   \<in> set (zip ?pts (zip (IF_Args f) ?flagsF)) \<longrightarrow>
+                        (\<exists>addr path. ?lvF pt = Inr (addr, path) \<and>
                                      addr < length (IS_Store full) \<and> addr \<notin> set emb)"
         proof (intro allI impI)
-          fix tm name
-          assume mem: "(tm, ((name, Ref), Ghost)) \<in> set (zip argTms (zip (IF_Args f) ?flagsF))"
-          have mem2: "(tm, (name, Ref)) \<in> set (zip argTms (IF_Args f))"
+          fix pt name pgh
+          assume mem: "(pt, ((name, Ref, pgh), Ghost)) \<in> set (zip ?pts (zip (IF_Args f) ?flagsF))"
+          have mem2: "(pt, (name, Ref, pgh)) \<in> set (zip ?pts (IF_Args f))"
             by (rule in_set_zip_zipD[OF mem])
           from fold_process_one_arg_ref_lvalue_ok
-                 [OF foldF len_eq[symmetric] lenC lenB refl mem2]
-          obtain lval where lv0: "interp_writable_lvalue d fuel full tm = Inr lval"
+                 [OF foldF lenPts[symmetric] lenC lenB refl mem2]
+          obtain lval where lv0: "?lvF pt = Inr lval"
             by blast
           obtain addr path where ap: "lval = (addr, path)" by (cases lval)
-          from lv0 ap have s: "interp_writable_lvalue d fuel full tm = Inr (addr, path)"
+          from lv0 ap have s: "?lvF pt = Inr (addr, path)"
             by simp
           from ghost_refs[rule_format, OF mem s] s
-          show "\<exists>addr path. interp_writable_lvalue d fuel full tm = Inr (addr, path) \<and>
+          show "\<exists>addr path. ?lvF pt = Inr (addr, path) \<and>
                             addr < length (IS_Store full) \<and> addr \<notin> set emb"
             by blast
         qed
         note xrefs = extern_refs_erased_ghost
-                       [where lvF = "interp_writable_lvalue d fuel full" and lvE = ?lvE,
-                        OF lenFlags len_eq keepR ghostR,
+                       [where lvF = ?lvF and lvE = ?lvE and tms = ?pts,
+                        OF lenFlags lenPts keepR ghostR,
                         unfolded ref_param_ghost_flags_zip[OF flags]]
 
         \<comment> \<open>Both states get the new world. The full state then applies all
@@ -1886,10 +2053,11 @@ next
           relN: "state_erased env emb finalState newErased"
           by blast
         have finalE: "apply_ref_updates ?erasedW
-                        (rights (map (\<lambda>((_, vr), refResult).
+                        (rights (map (\<lambda>((_, vr, _), refResult).
                                         if vr = Ref then refResult else Inl TypeError)
                                      (zip ?paramsE
-                                          (map (interp_writable_lvalue d fuel erased) ?argsE))))
+                                          (map_args (interp_writable_lvalue d fuel) erased
+                                             ?paramsE ?argsE))))
                         (drop_ghost ?rflags refUpdates)
                       = Inr newErased"
           using finalE0 by (simp only: refsE_eq)
@@ -1897,8 +2065,8 @@ next
           unfolding newFull_eq by (rule relN)
         have callE: "interp_function_call d (Suc fuel) erased fnName argTys ?argsE
                        = Inr (newErased, retVal)"
-          using lookE lenE tyLen_eq foldE aliasE Inr valsE_drop extE finalE ret_eq
-          by (simp add: checked_call_no_contract call_body_def Let_def paramsE_eq' D(3) D(6))
+          using lookE lenE tyLen_eq foldE aliasE Inr valsE_drop extE finalE ret_eq ghF
+          by (simp add: checked_call_no_contract call_body_def Let_def paramsE_eq' D(3) D(6) D(11))
         from callE relN' show ?thesis by blast
       qed
     qed
