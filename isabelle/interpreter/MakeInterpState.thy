@@ -121,4 +121,11 @@ definition make_interp_state ::
             Inr (base_interp_state env world externAlloc
                    \<lparr> IS_Globals := CM_GlobalVars m', IS_Functions := funs \<rparr>))"
 
+(* The state built for a module is in executable mode. *)
+lemma make_interp_state_IS_Ghost:
+  assumes "make_interp_state world externs externAlloc m = Inr state"
+  shows "IS_Ghost state = NotGhost"
+  using assms
+  by (auto simp: make_interp_state_def base_interp_state_def Let_def split: sum.splits)
+
 end

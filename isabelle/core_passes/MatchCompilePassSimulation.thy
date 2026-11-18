@@ -195,13 +195,20 @@ section \<open>The simulation theorems\<close>
    satisfy funs_match_compilable (no ghost functions or parameters, no
    contracts, ghost-free bodies with variable scrutinees); the last section
    shows that the state built from a ghost-free module with variable
-   scrutinees does. *)
+   scrutinees does.
+
+   The state is in executable mode (IS_Ghost full = NotGhost), and the
+   statements are those of a function that is not ghost (TE_FunctionGhost env
+   = NotGhost): the proof uses type soundness, which asks that the mode of
+   the state be the mode in which the code is typed. The state built from a
+   module is in executable mode (make_interp_state_IS_Ghost). *)
 theorem match_compile_simulation:
   fixes full :: "'w InterpState"
   assumes fmc: "funs_match_compilable env (IS_Functions full)"
     and sme: "state_matches_env full env storeTyping"
     and wf: "tyenv_well_formed env"
-    and ng: "TE_ProofGoal env = None"
+    and gm: "IS_Ghost full = NotGhost"
+    and ng: "TE_ProofGoal env = None" and fgh: "TE_FunctionGhost env = NotGhost"
     and T: "core_statement_list_type env NotGhost stmts = Some env'"
     and gf: "core_statement_list_ghost_free stmts"
     and ok: "core_statement_list_match_scrutinees_ok stmts"
@@ -211,7 +218,7 @@ theorem match_compile_simulation:
 proof -
   interpret match_compile_sim d env "IS_Functions full" by unfold_locales (rule fmc)
   from sim_all have "stmts_sim fuel stmts" by blast
-  from stmts_simD[OF this refl refl sme wf ng T gf ok H] show ?thesis .
+  from stmts_simD[OF this refl refl sme wf gm ng fgh T gf ok H] show ?thesis .
 qed
 
 (* The simulation for a function call (the hypotheses on the call are those
@@ -221,6 +228,7 @@ theorem match_compile_simulation_call:
   assumes fmc: "funs_match_compilable env (IS_Functions full)"
     and sme: "state_matches_env full env storeTyping"
     and wf: "tyenv_well_formed env"
+    and gm: "IS_Ghost full = NotGhost"
     and fi: "fmlookup (TE_Functions env) fnName = Some funInfo"
     and args_typed: "list_all2 (\<lambda>tm expectedTy. core_term_type env NotGhost tm = Some expectedTy)
          argTms (map (\<lambda>(ty, _). apply_subst (fmap_of_list (zip (FI_TyArgs funInfo) tyArgs)) ty)
@@ -236,7 +244,7 @@ theorem match_compile_simulation_call:
 proof -
   interpret match_compile_sim d env "IS_Functions full" by unfold_locales (rule fmc)
   from sim_all have "call_sim fuel fnName tyArgs argTms" by blast
-  from call_simD[OF this refl refl sme wf fi args_typed len_ty wk refs_w ok H] show ?thesis .
+  from call_simD[OF this refl refl sme wf gm fi args_typed len_ty wk refs_w ok H] show ?thesis .
 qed
 
 
@@ -416,7 +424,9 @@ proof -
     by (rule make_interp_state_funs_match_compilable[OF gf ok norm mk])
   show "\<exists>fuel'. interp_function_call d fuel' (mc_state state) fnName tyArgs
                   (map match_compile_term argTms) = Inr (mc_state newState, retVal)"
-    by (rule match_compile_simulation_call[OF fmc sme wf fi args_typed len_ty wk refs_w ok_args run])
+    by (rule match_compile_simulation_call
+               [OF fmc sme wf make_interp_state_IS_Ghost[OF mk] fi args_typed len_ty wk refs_w
+                   ok_args run])
 qed
 
 (* The same for a function without parameters, such as main. *)
