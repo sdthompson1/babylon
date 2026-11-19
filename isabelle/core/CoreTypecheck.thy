@@ -107,27 +107,13 @@ definition cast_ok :: "CoreTyEnv \<Rightarrow> CoreType \<Rightarrow> CoreType \
 
 
 (* ========================================================================== *)
-(* Value positions must have a complete type (rule R2) *)
+(* Value positions must have a complete type (in NotGhost mode) *)
 (* ========================================================================== *)
 
-(* Every subterm sits in a place position (the construct only needs to know
-   where the thing is) or a value position (the construct needs the contents);
-   see "Place positions and value positions" in CoreInterp.thy for the table.
-
-   R2: in executable code, a term in a value position must have a complete
-   type. (R1, the run-time half, says that its value must not be allocated;
-   that one is checked by the interpreter, see value_position.) Ghost code is
-   exempt, as it is from R1.
-
-   complete_if_executable is the condition, used wherever core_term_type has to
-   state it: the element type of an array literal, the payload of a variant
-   constructor, the fields of a record, the body of a let and the arms of a
-   match. At the other value positions of a term it follows from the existing
-   constraints: the operands of unary and binary operators and of non-array
-   casts, and array indexes, are bool or numeric in executable code. The
-   value positions of statements (the right-hand side of a variable declaration
-   or an assignment, the result of a call statement, the returned value) have
-   the condition in CoreStmtTypecheck.thy and in tyenv_return_type_complete. *)
+(* Certain term positions (e.g. subterms of a CoreTm_Record, the body of a CoreTm_Let)
+   are designated "value positions". In NotGhost mode, the typechecker enforces a rule
+   that terms in value positions must have a complete type. The following function is
+   used for checking that rule. *)
 abbreviation complete_if_executable :: "GhostOrNot \<Rightarrow> CoreType \<Rightarrow> bool" where
   "complete_if_executable ghost ty \<equiv> (ghost = NotGhost \<longrightarrow> is_complete_type ty)"
 
@@ -216,8 +202,7 @@ function core_term_type :: "CoreTyEnv \<Rightarrow> GhostOrNot \<Rightarrow> Cor
         else None
     | _ \<Rightarrow> None)"
 
-  (* Let. The right-hand side is a place position (its type may be incomplete);
-     the body is a value position. *)
+  (* Let. The body (but not the right-hand side) is a value position. *)
 | "core_term_type env ghost (CoreTm_Let var rhs body) =
     (case core_term_type env ghost rhs of
       Some rhsTy \<Rightarrow>
@@ -350,8 +335,8 @@ function core_term_type :: "CoreTyEnv \<Rightarrow> GhostOrNot \<Rightarrow> Cor
    - All arm bodies must have the same type
      (Note: exhaustiveness is NOT checked; a non-exhaustive match that fails to
      find a matching pattern is a runtime error, not a type error.)
-   - The scrutinee is a place position; the arm bodies are value positions, so
-     in NotGhost mode their common type must be complete *)
+   - The arm bodies (but not the scrutinee) are value positions, so in NotGhost mode,
+     the common arm body type must be complete. *)
 | "core_term_type env ghost (CoreTm_Match scrut arms) =
     (case core_term_type env ghost scrut of
       None \<Rightarrow> None

@@ -10,25 +10,33 @@ begin
 (* ========================================================================== *)
 
 (* Evaluated values *)
+
 (* Note: CV_Int and CV_Real arise only when ghost code is run. *)
+
+(* For arrays, all three array types (T[*], T[n] and T[]) are represented in essentially the
+   same way: as a big table mapping indices to values. CV_Array also contains an "allocatable
+   flag" which is used *only* to keep track of the type (it is True for T[*] arrays, False for
+   T[] and T[n]). Array casts rewrite the flag where needed.
+
+   In a compiled implementation, there would likely be more differences between the array
+   types (e.g. T[*] is a pointer to heap memory; T[n] is a fixed block of stack memory).
+   The language's various restrictions on "allocated" values allow this to be kept sound
+   without needing a garbage collector. *)
+
+(* For extern types, CV_Extern carries the type itself (type name and alloc level), together
+   with a nat "handle", which can be thought of as the "void *" value on the C side. The
+   handle is zero for the default value of each type. *)
 datatype CoreValue =
   CV_Bool bool
   | CV_FiniteInt Signedness IntBits int
   | CV_Record "(string \<times> CoreValue) list"
   | CV_Variant string CoreValue
   | CV_Array bool "int list" "(int list, CoreValue) fmap"
-      (* allocatable flag, size list, array index \<rightarrow> value.
-         The flag says whether the array is allocatable (a "T[*]"). It is clear for
-         a fixed-size array and for an incomplete-typed view ("T[]") of any array;
-         value_has_type requires it to agree with the type. With the flag, whether
-         a value is allocated can be decided from the value alone (is_allocated,
-         CoreInterp.thy). *)
+      (* allocatable flag, size list, array index \<rightarrow> value *)
   | CV_Int int
   | CV_Real real
   | CV_Extern string CoreAllocLevel nat
-      (* Values of an extern type carry the type itself (name and alloc level) plus a nat
-         "handle" (this can be thought of as the "void *" value on the C side). The handle
-         is zero for the default value of each type. *)
+      (* type name, alloc level, handle *)
 
 
 (* ========================================================================== *)

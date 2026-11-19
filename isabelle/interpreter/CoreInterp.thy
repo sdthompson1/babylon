@@ -261,11 +261,11 @@ qed
 (* Array helpers *)
 (* ========================================================================== *)
 
-(* Make a one-dimensional CV_Array of values. It is a fixed-size array, so its
-   allocatable flag is clear. *)
+(* Make a one-dimensional CV_Array of values, as a fixed-sized array (so that the
+   allocatable flag is False). *)
 fun make_1d_array :: "CoreValue list \<Rightarrow> CoreValue" where
   "make_1d_array vals = 
-    CV_Array False [int (length vals)] 
+    CV_Array False [int (length vals)]
              (fmap_of_list (zip (map (\<lambda>i.[int i]) [0..<length vals]) vals))"
 
 (* Convert a list of CV_FiniteInt u64 values to a list of ints, or return a type error *)
@@ -336,9 +336,10 @@ fun get_value_at_path :: "CoreValue \<Rightarrow> LValuePath list \<Rightarrow> 
       Some val \<Rightarrow> get_value_at_path val rest
     | None \<Rightarrow> Inl RuntimeError)"    (* array index out of bounds *)
 | "get_value_at_path (CV_Array allocatable sizes elementMap) (LVPath_ArrayCast dims # rest) =
-    \<comment> \<open>A read through an array cast sees the array as cast_value would return it:
-        with the allocatable flag that the cast's dims give. As in cast_value, a cast
-        to allocatable dims of an array that is not allocatable is a TypeError.\<close>
+    \<comment> \<open>A cast to T[*] from an array of type T[n] or T[] is a TypeError.
+        A cast to T[n] for an array whose runtime size is not n is a RuntimeError.
+        Otherwise, the CV_Array's allocatable-flag is updated (to reflect the result of
+        the cast), then get_value_at_path continues with the rest of the path.\<close>
     (if allocatable_dims dims \<and> \<not> allocatable then Inl TypeError
      else if sizes_match_dims sizes dims then
        get_value_at_path (CV_Array (allocatable_dims dims) sizes elementMap) rest
@@ -370,16 +371,19 @@ fun update_value_at_path :: "CoreValue \<Rightarrow> LValuePath list \<Rightarro
         | Inl err \<Rightarrow> Inl err)
     | None \<Rightarrow> Inl RuntimeError)"  (* array index out of bounds *)
 | "update_value_at_path (CV_Array allocatable sizes elementMap) (LVPath_ArrayCast dims # rest) new_val =
-    \<comment> \<open>The cast is checked as for reads (the TypeError for a cast to allocatable
-        dims of an array that is not allocatable; the runtime array size must match
-        the cast's dims), and the rest of the path updates the array as the cast
-        shows it, i.e. with the allocatable flag that the cast's dims give.
-        In addition, writing through an LVPath_ArrayCast is not allowed to change the
-        runtime size of the array (e.g., if you have a `T[]` ref to a size-3 array, you
-        are not allowed to overwrite it with a size-5 array, because the original array
-        might not have been resizable). Nor does it change the stored allocatable
-        flag: the array that is written back keeps the flag it had, whatever the
-        flag of the array written through the cast.\<close>
+    \<comment> \<open>A cast to T[*] from an array of type T[n] or T[] is a TypeError.
+        A cast to T[n] for an array whose runtime size is not n is a RuntimeError.
+
+        Otherwise, the cast is performed (by updating the allocatable-flag), the casted
+        array value is updated (by a recursive call to update_value_at_path with the rest
+        of the path), and then the cast is 'undone' (by resetting the flag back how it
+        was originally).
+
+        If the update changed the size of the array, this is a RuntimeError. This prevents
+        a program from e.g. casting a T[3] array to T[], and then assigning a T[5] array to
+        it (which would break type soundness). This can happen in Ghost code. (In NotGhost
+        code, assignments at incomplete type are not allowed, so that assignment would not
+        typecheck.)\<close>
     (if allocatable_dims dims \<and> \<not> allocatable then Inl TypeError
      else if sizes_match_dims sizes dims then
       (case update_value_at_path (CV_Array (allocatable_dims dims) sizes elementMap) rest new_val of
@@ -411,13 +415,12 @@ fun type_at_path :: "CoreTyEnv \<Rightarrow> CoreType \<Rightarrow> LValuePath l
     | None \<Rightarrow> None)"
 | "type_at_path env (CoreTy_Array elemTy dims) (LVPath_ArrayProj _ # rest) =
     type_at_path env elemTy rest"
-  \<comment> \<open>An array cast step retypes the array at the cast's dims (same element
-      type). The dims must be well-kinded so that the value is well-typed at
-      the new type, and the cast must not be one to allocatable dims of an
-      array type that is not allocatable (get_value_at_path and
-      update_value_at_path give TypeError for that cast). (Whether the cast
-      direction is otherwise admissible, dim_cast_ok, isn't checked here; we
-      rely on the typechecker for that.)\<close>
+  \<comment> \<open>An array cast step changes the dimensions (e.g. from T[*] to T[]) while keeping
+      the element type the same. The dims must be well-kinded so that the value is
+      well-typed at, and the cast must not convert non-allocatable dimensions to
+      allocatable (get_value_at_path and update_value_at_path give TypeError for that
+      cast). (Whether the cast direction is otherwise admissible, dim_cast_ok, isn't
+      checked here; we rely on the typechecker for that.)\<close>
 | "type_at_path env (CoreTy_Array elemTy dims) (LVPath_ArrayCast dims' # rest) =
     (if array_dims_well_kinded dims' \<and> (allocatable_dims dims' \<longrightarrow> allocatable_dims dims)
      then type_at_path env (CoreTy_Array elemTy dims') rest
@@ -666,25 +669,22 @@ termination by lexicographic_order
 (* ========================================================================== *)
 
 (* Does a value currently hold allocated storage?
-   The answer depends on the value alone (and the allocation oracle for extern
-   values): an array value records whether it is allocatable (the flag of
-   CV_Array), so no type is needed.
-     - An allocatable array (flag set) is allocated iff all of its sizes are
-       non-zero.
-     - Any other array (flag clear) is allocated iff some element at an index
-       within its sizes is. (A well-typed array has an element at every such
-       index; a missing element counts as not allocated.)
-        - Note: the flag is also clear for an incomplete-typed ("T[]") view of an
-          allocatable array (see cast_value), so such a view is allocated only if
-          an element is. "allocated" is not meaningful at an incomplete type, and
-          a well-typed program never evaluates it at one.
-     - A record is allocated iff some field is, and a variant iff its payload is.
-     - Scalars are never allocated.
-     - A value CV_Extern n l k of an extern type is decided by the allocation
-       oracle, except in cases where the type already implies that the value
-       is unallocated (l = CoreAlloc_Never, or l = CoreAlloc_IfNotDefault and k = 0);
-       in such cases the oracle is "overruled" and we directly return False.
-   Recursion is on the value, so no fuel is needed. *)
+    - An array of type T[*] is allocated iff all of its sizes are non-zero.
+    - Any other array, a record or a variant is allocated iff some component (element,
+      field or payload) is.
+    - Scalars are never allocated.
+    - A value CV_Extern n l k of an extern type is decided by the allocation oracle, except
+      in cases where the type already implies that the value is unallocated
+      (l = CoreAlloc_Never, or l = CoreAlloc_IfNotDefault and k = 0); in such cases the
+      oracle is "overruled" and we directly return False.
+   Notes:
+    - Recursion is on the value, so no fuel is needed.
+    - We don't need to be told the value's type; in particular, we can tell whether an array
+      has type T[*] by looking at its allocatable-flag.
+    - Technically speaking, it is incorrect for us to give a definition of "allocated" on a
+      T[]-array, because "allocated" is not even well-typed for such arrays. But a well-typed
+      program will never evaluate "allocated" at an incomplete type, so this does not matter
+      in practice. *)
 function is_allocated :: "(string \<Rightarrow> CoreAllocLevel \<Rightarrow> nat \<Rightarrow> bool) \<Rightarrow> CoreValue \<Rightarrow> bool" where
   "is_allocated extAlloc (CV_Bool _) = False"
 | "is_allocated extAlloc (CV_FiniteInt _ _ _) = False"
@@ -751,94 +751,50 @@ lemma is_allocated_Record:
   "is_allocated extAlloc (CV_Record flds) \<longleftrightarrow> (\<exists>v \<in> snd ` set flds. is_allocated extAlloc v)"
   by (auto simp: list_ex_iff)
 
+
 (* ========================================================================== *)
-(* Place positions and value positions: reads of allocated values *)
+(* Allocated values may not appear in value positions *)
 (* ========================================================================== *)
 
-(* Every subterm of a term or statement sits in a place position or in a value
-   position. In a place position the enclosing construct only needs to know where
-   the thing is; in a value position it needs the contents, to store them somewhere
-   else or to compute with them. Core has these rules about value positions; they
-   apply only while executable code is being run (IS_Ghost state = NotGhost, see
-   "Ghost and executable code" below), and ghost code may copy allocated values
-   freely:
+(* Every subterm of a term or statement sits in a "place position" or in a "value
+   position". In a place position, the enclosing construct only needs to know where
+   the thing is; in a value position, it needs the contents, to store them somewhere
+   else or to compute with them.
+
+   Core has the following rules about value positions - note that these apply in NotGhost
+   mode only (Ghost code can freely copy allocated values):
 
     R1. A value in a value position must not be allocated.
+    R2. A term in a value position must not have incomplete type (this is what allows R1
+        to be well-defined, since "allocated" is not defined at incomplete types; it is
+        enforced by the typechecker, not the interpreter).
     R3. CoreTm_Default must not produce an allocated value, whatever position
         it is in.
     R4. A function called by executable code must not return an allocated value.
         This holds for an extern function as well as for one with a Core body.
 
-   "Ghost code" here includes everything that ghost code calls: a function that
-   is not ghost, when called from ghost code, runs as ghost code, and the rules
-   do not apply to that run of it.
-
-   (R2 is the matching typing rule: a term in a value position must have a
-   complete type. See complete_if_executable in CoreTypecheck.thy for the terms,
-   and CoreStmtTypecheck.thy for the statements.)
-
-   The rationale is that in the generated C code an allocated value is a
-   descriptor holding a pointer to a heap block. A value position copies its
-   term, or may copy it, and a copy of a descriptor would be a second descriptor
-   "owning" the same piece of heap memory, which would lead to trouble later on.
+   The rationale is that in compiled code, an "allocated" value contains an "owned" pointer
+   to a heap block (like a unique_ptr in C++). A value position (might) copy its term, and
+   copying an allocated value would lead to two pointers owning the same heap block, which
+   would lead to memory bugs (e.g. double-free, use-after-free) later on.
 
    Violation of the rules results in a RuntimeError, signalling undefined behaviour.
-   A (future) Core verifier will ensure that RuntimeErrors do not occur, provided that
-   all verification conditions are discharged.
 
-   The positions are as follows.
-
-     Construct                          Value positions            Place positions
-     ---------------------------------  -------------------------  ---------------------
-     CoreTm_LitArray, CoreTm_Record,    elements, field values,
-       CoreTm_VariantCtor                 payload
-     CoreTm_Let                         the result of the body     the right-hand side
-     CoreTm_Match                       the result of the chosen   the scrutinee
-                                          arm
-     CoreTm_RecordProj,                 index terms                the base
-       CoreTm_VariantProj,
-       CoreTm_ArrayProj
-     CoreTm_Cast to an array type                                  the operand
-     CoreTm_Cast to any other type,     the operands
-       CoreTm_Unop, CoreTm_Binop
-     CoreTm_FunctionCall,                                          arguments, operand
-       CoreTm_Sizeof, CoreTm_Allocated
-     interp_lvalue                      index terms
-     CoreStmt_VarDecl with Var,         the right-hand side        the left side of the
-       CoreStmt_Assign                                               assignment
-     CoreStmt_VarDeclCall,              the call's result, after   the arguments
-       CoreStmt_AssignCall                the optional cast
-     CoreStmt_VarDecl with Ref,                                    all
-       CoreStmt_Swap, the scrutinee
-       of CoreStmt_Match
-     CoreStmt_While                     the condition
-
-   CoreStmt_Return makes no check of its own: the returned value is checked when
-   the call returns (R4, in call_body). Specification terms (assert and obtain
-   conditions, loop invariants, decreases-terms, contracts) are always ghost
-   code, so the rules do not apply to them.
-
-   In the interpreter a term is evaluated in the same way in either kind of
-   position: the difference is only whether the check below (value_position) is
-   applied to its result. In particular the right-hand side of a "let", a
-   by-value argument, and a "ref" declaration with a read-only base still copy
-   the value into a new const cell, with no check: here a place is an unchecked
-   copy.
+   Value positions are marked in the interpreter below by a call to the function
+   "value_position", which returns either the same value that was passed to it, or a
+   RuntimeError if the rule R1 was violated.
 
    In executable code the operands of operators, index terms and conditions are
    scalars, so the check cannot fail there; it is applied all the same, so that
    every value position is visible in the text of the interpreter.
 
+   CoreStmt_Return makes no check of its own: the returned value is checked when
+   the call returns (R4, in call_body).
+
    There are not (yet) any rules to prevent memory leaks; for example, an assignment
    is currently allowed to "clobber" an allocated lhs, thus losing the pointer to it.
    This will be addressed as future work.
 *)
-
-(* value_position is applied to the result of evaluating a subterm that sits in a
-   value position, with the state in which the subterm was evaluated. In executable
-   code it turns an allocated value into a RuntimeError; otherwise it passes the
-   result through. Whether a value is allocated is decided from the value alone
-   (is_allocated), so no type is needed and the check cannot give a TypeError. *)
 definition value_position ::
     "'w InterpState \<Rightarrow> InterpError + CoreValue \<Rightarrow> InterpError + CoreValue" where
   "value_position state r =
@@ -1030,21 +986,15 @@ lemma value_position_list_Nil [simp]: "value_position_list state (Inr []) = Inr 
 (* Apply a cast to a value.
     - RuntimeError if the cast fails (overflow for casts to a finite integer type;
       array's runtime size doesn't match for array casts to CoreDim_Fixed).
-    - TypeError if the cast itself is invalid (only array or numeric targets are allowed;
-      an array that is not allocatable cannot be cast to allocatable dims).
+    - TypeError if the cast itself is invalid (only array or numeric targets allowed;
+      T[] or T[n] cannot be cast to T[*]; note the other requirements of dim_cast_ok are
+      *not* checked).
     - Otherwise: successful cast, returns the new value.
-   An array cast leaves the sizes and elements alone, and sets the array's
-   allocatable flag from the target dims: clear for a cast to "T[]" or "T[n]", and
-   set only for the identity cast "T[*]" to "T[*]". (Only the flag of the array
-   that is cast changes; its elements keep theirs.) So two arrays of the same
-   incomplete or fixed-size type with the same sizes and elements are equal values
-   whatever they are views of, as "==" (HOL equality on values) requires. The casts
-   that would set the flag on an array that has it clear ("T[n]" or "T[]" to "T[*]")
-   are the ones that typing rejects (dim_cast_ok, CoreTypecheck.thy); they are a
-   TypeError here.
    A real cast to an integer type (finite or int) rounds downwards (towards minus
    infinity), i.e. takes the floor, before any range check. All other numeric
-   casts leave the numerical value unchanged. *)
+   casts leave the numerical value unchanged.
+   An array cast simply sets the array's allocatable flag appropriately for the new
+   type. *)
 fun cast_value :: "CoreType \<Rightarrow> CoreValue \<Rightarrow> InterpError + CoreValue" where
   "cast_value (CoreTy_FiniteInt sign bits) (CV_FiniteInt _ _ i) =
      (if int_fits sign bits i then Inr (CV_FiniteInt sign bits i)
@@ -1723,60 +1673,11 @@ next
     using rel by simp
 qed
 
-
 (* ========================================================================== *)
-(* The main interpreter definitions *)
+(* Ghost mode handling *)
 (* ========================================================================== *)
 
-(* The interpreter runs both Ghost and NotGhost code. As a consequence, it is
-   not executable.
-
-   The fuel has two levels. The first argument of each function is the
-   depth `d`, the second is the ordinary fuel. Every case passes the depth
-   through unchanged, except Quantifier and Obtain, which spend one unit of
-   depth and in return evaluate each instance of their body at whatever
-   fuel that instance needs.
-
-   "The program terminates with result r" is therefore "there are d and fuel at which
-   the interpreter returns r". If this exists, it is independent of the precise
-   amount of fuel used (so long as it is sufficient); see CoreInterpFuelMono.thy.
-
-   Ghost and executable code: the field IS_Ghost of the state says which of the
-   two is being run. IS_Ghost = NotGhost means that what is being evaluated is
-   executable: it is still there after ghost erasure. IS_Ghost = Ghost means
-   that it is ghost code, or is being run on behalf of ghost code. A term is
-   evaluated in the state it is given.
-
-   The mode is only ever raised, from NotGhost to Ghost, and only for the
-   evaluation of one piece of code inside another. It is raised in these places:
-     - each argument of a call is evaluated in raise_mode state g, where g is the
-       ghost flag of its parameter (see arg_state, map_args);
-     - a statement with a ghost flag g evaluates its own terms, and makes its own
-       call, in raise_mode state g. It builds its result state from the state it
-       was given, so the mode is unchanged for the statements that follow, and
-       loop bodies and match arms run in the mode the statement was run in (the
-       statements inside them raise the mode for themselves);
-     - assert conditions, loop invariants, decreases-terms, obtain conditions and
-       contracts (checked_call) are evaluated with IS_Ghost := Ghost.
-   Nothing lowers the mode. In particular interp_function_call runs the body of
-   the function in the mode of the call, whatever the function's own flag
-   (IF_Ghost) says: a function that is not ghost, called from ghost code, is run
-   as ghost code. The flag of the function matters in one place only: a ghost
-   function cannot be called when IS_Ghost is NotGhost (TypeError). So a
-   function that is not ghost can run in either mode, and a ghost function only
-   ever runs in Ghost mode. A call hands back a state with the mode it was
-   started in.
-
-   The mode has two effects: the check on value positions (value_position) is
-   made in NotGhost mode only, and so is the test for a call to a ghost function.
-   It is not a restriction on the values that may occur: the interpreter does
-   not test that ghost values (e.g. of type int or real) and ghost types stay
-   out of NotGhost mode. That is the business of the typing rules.
-*)
-
-(* The state with its mode raised by the ghost flag g: Ghost if g is Ghost, and
-   as it was otherwise. (param_mode is the same function as is used for typing
-   the arguments of a call.) *)
+(* If g = Ghost, set the state to Ghost mode; otherwise leave it unchanged. *)
 abbreviation raise_mode :: "'w InterpState \<Rightarrow> GhostOrNot \<Rightarrow> 'w InterpState" where
   "raise_mode state g \<equiv> state \<lparr> IS_Ghost := param_mode (IS_Ghost state) g \<rparr>"
 
@@ -1874,6 +1775,25 @@ lemma map_args_Ghost:
   assumes "length args = length tms" and "IS_Ghost state = Ghost"
   shows "map_args ev state args tms = map (ev state) tms"
   using assms by (intro nth_equalityI) (simp_all add: param_mode_def IS_Ghost_update_same)
+
+
+(* ========================================================================== *)
+(* The main interpreter definitions *)
+(* ========================================================================== *)
+
+(* The interpreter runs both Ghost and NotGhost code. As a consequence, it is
+   not executable.
+
+   The fuel has two levels. The first argument of each function is the
+   depth `d`, the second is the ordinary fuel. Every case passes the depth
+   through unchanged, except Quantifier and Obtain, which spend one unit of
+   depth and in return evaluate each instance of their body at whatever
+   fuel that instance needs.
+
+   "The program terminates with result r" is therefore "there are d and fuel at which
+   the interpreter returns r". If this exists, it is independent of the precise
+   amount of fuel used (so long as it is sufficient); see CoreInterpFuelMono.thy.
+*)
 
 function interp_term :: "nat \<Rightarrow> nat \<Rightarrow> 'w InterpState \<Rightarrow> CoreTerm \<Rightarrow> InterpError + CoreValue"
   and interp_term_list :: "nat \<Rightarrow> nat \<Rightarrow> 'w InterpState \<Rightarrow> CoreTerm list \<Rightarrow> InterpError + CoreValue list"
@@ -2027,9 +1947,8 @@ where
       (values_of_type state (apply_subst (IS_TyArgs state) varTy))
       (\<lambda>v. converged (\<lambda>m. interp_term d m (bind_const_local varName v state) bodyTm))"
 
-  (* Allocated: evaluate the operand, then delegate to is_allocated. The type
-     annotation is not read: is_allocated decides from the value alone. The
-     operand is in a place position. *)
+  (* Allocated: evaluate the operand, then delegate to is_allocated. The operand is
+     in a place position. *)
 | "interp_term d (Suc fuel) state (CoreTm_Allocated _ tm) =
     (case interp_term d fuel state tm of
       Inl err \<Rightarrow> Inl err
@@ -2037,8 +1956,7 @@ where
 
   (* Default value: resolve any current-frame tyvars via IS_TyArgs, then
      delegate to the recursive default_value helper. In executable code the
-     default value must not be allocated, whatever position the term is in
-     (R3). *)
+     default value must not be allocated (R3). *)
 | "interp_term _ (Suc fuel) state (CoreTm_Default ty) =
     value_position state (default_value fuel state (apply_subst (IS_TyArgs state) ty))"
 
@@ -2126,10 +2044,10 @@ where
 
 | "interp_statement d (Suc fuel) state (CoreStmt_VarDeclCall declGhost varName _ castOpt fnName argTys argTms) =
     \<comment> \<open>Run the (possibly impure) call, observing its state effect, then apply the
-        optional cast to the returned value before binding it. The call is made in
-        the mode raised by the declaration's flag; the state that comes back carries
-        that mode, so the mode of the original state is put back. The call's result,
-        after the cast, is in a value position (in the mode of the call).\<close>
+        optional cast to the returned value before binding it. If declGhost = Ghost, the
+        call is made in ghost mode, otherwise the ambient mode of the state. The original
+        mode is put back again afterwards. The call's result, after the cast, is in a
+        value position (in the mode of the call).\<close>
     (case interp_function_call d fuel (raise_mode state declGhost) fnName argTys argTms of
        Inr (newState, retVal) \<Rightarrow>
          (case value_position (raise_mode state declGhost)
@@ -2171,9 +2089,8 @@ where
 | "interp_statement d (Suc fuel) state (CoreStmt_Assign assignGhost _ lhsLvalue rhsTm) =
     \<comment> \<open>Resolve the lhs to an address and path; the rhs is an ordinary (pure)
         term (impure-call rhs's use CoreStmt_AssignCall). State is unchanged by
-        evaluating it. The type annotation is not read. Both sides are evaluated
-        in the mode raised by the assignment's flag. The lhs is in a place position
-        and the rhs in a value position.\<close>
+        evaluating it. Both sides are evaluated in the mode raised by the assignment's
+        flag. The lhs is in a place position and the rhs in a value position.\<close>
     (case interp_lvalue d fuel True (raise_mode state assignGhost) lhsLvalue of
       Inr (addr, path) \<Rightarrow>
         (case value_position (raise_mode state assignGhost)
@@ -2192,10 +2109,10 @@ where
     \<comment> \<open>Note the order of operations: evaluate the rhs first, then resolve the lhs to
         an address and path (in the new state). So in a[i] = f(i), where f modifies i,
         the element written is determined by the new value of i, not the old.
-        The call is made in the mode raised by the assignment's flag. The state
-        that comes back carries that mode: the lhs is resolved in it, and the mode
-        of the original state is put back in the final state. The call's result,
-        after the cast, is in a value position (in the mode of the call).\<close>
+
+        If assignGhost = Ghost, the call is made in Ghost mode, otherwise the ambient mode
+        of the state; the mode is put back afterwards. The call's result, after the cast,
+        is in a value position (in the mode of the call).\<close>
     (case interp_function_call d fuel (raise_mode state assignGhost) fnName argTys argTms of
       Inr (newState, retVal) \<Rightarrow>
         (case value_position (raise_mode state assignGhost)
@@ -2226,8 +2143,7 @@ where
               Inl err \<Rightarrow> Inl err
             | Inr newState \<Rightarrow> Inr (Continue newState))))"
 
-  (* Return. The term is evaluated in the state as it is, i.e. in the mode the
-     function was called in. No check is made here: the returned value is checked
+  (* Return. No value_position check is made here: the returned value is checked
      when the call returns (call_body). *)
 | "interp_statement d (Suc fuel) state (CoreStmt_Return tm) =
     (case interp_term d fuel state tm of

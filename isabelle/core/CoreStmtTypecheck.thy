@@ -81,15 +81,7 @@ fun has_valid_decreases_type :: "CoreTyEnv \<Rightarrow> CoreTerm option \<Right
 
 (* Statement typechecking transforms the type environment (e.g. VarDecl adds 
    a new variable). Therefore, core_statement_type returns a new env, or None
-   if ill-typed.
-
-   The "complete type" conditions below (on a declared variable, on the left
-   side of an assignment, and, through tyenv_return_type_complete, on a returned
-   value) are rule R2 at the value positions of statements: in executable code
-   a term in a value position must have a complete type. See
-   complete_if_executable in CoreTypecheck.thy for the value positions of
-   terms. (The same condition on CoreStmt_Swap is not an instance of R2, since
-   the operands of a swap are place positions; it is a rule of its own.) *)
+   if ill-typed. *)
 
 function core_statement_type :: "CoreTyEnv \<Rightarrow> GhostOrNot \<Rightarrow> CoreStatement \<Rightarrow> CoreTyEnv option"
 and core_statement_list_type :: "CoreTyEnv \<Rightarrow> GhostOrNot \<Rightarrow> CoreStatement list \<Rightarrow> CoreTyEnv option"

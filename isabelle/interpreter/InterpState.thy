@@ -22,8 +22,7 @@ record 'w InterpFun =
   IF_TyArgs :: "string list"
 
   (* Term arguments (name, whether passed by value or reference, and whether
-     the parameter is ghost). The ghost flag is last, so that "fst" of an
-     element is the name and "fst (snd _)" is the VarOrRef. *)
+     the parameter is ghost). *)
   IF_Args :: "(string \<times> VarOrRef \<times> GhostOrNot) list"
 
   (* The function body: Inl for a Babylon body (list of statements), or
@@ -72,16 +71,19 @@ record 'world InterpState =
      Maps each type parameter (by name) to a ground CoreType. *)
   IS_TyArgs :: "(string, CoreType) fmap"
 
-  (* Whether the code being run is ghost or executable. Terms carry no ghost
-     flag of their own, so the mode is kept here. NotGhost means that what is
-     being evaluated is executable (it is still there after ghost erasure).
-     The interpreter raises the mode to Ghost while it evaluates ghost code:
-     the terms (and the call) of a statement with a ghost flag, an argument
-     for a ghost parameter, and specification terms (assertions, invariants,
-     decreases-terms, contracts). A function called from ghost code runs in
-     Ghost mode too, whether it is a ghost function or not; so the mode of a
-     function body is the mode of the call, not IF_Ghost. Nothing lowers the
-     mode. See "Ghost and executable code" in CoreInterp.thy. *)
+  (* Whether the code being run is ghost or executable.
+
+     This is used to enforce the rule that when evaluating a term in "value position",
+     the result must be non-allocated (otherwise RuntimeError). (This rule only applies
+     in NotGhost mode, so the interpreter needs to track the current mode.)
+
+     IS_Ghost does *not* affect whether the interpreter is willing to evaluate ghost-only
+     constructs (quantifier terms, MathReal computations, and so on); that is instead
+     enforced by typing. (Arguably, the interpreter *could* raise a TypeError when something
+     non-executable is attempted in NotGhost mode, but this has not been implemented.)
+
+     IS_Ghost changes from NotGhost to Ghost when the interpreter encounters a ghost
+     construct (e.g. an Assert statement), and changes back again afterwards. *)
   IS_Ghost :: GhostOrNot
 
   (* The datatypes of the program (name to number of type parameters), their
