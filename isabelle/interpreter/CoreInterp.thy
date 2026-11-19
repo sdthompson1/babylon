@@ -2160,7 +2160,9 @@ where
         if its value has not strictly decreased (see decreases_error).
       - The invariants and the decreases-term are ghost code. The condition is
         evaluated in the mode raised by the loop's flag, and is in a value position.
-        The body runs in the state as it is. *)
+        The body runs in the mode raised by the loop's flag too: the whole body
+        of a ghost loop is ghost code. The mode is put back afterwards (by
+        restore_scope). *)
 | "interp_statement d (Suc fuel) state (CoreStmt_While whileGhost condTm invars decr bodyStmts) =
     (case interp_term_list d fuel (state \<lparr> IS_Ghost := Ghost \<rparr>) invars of
       Inl err \<Rightarrow> Inl err
@@ -2174,7 +2176,7 @@ where
                 (case eval_decreases (interp_term d fuel (state \<lparr> IS_Ghost := Ghost \<rparr>)) decr of
                   Inl err \<Rightarrow> Inl err
                 | Inr decrVal \<Rightarrow>
-                    (case interp_statement_list d fuel state bodyStmts of
+                    (case interp_statement_list d fuel (raise_mode state whileGhost) bodyStmts of
                       Inr (Continue state') \<Rightarrow>
                         (case eval_decreases
                                 (interp_term d fuel ((restore_scope state state') \<lparr> IS_Ghost := Ghost \<rparr>))

@@ -510,9 +510,12 @@ next
             note [simp] = dv
             from CoreStmt_While H cv CV_Bool True
             obtain bodyRes where
-              body: "interp_statement_list d fuel state bodyStmts = Inr bodyRes"
+              body: "interp_statement_list d fuel (raise_mode state gw) bodyStmts = Inr bodyRes"
               by (auto split: sum.splits)
-            note w1 = IH_list[OF fnB funs_eq okB bodyT body]
+            \<comment> \<open>The body runs in the mode raised by the loop's flag. \<close>
+            have funsB: "IS_Functions (raise_mode state gw) = funs" using funs_eq by simp
+            from IH_list[OF fnB funsB okB bodyT body]
+            have w1: "IS_World (result_state bodyRes) = IS_World state" by simp
             show ?thesis
             proof (cases bodyRes)
               case (Return state1 v)

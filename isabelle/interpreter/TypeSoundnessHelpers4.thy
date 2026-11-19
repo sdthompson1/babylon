@@ -96,10 +96,10 @@ qed
    in, IS_Ghost state. A statement is typed in any mode, and is run in a state
    that is in NotGhost mode only if the enclosing function is not ghost
    (TE_FunctionGhost env); it raises the mode itself for the terms it
-   evaluates. (A function that is not ghost runs in Ghost mode when ghost code
-   calls it, so the two modes need not be equal.) In a call, each argument is typed
-   in the mode of its parameter (param_mode), and executable code does not call
-   a ghost function. *)
+   evaluates, and a loop does so for its body. (A function that is not ghost
+   runs in Ghost mode when ghost code calls it, so the two modes need not be
+   equal.) In a call, each argument is typed in the mode of its parameter
+   (param_mode), and executable code does not call a ghost function. *)
 lemma type_soundness_at_depth:
   assumes depth_IH:
       "\<forall>d' < d. \<forall>fuel' env' (state' :: 'w InterpState) storeTyping' tm' ty'.
@@ -2153,29 +2153,31 @@ next
                 case Decr0: (Inr decrVal)
               \<comment> \<open>state_matches_env / tyenv_well_formed transfer from env to benv
                   (benv differs only in TE_ProofTopLevel, which they ignore). \<close>
-              have sme_benv: "state_matches_env state benv storeTyping"
+              \<comment> \<open>The body runs in the mode raised by the loop's flag. \<close>
+              let ?bstate = "raise_mode state whileGhost"
+              have sme_benv: "state_matches_env ?bstate benv storeTyping"
                 using "4.prems"(1) unfolding benv_def by simp
               have wf_benv: "tyenv_well_formed benv"
                 using "4.prems"(2) unfolding benv_def
                 by (simp add: tyenv_well_formed_TE_ProofTopLevel_irrelevant)
               have ng_benv: "TE_ProofGoal benv = None"
                 using no_goal unfolding benv_def by simp
-              have mode_benv: "(IS_Ghost state = NotGhost \<longrightarrow> TE_FunctionGhost benv = NotGhost)"
-                using mode_fn unfolding benv_def by simp
+              have mode_benv: "(IS_Ghost ?bstate = NotGhost \<longrightarrow> TE_FunctionGhost benv = NotGhost)"
+                using mode_fn unfolding benv_def by (simp add: param_mode_def)
               from IH_stmts[OF sme_benv wf_benv ng_benv mode_benv body_ty]
               have "sound_statement_result benv bodyEnv' storeTyping
-                  (interp_statement_list d fuel state bodyStmts)" .
+                  (interp_statement_list d fuel ?bstate bodyStmts)" .
               \<comment> \<open>sound_statement_result ignores TE_ProofTopLevel of its first env, so we
                   may restate it with env in place of benv. \<close>
               hence body_sound: "sound_statement_result env bodyEnv' storeTyping
-                  (interp_statement_list d fuel state bodyStmts)"
+                  (interp_statement_list d fuel ?bstate bodyStmts)"
                 unfolding benv_def by simp
               from core_statement_list_type_fixed_eq[OF body_ty]
               have "tyenv_fixed_eq benv bodyEnv'" .
               hence fxeq_body: "tyenv_fixed_eq env bodyEnv'"
                 unfolding benv_def by simp
               show ?thesis
-              proof (cases "interp_statement_list d fuel state bodyStmts")
+              proof (cases "interp_statement_list d fuel ?bstate bodyStmts")
                 case (Inl body_err)
                 with body_sound have "sound_error_result body_err" by simp
                 moreover have "interp_statement d (Suc fuel) state
@@ -2193,7 +2195,7 @@ next
                     ext_body: "storeTyping_extends storeTyping bodyStoreTyping"
                     by auto
                   from body_eval Continue
-                  have body_list_eq: "interp_statement_list d fuel state bodyStmts
+                  have body_list_eq: "interp_statement_list d fuel ?bstate bodyStmts
                                       = Inr (Continue state1)" by simp
                   from static_parts_eqD(1)[OF interp_statement_list_static[OF body_list_eq]]
                   have globals_eq: "IS_Globals state1 = IS_Globals state" by simp
@@ -2278,7 +2280,7 @@ next
                     ext_body: "storeTyping_extends storeTyping bodyStoreTyping"
                     by blast
                   from body_eval Return
-                  have body_list_eq: "interp_statement_list d fuel state bodyStmts
+                  have body_list_eq: "interp_statement_list d fuel ?bstate bodyStmts
                                       = Inr (Return state1 retVal)" by simp
                   from static_parts_eqD(1)[OF interp_statement_list_static[OF body_list_eq]]
                   have globals_eq: "IS_Globals state1 = IS_Globals state" by simp

@@ -220,6 +220,13 @@ lemma static_parts_eq_restore_scope:
   shows "static_parts_eq state (restore_scope state state')"
   using assms by (simp add: static_parts_eq_def)
 
+(* The same, when the scope was entered in another mode (the body of a ghost
+   loop runs in Ghost mode). *)
+lemma static_parts_eq_restore_scope_mode:
+  assumes "static_parts_eq (state \<lparr> IS_Ghost := g \<rparr>) state'"
+  shows "static_parts_eq state (restore_scope state state')"
+  using assms by (simp add: static_parts_eq_def)
+
 lemma static_parts_eq_bind_mutable_local:
   "static_parts_eq state (bind_mutable_local varName val state)"
   by (simp add: static_parts_eq_def Let_def)
@@ -467,17 +474,17 @@ next
             note [simp] = dv
             from CoreStmt_While H cv CV_Bool True
             obtain bodyRes where
-              body: "interp_statement_list d fuel state bodyStmts = Inr bodyRes"
+              body: "interp_statement_list d fuel (raise_mode state g) bodyStmts = Inr bodyRes"
               by (auto split: sum.splits)
             from IH_stmt_list body
-            have body_eq: "static_parts_eq state (result_state bodyRes)" by blast
+            have body_eq: "static_parts_eq (raise_mode state g) (result_state bodyRes)" by blast
             show ?thesis
             proof (cases bodyRes)
               case (Continue state1)
               let ?rs = "restore_scope state state1"
-              from body_eq Continue have eq1: "static_parts_eq state state1" by simp
+              from body_eq Continue have eq1: "static_parts_eq (raise_mode state g) state1" by simp
               have eq_rs: "static_parts_eq state ?rs"
-                by (rule static_parts_eq_restore_scope[OF eq1])
+                by (rule static_parts_eq_restore_scope_mode[OF eq1])
               \<comment> \<open>The decreases-term was evaluated again after the body, and the
                   check passed. \<close>
               from CoreStmt_While H cv CV_Bool True body Continue
@@ -495,12 +502,12 @@ next
               with eq_rs show ?thesis by (rule static_parts_eq_trans)
             next
               case (Return state1 v)
-              from body_eq Return have eq1: "static_parts_eq state state1" by simp
+              from body_eq Return have eq1: "static_parts_eq (raise_mode state g) state1" by simp
               from CoreStmt_While H cv CV_Bool True body Return
               have res_eq: "res = Return (restore_scope state state1) v"
                 by simp
               show ?thesis
-                by (simp only: res_eq result_state.simps static_parts_eq_restore_scope[OF eq1])
+                by (simp only: res_eq result_state.simps static_parts_eq_restore_scope_mode[OF eq1])
             qed
           qed
         \<comment> \<open>Non-bool cond value: TypeError, contradicts H. \<close>

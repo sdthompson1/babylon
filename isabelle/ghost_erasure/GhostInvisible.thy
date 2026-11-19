@@ -782,6 +782,48 @@ proof -
   show ?thesis by (rule state_erased_restore_scope[OF rel rel1 fnsB len1])
 qed
 
+(* Related states stay related when both are put in another mode. *)
+lemma state_erased_set_ghost:
+  assumes "state_erased env emb full erased"
+  shows "state_erased env emb (full \<lparr> IS_Ghost := g \<rparr>) (erased \<lparr> IS_Ghost := g \<rparr>)"
+proof -
+  let ?f = "full \<lparr> IS_Ghost := g \<rparr>" and ?e = "erased \<lparr> IS_Ghost := g \<rparr>"
+  have 1: "heap_erased env emb ?f ?e = heap_erased env emb full erased"
+    by (simp add: heap_erased_def funs_erased_def store_erased_def)
+  have 2: "locals_erased env emb ?f ?e = locals_erased env emb full erased"
+    by (simp add: locals_erased_def)
+  have 3: "ghost_locals_separate env emb ?f = ghost_locals_separate env emb full"
+    by (simp add: ghost_locals_separate_def)
+  show ?thesis using assms by (simp add: state_erased_def 1 2 3)
+qed
+
+(* Leaving a scope whose body ran in another mode (the body of a ghost loop
+   runs in Ghost mode). The erased state does not move, so the relation
+   at the end of the body is with the erased state in the mode of the body;
+   restore_scope puts the mode of the starting state back. *)
+lemma ghost_scope_exit_mode:
+  assumes rel: "state_erased env emb full erased"
+    and bodyT: "core_statement_list_type (env \<lparr> TE_ProofTopLevel := False \<rparr>) g body
+                  = Some bodyEnv"
+    and body: "interp_statement_list d fuel (full \<lparr>IS_Ghost := gm\<rparr>) body
+                 = Inr (Continue state1)"
+    and rel1: "state_erased bodyEnv emb state1 (erased \<lparr>IS_Ghost := gm\<rparr>)"
+  shows "state_erased env emb (restore_scope full state1) erased"
+proof -
+  have "tyenv_fixed_eq (env \<lparr> TE_ProofTopLevel := False \<rparr>) bodyEnv"
+    by (rule core_statement_list_type_fixed_eq[OF bodyT])
+  then have fnsB: "TE_Functions bodyEnv = TE_Functions env"
+    by (simp add: tyenv_fixed_eq_def)
+  have len1: "length (IS_Store full) \<le> length (IS_Store state1)"
+    using frame_stepD(1)[OF interp_statement_list_frame[OF body]] by simp
+  let ?s1 = "state1 \<lparr>IS_Ghost := IS_Ghost erased\<rparr>"
+  from state_erased_set_ghost[OF rel1, of "IS_Ghost erased"]
+  have rel1': "state_erased bodyEnv emb ?s1 erased" by simp
+  have "state_erased env emb (restore_scope full ?s1) erased"
+    by (rule state_erased_restore_scope[OF rel rel1' fnsB]) (simp add: len1)
+  then show ?thesis by simp
+qed
+
 (* Both statements are proved together by induction on the fuel, at a fixed
    depth. Function calls need no induction of their own: ghost_call_invisible
    says all that is needed about them.
@@ -1207,11 +1249,19 @@ next
               dv: "eval_decreases (interp_term d fuel (full \<lparr>IS_Ghost := Ghost\<rparr>)) decr = Inr decrVal"
               by (auto split: sum.splits)
             note [simp] = dv
+            \<comment> \<open>The body of a ghost loop runs in Ghost mode. The erased state
+                does not move, but is related to the full state in that mode
+                when it is put in that mode too. \<close>
+            let ?fullG = "full \<lparr>IS_Ghost := Ghost\<rparr>"
+            let ?erasedG = "erased \<lparr>IS_Ghost := Ghost\<rparr>"
             from CoreStmt_While H cv CV_Bool True
             obtain bodyRes where
-              body: "interp_statement_list d fuel full bodyStmts = Inr bodyRes"
-              by (auto split: sum.splits)
-            note bodyIH = IH_list[OF fnB funs_eq fgB relB bodyT body]
+              body: "interp_statement_list d fuel ?fullG bodyStmts = Inr bodyRes"
+              by (auto simp: g_eq split: sum.splits)
+            have funsG: "IS_Functions ?fullG = funs" using funs_eq by simp
+            have relG: "state_erased (env \<lparr> TE_ProofTopLevel := False \<rparr>) emb ?fullG ?erasedG"
+              by (rule state_erased_set_ghost[OF relB])
+            note bodyIH = IH_list[OF fnB funsG fgB relG bodyT body]
             show ?thesis
             proof (cases bodyRes)
               case (Return state1 v)
@@ -1220,10 +1270,10 @@ next
               case (Continue state1)
               let ?rs = "restore_scope full state1"
               from bodyIH Continue
-              have rel1: "state_erased bodyEnv emb state1 erased"
+              have rel1: "state_erased bodyEnv emb state1 ?erasedG"
                 by simp
               have rel_rs: "state_erased env emb ?rs erased"
-                by (rule ghost_scope_exit[OF rel bodyT body[unfolded Continue] rel1])
+                by (rule ghost_scope_exit_mode[OF rel bodyT body[unfolded Continue] rel1])
               have funs_rs: "IS_Functions ?rs = funs"
                 using static_parts_eqD(2)[OF interp_statement_list_static[OF body]]
                       Continue funs_eq
@@ -1234,12 +1284,12 @@ next
               obtain decrVal' where
                 dv': "eval_decreases (interp_term d fuel (?rs \<lparr>IS_Ghost := Ghost\<rparr>)) decr = Inr decrVal'" and
                 de: "decreases_error decrVal decrVal' = None"
-                by (auto split: sum.splits option.splits)
+                by (auto simp: g_eq split: sum.splits option.splits)
               \<comment> \<open>The loop runs again from the restored state. \<close>
               from CoreStmt_While H cv CV_Bool True body Continue dv' de
               have rec_eq: "interp_statement d fuel ?rs
                                (CoreStmt_While g condTm invars decr bodyStmts) = Inr res"
-                by simp
+                by (simp add: g_eq)
               note T' = T[unfolded CoreStmt_While]
               show ?thesis
                 by (rule IH_stmt[OF fn_eq funs_rs fg rel_rs T' rec_eq])

@@ -974,10 +974,14 @@ next
             note [simp] = dv
             from CoreStmt_While H cv CV_Bool True
             obtain bodyRes where
-              body: "interp_statement_list d fuel state bodyStmts = Inr bodyRes"
+              body: "interp_statement_list d fuel (raise_mode state g) bodyStmts = Inr bodyRes"
               by (auto split: sum.splits)
+            \<comment> \<open>The body runs in the mode raised by the loop's flag; the mode of
+                a state has no part in frame_step. \<close>
             from IH_stmt_list body
-            have body_fs: "frame_step state (result_state bodyRes)" by blast
+            have "frame_step (raise_mode state g) (result_state bodyRes)" by blast
+            then have body_fs: "frame_step state (result_state bodyRes)"
+              by (simp add: frame_step_def)
             show ?thesis
             proof (cases bodyRes)
               case (Continue state1)

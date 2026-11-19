@@ -147,22 +147,8 @@ qed
 (* ========================================================================== *)
 
 (* Related states are in the same mode, and stay related when both are put in
-   another mode. A call statement does this to put the mode of its own state
-   back after the call. *)
-lemma state_erased_set_ghost:
-  assumes "state_erased env emb full erased"
-  shows "state_erased env emb (full \<lparr> IS_Ghost := g \<rparr>) (erased \<lparr> IS_Ghost := g \<rparr>)"
-proof -
-  let ?f = "full \<lparr> IS_Ghost := g \<rparr>" and ?e = "erased \<lparr> IS_Ghost := g \<rparr>"
-  have 1: "heap_erased env emb ?f ?e = heap_erased env emb full erased"
-    by (simp add: heap_erased_def funs_erased_def store_erased_def)
-  have 2: "locals_erased env emb ?f ?e = locals_erased env emb full erased"
-    by (simp add: locals_erased_def)
-  have 3: "ghost_locals_separate env emb ?f = ghost_locals_separate env emb full"
-    by (simp add: ghost_locals_separate_def)
-  show ?thesis using assms by (simp add: state_erased_def 1 2 3)
-qed
-
+   another mode (state_erased_set_ghost). A call statement does this to put the
+   mode of its own state back after the call. *)
 lemma state_erased_reset_ghost:
   assumes "state_erased env emb full erased"
     and "state_erased env emb' newFull newErased"
