@@ -686,8 +686,9 @@ lemma ghost_call_invisible:
     and ns: "newState = newState0 \<lparr>IS_Ghost := IS_Ghost full\<rparr>"
   shows "state_erased env emb newState erased"
 proof -
-  \<comment> \<open>The call is made in the mode g of the calling statement, which then puts
-      the mode of its own state back: newState is the state after that. \<close>
+  \<comment> \<open>The call is made in the mode g that the calling statement has raised its
+      state to; the statement then puts the mode of its own state back:
+      newState is the state after that. \<close>
   note cf0 = interp_function_call_frame[OF call]
   have cf: "IS_Locals newState = IS_Locals full"
            "IS_Refs newState = IS_Refs full"
@@ -841,7 +842,7 @@ next
         by (rule interp_statement_static[OF H])
       have gh: "ghost_locals_separate env emb full"
         using rel by (simp add: state_erased_def)
-      \<comment> \<open>A statement evaluates its own terms in the state with its mode set. \<close>
+      \<comment> \<open>A statement evaluates its own terms in the state with its mode raised. \<close>
       have ghg: "ghost_locals_separate env emb (full \<lparr>IS_Ghost := g'\<rparr>)" for g'
         using gh by (simp add: ghost_locals_separate_def)
       have agree': "fun_param_flags_agree (TE_Functions env) (IS_Functions full)"
@@ -864,7 +865,7 @@ next
         proof (cases vr)
           case Var
           from T CoreStmt_VarDecl Var have g_eq: "g = Ghost" by (auto split: if_splits)
-          have vpg [simp]: "value_position (full \<lparr>IS_Ghost := g\<rparr>) r = r" for r
+          have vpg [simp]: "value_position (raise_mode full g) r = r" for r
             using g_eq by simp
           from T CoreStmt_VarDecl Var g_eq
           have tlv: "TE_LocalVars env' = fmupd varName ty (TE_LocalVars env)"
@@ -872,7 +873,7 @@ next
             by (auto split: if_splits)
           note decl = ghost_decl_var_ghost[OF tlv tgl]
           from Var H CoreStmt_VarDecl obtain initVal where
-            iv: "interp_term d fuel (full \<lparr>IS_Ghost := g\<rparr>) initTm = Inr initVal"
+            iv: "interp_term d fuel (raise_mode full g) initTm = Inr initVal"
             by (auto split: sum.splits)
           from Var H[symmetric] CoreStmt_VarDecl g_eq iv have
             c: "is_continue res" and
@@ -909,7 +910,7 @@ next
                            \<and> fmlookup (IS_Refs full) baseName = None)")
             case True
             with Ref H CoreStmt_VarDecl base obtain val where
-              iv: "interp_term d fuel (full \<lparr>IS_Ghost := g\<rparr>) initTm = Inr val"
+              iv: "interp_term d fuel (raise_mode full g) initTm = Inr val"
               by (auto split: sum.splits)
             from Ref H[symmetric] CoreStmt_VarDecl base True iv have
               c: "is_continue res" and
@@ -929,10 +930,10 @@ next
           next
             case False
             with Ref H CoreStmt_VarDecl base obtain addrPath where
-              lv: "interp_writable_lvalue d fuel (full \<lparr>IS_Ghost := g\<rparr>) initTm = Inr addrPath"
+              lv: "interp_writable_lvalue d fuel (raise_mode full g) initTm = Inr addrPath"
               by (auto split: sum.splits)
             obtain addr path where ap: "addrPath = (addr, path)" by (cases addrPath)
-            from lv ap have wl: "interp_writable_lvalue d fuel (full \<lparr>IS_Ghost := g\<rparr>) initTm = Inr (addr, path)"
+            from lv ap have wl: "interp_writable_lvalue d fuel (raise_mode full g) initTm = Inr (addr, path)"
               by simp
             \<comment> \<open>The new ref points into the cell of a ghost variable. \<close>
             note sep = ghost_lvalue_addr_separate[OF ghg glv wl, simplified]
@@ -955,7 +956,7 @@ next
       next
         case (CoreStmt_VarDeclCall g varName varTy castOpt fnName argTys argTms)
         from T CoreStmt_VarDeclCall have g_eq: "g = Ghost" by (auto split: if_splits)
-        have vpg [simp]: "value_position (full \<lparr>IS_Ghost := g\<rparr>) r = r" for r
+        have vpg [simp]: "value_position (raise_mode full g) r = r" for r
           using g_eq by simp
         from T CoreStmt_VarDeclCall g_eq obtain retTy where
           callT: "core_impure_call_type env Ghost fnName argTys argTms = Some retTy"
@@ -967,7 +968,7 @@ next
         note decl = ghost_decl_var_ghost[OF tlv tgl]
         \<comment> \<open>Run the call (giving newState), apply the cast, then alloc and bind. \<close>
         from H CoreStmt_VarDeclCall obtain newState retVal where
-          call: "interp_function_call d fuel (full \<lparr>IS_Ghost := g\<rparr>) fnName argTys argTms = Inr (newState, retVal)"
+          call: "interp_function_call d fuel (raise_mode full g) fnName argTys argTms = Inr (newState, retVal)"
           by (auto split: sum.splits prod.splits)
         \<comment> \<open>The statement puts the mode of its own state back: call that state ns. \<close>
         define ns where "ns = newState \<lparr>IS_Ghost := IS_Ghost full\<rparr>"
@@ -1030,17 +1031,17 @@ next
       next
         case (CoreStmt_Assign g ty lhsLv rhsTm)
         from T CoreStmt_Assign have g_eq: "g = Ghost" by (auto split: if_splits)
-        have vpg [simp]: "value_position (full \<lparr>IS_Ghost := g\<rparr>) r = r" for r
+        have vpg [simp]: "value_position (raise_mode full g) r = r" for r
           using g_eq by simp
         from T CoreStmt_Assign g_eq
         have glv: "ghost_lvalue_ok env Ghost lhsLv" by (auto split: if_splits)
         from T CoreStmt_Assign have env'_eq: "env' = env"
           by (auto split: if_splits)
         from H CoreStmt_Assign obtain addr path where
-          wl: "interp_writable_lvalue d fuel (full \<lparr>IS_Ghost := g\<rparr>) lhsLv = Inr (addr, path)"
+          wl: "interp_writable_lvalue d fuel (raise_mode full g) lhsLv = Inr (addr, path)"
           by (auto split: sum.splits)
         from H CoreStmt_Assign wl obtain rhsVal where
-          rv: "interp_term d fuel (full \<lparr>IS_Ghost := g\<rparr>) rhsTm = Inr rhsVal"
+          rv: "interp_term d fuel (raise_mode full g) rhsTm = Inr rhsVal"
           by (auto split: sum.splits)
         from H CoreStmt_Assign g_eq wl rv obtain newVal where
           upd: "update_value_at_path (IS_Store full ! addr) path rhsVal = Inr newVal"
@@ -1062,7 +1063,7 @@ next
       next
         case (CoreStmt_AssignCall g lhsLv castOpt fnName argTys argTms)
         from T CoreStmt_AssignCall have g_eq: "g = Ghost" by (auto split: if_splits)
-        have vpg [simp]: "value_position (full \<lparr>IS_Ghost := g\<rparr>) r = r" for r
+        have vpg [simp]: "value_position (raise_mode full g) r = r" for r
           using g_eq by simp
         from T CoreStmt_AssignCall g_eq
         have glv: "ghost_lvalue_ok env Ghost lhsLv" by (auto split: if_splits)
@@ -1073,7 +1074,7 @@ next
           by (auto split: if_splits option.splits)
         \<comment> \<open>Run the call (newState), apply cast, resolve lhs in newState, store. \<close>
         from H CoreStmt_AssignCall obtain newState retVal where
-          call: "interp_function_call d fuel (full \<lparr>IS_Ghost := g\<rparr>) fnName argTys argTms = Inr (newState, retVal)"
+          call: "interp_function_call d fuel (raise_mode full g) fnName argTys argTms = Inr (newState, retVal)"
           by (auto split: sum.splits prod.splits)
         \<comment> \<open>The statement puts the mode of its own state back at the end: call the
             post-call state with that mode ns. \<close>
@@ -1116,10 +1117,10 @@ next
         from T CoreStmt_Swap have env'_eq: "env' = env"
           by (auto split: if_splits option.splits)
         from H CoreStmt_Swap obtain lhsLv where
-          lhs: "interp_writable_lvalue d fuel (full \<lparr>IS_Ghost := g\<rparr>) lhsTm = Inr lhsLv"
+          lhs: "interp_writable_lvalue d fuel (raise_mode full g) lhsTm = Inr lhsLv"
           by (auto split: sum.splits)
         with H CoreStmt_Swap obtain rhsLv where
-          rhs: "interp_writable_lvalue d fuel (full \<lparr>IS_Ghost := g\<rparr>) rhsTm = Inr rhsLv"
+          rhs: "interp_writable_lvalue d fuel (raise_mode full g) rhsTm = Inr rhsLv"
           by (auto split: sum.splits)
         with H CoreStmt_Swap lhs obtain newState where
           sw: "perform_swap full lhsLv rhsLv = Inr newState"
@@ -1174,7 +1175,7 @@ next
         from T CoreStmt_While have env'_eq: "env' = env"
           by (auto split: if_splits option.splits CoreType.splits)
         from T CoreStmt_While have g_eq: "g = Ghost" by (auto split: if_splits)
-        have vpg [simp]: "value_position (full \<lparr>IS_Ghost := g\<rparr>) r = r" for r
+        have vpg [simp]: "value_position (raise_mode full g) r = r" for r
           using g_eq by simp
         from T CoreStmt_While g_eq obtain bodyEnv where
           bodyT: "core_statement_list_type (env \<lparr> TE_ProofTopLevel := False \<rparr>) Ghost bodyStmts
@@ -1187,7 +1188,7 @@ next
           by (auto split: sum.splits option.splits)
         note [simp] = iv ie
         from H CoreStmt_While obtain condVal where
-          cv: "interp_term d fuel (full \<lparr>IS_Ghost := g\<rparr>) condTm = Inr condVal"
+          cv: "interp_term d fuel (raise_mode full g) condTm = Inr condVal"
           by (auto split: sum.splits)
         show ?thesis
         proof (cases condVal)
@@ -1252,7 +1253,7 @@ next
           by (auto split: if_splits option.splits)
         from T CoreStmt_Match have g_eq: "g = Ghost" by (auto split: if_splits)
         from H CoreStmt_Match obtain scrutVal where
-          sv: "interp_term d fuel (full \<lparr>IS_Ghost := g\<rparr>) scrutTm = Inr scrutVal"
+          sv: "interp_term d fuel (raise_mode full g) scrutTm = Inr scrutVal"
           by (auto split: sum.splits)
         from H CoreStmt_Match sv obtain armStmts where
           arm: "find_matching_arm scrutVal arms = Inr armStmts"

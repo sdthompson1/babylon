@@ -200,8 +200,8 @@ section \<open>The simulation theorems\<close>
 
    The state is in executable mode (IS_Ghost full = NotGhost), and the
    statements are those of a function that is not ghost (TE_FunctionGhost env
-   = NotGhost): the proof uses type soundness, which asks that the mode of
-   the state be the mode in which the code is typed. The state built from a
+   = NotGhost): the proof uses type soundness, which asks that a state in
+   executable mode run code that is typed as executable. The state built from a
    module is in executable mode (make_interp_state_IS_Ghost). *)
 theorem match_compile_simulation:
   fixes full :: "'w InterpState"

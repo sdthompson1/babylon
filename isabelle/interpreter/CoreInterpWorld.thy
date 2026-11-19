@@ -306,8 +306,8 @@ next
         proof (cases vr)
           case Var
           from Var H CoreStmt_VarDecl obtain initVal where
-            vp: "value_position (state \<lparr>IS_Ghost := gd\<rparr>)
-                   (interp_term d fuel (state \<lparr>IS_Ghost := gd\<rparr>) initTm) = Inr initVal"
+            vp: "value_position (raise_mode state gd)
+                   (interp_term d fuel (raise_mode state gd) initTm) = Inr initVal"
             by (auto split: sum.splits)
           note iv = value_position_InrD[OF vp]
           note cc = vp[unfolded iv]
@@ -325,14 +325,14 @@ next
                            \<and> fmlookup (IS_Refs state) baseName = None)")
             case True
             with Ref H CoreStmt_VarDecl base obtain val where
-              iv: "interp_term d fuel (state \<lparr>IS_Ghost := gd\<rparr>) initTm = Inr val"
+              iv: "interp_term d fuel (raise_mode state gd) initTm = Inr val"
               by (auto split: sum.splits)
             from Ref H[symmetric] CoreStmt_VarDecl base True iv show ?thesis
               by (simp add: Let_def)
           next
             case False
             with Ref H CoreStmt_VarDecl base obtain addrPath where
-              lv: "interp_writable_lvalue d fuel (state \<lparr>IS_Ghost := gd\<rparr>) initTm = Inr addrPath"
+              lv: "interp_writable_lvalue d fuel (raise_mode state gd) initTm = Inr addrPath"
               by (auto split: sum.splits)
             from Ref H[symmetric] CoreStmt_VarDecl base False lv show ?thesis
               by simp
@@ -352,12 +352,12 @@ next
           by auto
         \<comment> \<open>Run the call (giving newState), apply the cast, then alloc and bind. \<close>
         from H CoreStmt_VarDeclCall obtain newState retVal where
-          call: "interp_function_call d fuel (state \<lparr>IS_Ghost := gd\<rparr>) fnName argTys argTms = Inr (newState, retVal)"
+          call: "interp_function_call d fuel (raise_mode state gd) fnName argTys argTms = Inr (newState, retVal)"
           by (auto split: sum.splits prod.splits)
         have w1: "IS_World newState = IS_World state"
           using IH_call[OF _ info np call] funs_eq by simp
         from H CoreStmt_VarDeclCall call obtain initVal where
-          vp0: "value_position (state \<lparr>IS_Ghost := gd\<rparr>) (apply_cast_opt castOpt retVal) = Inr initVal"
+          vp0: "value_position (raise_mode state gd) (apply_cast_opt castOpt retVal) = Inr initVal"
           by (auto split: sum.splits)
         note cast = value_position_InrD[OF vp0] vp0[unfolded value_position_InrD[OF vp0]]
         from H[symmetric] CoreStmt_VarDeclCall call cast
@@ -384,11 +384,11 @@ next
       next
         case (CoreStmt_Assign ga ty lhsLv rhsTm)
         from H CoreStmt_Assign obtain addr path where
-          wl: "interp_writable_lvalue d fuel (state \<lparr>IS_Ghost := ga\<rparr>) lhsLv = Inr (addr, path)"
+          wl: "interp_writable_lvalue d fuel (raise_mode state ga) lhsLv = Inr (addr, path)"
           by (auto split: sum.splits)
         from H CoreStmt_Assign wl obtain rhsVal where
-          vp: "value_position (state \<lparr>IS_Ghost := ga\<rparr>)
-                 (interp_term d fuel (state \<lparr>IS_Ghost := ga\<rparr>) rhsTm) = Inr rhsVal"
+          vp: "value_position (raise_mode state ga)
+                 (interp_term d fuel (raise_mode state ga) rhsTm) = Inr rhsVal"
           by (auto split: sum.splits)
         note rv = value_position_InrD[OF vp]
         note cc = vp[unfolded rv]
@@ -411,12 +411,12 @@ next
           by auto
         \<comment> \<open>Run the call (newState), apply cast, resolve lhs in newState, store. \<close>
         from H CoreStmt_AssignCall obtain newState retVal where
-          call: "interp_function_call d fuel (state \<lparr>IS_Ghost := ga\<rparr>) fnName argTys argTms = Inr (newState, retVal)"
+          call: "interp_function_call d fuel (raise_mode state ga) fnName argTys argTms = Inr (newState, retVal)"
           by (auto split: sum.splits prod.splits)
         have w1: "IS_World newState = IS_World state"
           using IH_call[OF _ info np call] funs_eq by simp
         from H CoreStmt_AssignCall call obtain rhsVal where
-          vp0: "value_position (state \<lparr>IS_Ghost := ga\<rparr>) (apply_cast_opt castOpt retVal) = Inr rhsVal"
+          vp0: "value_position (raise_mode state ga) (apply_cast_opt castOpt retVal) = Inr rhsVal"
           by (auto split: sum.splits)
         note cast = value_position_InrD[OF vp0] vp0[unfolded value_position_InrD[OF vp0]]
         from H CoreStmt_AssignCall call cast obtain addr path where
@@ -432,10 +432,10 @@ next
       next
         case (CoreStmt_Swap gs lhsTm rhsTm)
         from H CoreStmt_Swap obtain lhsLv where
-          lhs: "interp_writable_lvalue d fuel (state \<lparr>IS_Ghost := gs\<rparr>) lhsTm = Inr lhsLv"
+          lhs: "interp_writable_lvalue d fuel (raise_mode state gs) lhsTm = Inr lhsLv"
           by (auto split: sum.splits)
         with H CoreStmt_Swap obtain rhsLv where
-          rhs: "interp_writable_lvalue d fuel (state \<lparr>IS_Ghost := gs\<rparr>) rhsTm = Inr rhsLv"
+          rhs: "interp_writable_lvalue d fuel (raise_mode state gs) rhsTm = Inr rhsLv"
           by (auto split: sum.splits)
         with H CoreStmt_Swap lhs obtain newState where
           sw: "perform_swap state lhsLv rhsLv = Inr newState"
@@ -487,8 +487,8 @@ next
           by (auto split: sum.splits option.splits)
         note [simp] = iv ie
         from H CoreStmt_While obtain condVal where
-          vp: "value_position (state \<lparr>IS_Ghost := gw\<rparr>)
-                 (interp_term d fuel (state \<lparr>IS_Ghost := gw\<rparr>) condTm) = Inr condVal"
+          vp: "value_position (raise_mode state gw)
+                 (interp_term d fuel (raise_mode state gw) condTm) = Inr condVal"
           by (auto split: sum.splits)
         note cv = value_position_InrD[OF vp] vp[unfolded value_position_InrD[OF vp]]
         show ?thesis
@@ -552,7 +552,7 @@ next
         have okB: "gm = Ghost \<or> \<not> TE_FunctionImpure (env \<lparr> TE_ProofTopLevel := False \<rparr>)"
           using ok gm_ok by auto
         from H CoreStmt_Match obtain scrutVal where
-          sv: "interp_term d fuel (state \<lparr>IS_Ghost := gm\<rparr>) scrutTm = Inr scrutVal"
+          sv: "interp_term d fuel (raise_mode state gm) scrutTm = Inr scrutVal"
           by (auto split: sum.splits)
         from H CoreStmt_Match sv obtain armStmts where
           arm: "find_matching_arm scrutVal arms = Inr armStmts"
@@ -679,8 +679,7 @@ next
                     (Inr (state \<lparr> IS_Locals := fmempty, IS_Refs := fmempty,
                                   IS_ConstLocals := {||},
                                   IS_TyArgs := fmap_of_list (zip (IF_TyArgs f)
-                                                 (map (apply_subst (IS_TyArgs state)) argTys)),
-                                  IS_Ghost := IF_Ghost f \<rparr>))
+                                                 (map (apply_subst (IS_TyArgs state)) argTys)) \<rparr>))
                   = Inr preCallState" and
         body: "call_body (interp_statement_list d fuel) state f
                  (map_args (interp_writable_lvalue d fuel) state (IF_Args f) argTms)

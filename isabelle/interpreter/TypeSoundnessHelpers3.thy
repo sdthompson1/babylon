@@ -2004,7 +2004,7 @@ lemma type_soundness_function_call:
                 state_matches_env state0 env0 storeTyping0 \<Longrightarrow>
                 tyenv_well_formed env0 \<Longrightarrow>
                 TE_ProofGoal env0 = None \<Longrightarrow>
-                IS_Ghost state0 = TE_FunctionGhost env0 \<Longrightarrow>
+                (IS_Ghost state0 = NotGhost \<longrightarrow> TE_FunctionGhost env0 = NotGhost) \<Longrightarrow>
                 core_statement_list_type env0 ghost0 stmts0 = Some env0' \<Longrightarrow>
                   sound_statement_result env0 env0' storeTyping0 (interp_statement_list d fuel state0 stmts0)"
     and IH_conds: "\<And>env' (state' :: 'w InterpState) storeTyping' tms'.
@@ -2122,14 +2122,12 @@ proof -
   let ?argTuples = "zip (IF_Args f) (zip ?refResults ?valResults)"
   let ?clearedState = "state \<lparr> IS_Locals := fmempty, IS_Refs := fmempty,
                                 IS_ConstLocals := {||},
-                                IS_TyArgs := tySubst,
-                                IS_Ghost := IF_Ghost f \<rparr>"
+                                IS_TyArgs := tySubst \<rparr>"
   \<comment> \<open>The state in which the contract is checked (ghost mode). \<close>
   let ?ghostCleared = "state \<lparr> IS_Locals := fmempty, IS_Refs := fmempty,
                                 IS_ConstLocals := {||},
                                 IS_TyArgs := tySubst,
                                 IS_Ghost := Ghost \<rparr>"
-  have gc_eq: "?clearedState \<lparr> IS_Ghost := Ghost \<rparr> = ?ghostCleared" by simp
 
   \<comment> \<open>The interpreter reduces to a fold, then the body inside the contract
       checks. \<close>
@@ -2199,10 +2197,13 @@ proof -
   have len_valResults: "length ?valResults = length (FI_TmArgs funInfo)"
     and len_refResults: "length ?refResults = length (FI_TmArgs funInfo)"
     using len_argTms_fi len_fi by simp_all
+  \<comment> \<open>The cleared state keeps the mode of the call. \<close>
+  have cleared_mode: "?clearedState \<lparr> IS_Ghost := IS_Ghost state \<rparr> = ?clearedState"
+    by (rule IS_Ghost_update_same) simp
   note arg_sound = fold_process_one_arg_sound
                      [OF state_env wf_env fn_lookup fi_match
                          ty_len ty_wk vals_sound lvals_sound len_valResults len_refResults,
-                      where ?gh0.0 = "IF_Ghost f"]
+                      where ?gh0.0 = "IS_Ghost state", folded tySubst_def, unfolded cleared_mode]
   \<comment> \<open>arg_sound :: sound_arg_processing_result env funInfo tySubst storeTyping
                    (fold process_one_arg ?argTuples (Inr ?clearedState))
       where the lemma's tySubst matches our local tySubst by tySubst_def. \<close>
@@ -2252,15 +2253,16 @@ proof -
                     = Some bodyEnv'"
         unfolding fun_info_matches_interp_fun_def by auto
 
-      \<comment> \<open>Apply IH(5), at the function's own mode, to get sound_statement_result
+      \<comment> \<open>Apply IH(5) to get sound_statement_result
           on the body. A function body is typechecked with no proof goal. \<close>
       have no_goal_body:
         "TE_ProofGoal (body_env_for env (map fst (IF_Args f)) funInfo) = None"
         by (simp add: body_env_for_def)
-      \<comment> \<open>The body runs in the mode of the function. \<close>
-      have mode_body: "IS_Ghost preCallState
-                         = TE_FunctionGhost (body_env_for env (map fst (IF_Args f)) funInfo)"
-        using fold_process_one_arg_preserves_globals_funs[OF fold_Inr] fn_ghost_eq
+      \<comment> \<open>The body runs in the mode of the call, and executable code does not
+          call a ghost function. \<close>
+      have mode_body: "IS_Ghost preCallState = NotGhost
+                         \<longrightarrow> TE_FunctionGhost (body_env_for env (map fst (IF_Args f)) funInfo) = NotGhost"
+        using fold_process_one_arg_preserves_globals_funs[OF fold_Inr] callee_mode
         by (simp add: body_env_for_def)
       from IH_stmts[OF sme_body wf_bodyEnv no_goal_body mode_body body_ty]
       have body_sound: "sound_statement_result (body_env_for env (map fst (IF_Args f)) funInfo) bodyEnv'
@@ -2304,10 +2306,10 @@ proof -
             and ext_post: "storeTyping_extends bodyStoreTyping postStoreTyping"
             by auto
 
-          \<comment> \<open>The check on the returned value (R4: a non-ghost function must not
-              return an allocated value) cannot give a TypeError. \<close>
+          \<comment> \<open>The check on the returned value (R4: a function called by executable
+              code must not return an allocated value) cannot give a TypeError. \<close>
           show ?thesis
-          proof (cases rule: value_position_Inr_cases[of "state \<lparr> IS_Ghost := IF_Ghost f \<rparr>" retVal])
+          proof (cases rule: value_position_Inr_cases[of state retVal])
             case error
             \<comment> \<open>The function returned an allocated value: a RuntimeError. \<close>
             from body_babylon body_Inr Return error
@@ -2991,7 +2993,7 @@ proof -
         "call_body (interp_statement_list d fuel) state f?refResults ?valResults preCallState
            = (case apply_ref_updates ?stateW ?refs refUpdates of
                 Inr finalState \<Rightarrow>
-                  (case value_position (state \<lparr> IS_Ghost := IF_Ghost f \<rparr>) (Inr retVal) of
+                  (case value_position state (Inr retVal) of
                      Inl err \<Rightarrow> Inl err
                    | Inr _ \<Rightarrow> Inr (finalState, retVal))
               | Inl err \<Rightarrow> Inl err)"
@@ -3041,7 +3043,7 @@ proof -
             by auto
         \<comment> \<open>The check on the returned value (R4) passes, or gives a RuntimeError. \<close>
         show ?thesis
-        proof (cases rule: value_position_Inr_cases[of "state \<lparr> IS_Ghost := IF_Ghost f \<rparr>" retVal])
+        proof (cases rule: value_position_Inr_cases[of state retVal])
           case ok
           with witness interp_result Inr show ?thesis by simp
         next
@@ -3115,7 +3117,7 @@ proof -
                     (contract_pre_args (IF_Args f) ?refResults ?valResults)
                     (?clearedState \<lparr> IS_Ghost := Ghost \<rparr>)
                   \<noteq> Some TypeError"
-      unfolding pre_args_eq gc_eq
+      unfolding pre_args_eq
     proof (rule check_conditions_sound[where names = "contract_arg_names ?n" and info = funInfo
                                          and tySubst = tySubst and storeTyping = storeTyping])
       show "sound_arg_processing_result env (contract_arg_names ?n) funInfo tySubst storeTyping

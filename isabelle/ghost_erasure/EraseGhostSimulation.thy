@@ -38,9 +38,10 @@ begin
    arguments get, because a call evaluates each argument with the same fuel.
 
    The two states are in the same mode (IS_Ghost, part of state_erased). The
-   erased program sets the mode where the full program does: a statement that
-   erasure keeps has the same ghost flag, a function that is not ghost keeps
-   its IF_Ghost, and the parameters that erasure keeps are not ghost, so their
+   erased program raises the mode where the full program does: a statement
+   that erasure keeps has the same ghost flag (NotGhost, so it does not raise
+   the mode), the body of a function runs in the mode of the call in both
+   runs, and the parameters that erasure keeps are not ghost, so their
    arguments are evaluated in the mode of the call in both runs. Nothing is
    assumed about which mode the states are in.
 
@@ -146,8 +147,8 @@ qed
 (* ========================================================================== *)
 
 (* Related states are in the same mode, and stay related when both are put in
-   another mode. A statement does this to evaluate its own terms, and a call
-   statement to put its own mode back after the call. *)
+   another mode. A call statement does this to put the mode of its own state
+   back after the call. *)
 lemma state_erased_set_ghost:
   assumes "state_erased env emb full erased"
   shows "state_erased env emb (full \<lparr> IS_Ghost := g \<rparr>) (erased \<lparr> IS_Ghost := g \<rparr>)"
@@ -726,11 +727,11 @@ next
       note D = state_erasedD[OF rel]
       note sub = IH_term[OF fn_eq funs_eq rel]
       note lvs = IH_lv[OF fn_eq funs_eq rel]
-      \<comment> \<open>A statement that is not ghost evaluates its own terms in executable
-          mode, in both states. \<close>
-      let ?fX = "full \<lparr> IS_Ghost := NotGhost \<rparr>"
-      let ?eX = "erased \<lparr> IS_Ghost := NotGhost \<rparr>"
-      have relX: "state_erased env emb ?fX ?eX" by (rule state_erased_set_ghost[OF rel])
+      \<comment> \<open>A statement that is not ghost does not raise the mode: it evaluates its
+          own terms in the state as it is, in both runs. \<close>
+      let ?fX = "full"
+      let ?eX = "erased"
+      note relX = rel
       \<comment> \<open>The check on a value position is the same in both. \<close>
       note vpX = state_erased_value_position[OF relX]
       have funsX: "IS_Functions ?fX = funs" using funs_eq by simp
@@ -1380,7 +1381,7 @@ next
             body: "interp_statement_list d fuel full armStmts = Inr bodyRes"
             by (auto split: sum.splits)
           have res_eq: "res = scope_result full bodyRes"
-            using H[unfolded CoreStmt_Match interp_Match_scope_result[OF sv arm body]]
+            using H[unfolded CoreStmt_Match interp_Match_scope_result_NotGhost[OF sv arm body]]
             by simp
           \<comment> \<open>The erased Match chooses the erasure of the same arm. \<close>
           note svE = subX[OF sW sv]
@@ -1393,7 +1394,7 @@ next
             by blast
           have HE: "interp_statement d (Suc fuel) erased stmt'
                       = Inr (scope_result erased bodyResE)"
-            unfolding stmt'_eq by (rule interp_Match_scope_result[OF svE armE bodyE])
+            unfolding stmt'_eq by (rule interp_Match_scope_result_NotGhost[OF svE armE bodyE])
           have re: "result_erased env' emb res (scope_result erased bodyResE)"
             unfolding env'_eq res_eq by (rule scope_body_erased[OF rel armT body bre])
           from HE re show ?thesis by blast
@@ -1585,8 +1586,7 @@ next
                    (Inr (full \<lparr> IS_Locals := fmempty, IS_Refs := fmempty,
                                 IS_ConstLocals := {||},
                                 IS_TyArgs := fmap_of_list (zip (IF_TyArgs f)
-                                               (map (apply_subst (IS_TyArgs full)) argTys)),
-                                IS_Ghost := IF_Ghost f \<rparr>))
+                                               (map (apply_subst (IS_TyArgs full)) argTys)) \<rparr>))
                  = Inr preF" and
         bodyF0: "call_body (interp_statement_list d fuel) full f
                    (map_args (interp_writable_lvalue d fuel) full (IF_Args f) argTms)
@@ -1612,11 +1612,9 @@ next
       let ?tyArgs = "fmap_of_list (zip (IF_TyArgs f)
                                        (map (apply_subst (IS_TyArgs full)) argTys))"
       let ?clearedF = "full \<lparr> IS_Locals := fmempty, IS_Refs := fmempty,
-                              IS_ConstLocals := {||}, IS_TyArgs := ?tyArgs,
-                              IS_Ghost := IF_Ghost f \<rparr>"
+                              IS_ConstLocals := {||}, IS_TyArgs := ?tyArgs \<rparr>"
       let ?clearedE = "erased \<lparr> IS_Locals := fmempty, IS_Refs := fmempty,
-                                IS_ConstLocals := {||}, IS_TyArgs := ?tyArgs,
-                                IS_Ghost := IF_Ghost f \<rparr>"
+                                IS_ConstLocals := {||}, IS_TyArgs := ?tyArgs \<rparr>"
 
       \<comment> \<open>The function in the state, against its signature: the same Var/Ref
           flags, and distinct parameter names. The ghost flags of the
@@ -1931,30 +1929,30 @@ next
         next
           case (Return postF bodyRetVal)
           \<comment> \<open>The check on the returned value (R4) passed in the full run; it
-              passes in the erased run too, since the erased function has the
-              same ghost flag and the callers' states have the same allocation
-              oracle. \<close>
-          have cc: "value_position (full \<lparr>IS_Ghost := IF_Ghost f\<rparr>) (Inr bodyRetVal)
+              passes in the erased run too, since the callers' states have the
+              same mode and the same allocation oracle. \<close>
+          have cc: "value_position full (Inr bodyRetVal)
                       = Inr bodyRetVal"
           proof (cases rule: value_position_Inr_cases
-                               [of "full \<lparr>IS_Ghost := IF_Ghost f\<rparr>" bodyRetVal])
+                               [of full bodyRetVal])
             case ok
             then show ?thesis .
           next
             case error
             with bodyF Inl bodyEval Return show ?thesis by (simp add: call_body_def)
           qed
-          have ccE: "value_position (erased \<lparr>IS_Ghost := IF_Ghost f\<rparr>) (Inr bodyRetVal)
+          have ccE: "value_position erased (Inr bodyRetVal)
                        = Inr bodyRetVal"
             using cc
-            by (simp add: state_erased_value_position(1)[OF state_erased_set_ghost[OF rel]])
+            by (simp add: state_erased_value_position(1)[OF rel])
           from bodyF Inl bodyEval Return cc
           have newFull_eq: "newFull = restore_scope full postF"
             and ret_eq: "retVal = bodyRetVal"
             by (simp_all add: call_body_def)
 
-          \<comment> \<open>The body is well-typed in the mode of the callee, which is
-              NotGhost, so its erasure runs in the erased callee frame. \<close>
+          \<comment> \<open>The body is well-typed in the mode of the callee's signature,
+              which is NotGhost, so its erasure runs in the erased callee
+              frame. (The body runs in the mode of the call, in both runs.) \<close>
           from bodies infoG f_lookup' Inl
           have "core_statement_list_type ?envB (FI_Ghost info) bodyStmts \<noteq> None"
             unfolding fun_bodies_typed_def by blast
@@ -2025,20 +2023,20 @@ next
              (simp_all add: call_body_def Let_def split: sum.splits)
         \<comment> \<open>The check on the returned value (R4) passed in the full run; it
             passes in the erased run too. \<close>
-        have ccX: "value_position (full \<lparr>IS_Ghost := IF_Ghost f\<rparr>) (Inr externRetVal)
+        have ccX: "value_position full (Inr externRetVal)
                      = Inr externRetVal"
         proof (cases rule: value_position_Inr_cases
-                             [of "full \<lparr>IS_Ghost := IF_Ghost f\<rparr>" externRetVal])
+                             [of full externRetVal])
           case ok
           then show ?thesis .
         next
           case error
           with bodyF Inr ext_eq final_eq show ?thesis by (simp add: call_body_def Let_def)
         qed
-        have ccXE: "value_position (erased \<lparr>IS_Ghost := IF_Ghost f\<rparr>) (Inr externRetVal)
+        have ccXE: "value_position erased (Inr externRetVal)
                       = Inr externRetVal"
           using ccX
-          by (simp add: state_erased_value_position(1)[OF state_erased_set_ghost[OF rel]])
+          by (simp add: state_erased_value_position(1)[OF rel])
 
         \<comment> \<open>Every argument has a value in the full state. \<close>
         have lenA: "length (IF_Args f) = length ?refsF" using len_eq by simp

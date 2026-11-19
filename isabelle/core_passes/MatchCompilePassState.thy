@@ -527,14 +527,14 @@ next
   from MT_Test.IH[OF arm_in t'_in t'_eval MT_Test.prems(2)] obtain f1 where
     f1: "interp_statement_list d f1 s (match_tree_to_statements g t')
            = Inr (case t' of MT_Leaf _ \<Rightarrow> r | MT_Test _ _ \<Rightarrow> scope_result s r)" by blast
-  \<comment> \<open>The match evaluates its scrutinee in its own mode, which makes no
-      difference to the value of a variable with projections.\<close>
-  from sc_eval have "eval_match_scrut (var_env (s \<lparr> IS_Ghost := g \<rparr>)) sc = Some w" by simp
+  \<comment> \<open>The match evaluates its scrutinee in the mode raised by its flag, which
+      makes no difference to the value of a variable with projections.\<close>
+  from sc_eval have "eval_match_scrut (var_env (raise_mode s g)) sc = Some w" by simp
   from eval_match_scrut_interp[OF this] obtain n where
-    n: "interp_term d n (s \<lparr> IS_Ghost := g \<rparr>) sc = Inr w" by blast
+    n: "interp_term d n (raise_mode s g) sc = Inr w" by blast
   let ?F = "max f1 n"
   let ?r' = "case t' of MT_Leaf _ \<Rightarrow> r | MT_Test _ _ \<Rightarrow> scope_result s r"
-  have sc': "interp_term d ?F (s \<lparr> IS_Ghost := g \<rparr>) sc = Inr w"
+  have sc': "interp_term d ?F (raise_mode s g) sc = Inr w"
     by (rule interp_term_Inr_more_fuel[OF n]) simp
   have t'': "interp_statement_list d ?F s (match_tree_to_statements g t') = Inr ?r'"
     by (rule interp_statement_list_Inr_more_fuel[OF f1]) simp

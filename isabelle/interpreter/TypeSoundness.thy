@@ -15,9 +15,11 @@ begin
    The mode of the state (IS_Ghost) has to fit the typing:
     - a term, a list of terms or an lvalue is evaluated in a state whose mode
       is the mode in which it is typed;
-    - a statement (typed in any mode) is run in a state whose mode is that of
-      the enclosing function, TE_FunctionGhost env (the interpreter sets the
-      mode itself for the terms of a statement that has a ghost flag);
+    - a statement (typed in any mode) is run in a state that is in NotGhost
+      mode only if the enclosing function is not ghost (TE_FunctionGhost env).
+      The two modes need not be equal: a function that is not ghost runs in
+      Ghost mode when ghost code calls it. (The interpreter raises the mode
+      itself for the terms of a statement that has a ghost flag.)
     - a function call is made in a state of mode `ghost`, each argument being
       typed in the mode of its parameter (param_mode ghost g), and the function
       called is not ghost if `ghost` is NotGhost.
@@ -48,11 +50,11 @@ theorem type_soundness:
       sound_lvalue_result state env storeTyping ty (interp_writable_lvalue d fuel state tm)"
   and interp_statement_sound:
     "core_statement_type env ghost stmt = Some env' \<and> TE_ProofGoal env = None
-       \<and> IS_Ghost state = TE_FunctionGhost env \<longrightarrow>
+       \<and> (IS_Ghost state = NotGhost \<longrightarrow> TE_FunctionGhost env = NotGhost) \<longrightarrow>
       sound_statement_result env env' storeTyping (interp_statement d fuel state stmt)"
   and interp_statement_list_sound:
     "core_statement_list_type env ghost stmts = Some env' \<and> TE_ProofGoal env = None
-       \<and> IS_Ghost state = TE_FunctionGhost env \<longrightarrow>
+       \<and> (IS_Ghost state = NotGhost \<longrightarrow> TE_FunctionGhost env = NotGhost) \<longrightarrow>
       sound_statement_result env env' storeTyping (interp_statement_list d fuel state stmts)"
   and interp_function_call_sound:
     "\<lbrakk> fmlookup (TE_Functions env) fnName = Some funInfo;
@@ -90,11 +92,11 @@ proof -
       sound_lvalue_result state env storeTyping ty (interp_writable_lvalue d fuel state tm)"
     using at_d(3) by blast
   show "core_statement_type env ghost stmt = Some env' \<and> TE_ProofGoal env = None
-       \<and> IS_Ghost state = TE_FunctionGhost env \<longrightarrow>
+       \<and> (IS_Ghost state = NotGhost \<longrightarrow> TE_FunctionGhost env = NotGhost) \<longrightarrow>
       sound_statement_result env env' storeTyping (interp_statement d fuel state stmt)"
     by (rule at_d(4))
   show "core_statement_list_type env ghost stmts = Some env' \<and> TE_ProofGoal env = None
-       \<and> IS_Ghost state = TE_FunctionGhost env \<longrightarrow>
+       \<and> (IS_Ghost state = NotGhost \<longrightarrow> TE_FunctionGhost env = NotGhost) \<longrightarrow>
       sound_statement_result env env' storeTyping (interp_statement_list d fuel state stmts)"
     by (rule at_d(5))
   show "\<lbrakk> fmlookup (TE_Functions env) fnName = Some funInfo;

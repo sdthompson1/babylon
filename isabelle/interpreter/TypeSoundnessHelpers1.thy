@@ -98,7 +98,8 @@ fun sound_function_call_result :: "'w InterpState \<Rightarrow> CoreTyEnv \<Righ
      \<and> value_has_type env retVal (apply_subst (IS_TyArgs state) retTy))"
 
 (* A call made in another mode of the same state: the result is sound for the
-   state itself. (A call statement makes its call in the statement's mode.) *)
+   state itself. (A call statement makes its call in the mode raised by its
+   flag.) *)
 lemma sound_function_call_result_IS_Ghost [simp]:
   "sound_function_call_result (state \<lparr> IS_Ghost := g \<rparr>) env storeTyping retTy r
      = sound_function_call_result state env storeTyping retTy r"

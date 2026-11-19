@@ -170,8 +170,7 @@ proof (rule call_simI)
                          (map_args (interp_term d fuel) full (IF_Args f) argTms)))
                (Inr (full \<lparr> IS_Locals := fmempty, IS_Refs := fmempty, IS_ConstLocals := {||},
                             IS_TyArgs := fmap_of_list (zip (IF_TyArgs f)
-                                           (map (apply_subst (IS_TyArgs full)) tyArgs)),
-                            IS_Ghost := IF_Ghost f \<rparr>))
+                                           (map (apply_subst (IS_TyArgs full)) tyArgs)) \<rparr>))
              = Inr preF" and
     bodyF0: "call_body (interp_statement_list d fuel) full f
                (map_args (interp_writable_lvalue d fuel) full (IF_Args f) argTms)
@@ -182,7 +181,7 @@ proof (rule call_simI)
   have ghF: "IF_Ghost f = NotGhost" by (rule ghF0[OF gm])
   let ?tySubst = "fmap_of_list (zip (IF_TyArgs f) (map (apply_subst (IS_TyArgs full)) tyArgs))"
   let ?cleared = "full \<lparr> IS_Locals := fmempty, IS_Refs := fmempty, IS_ConstLocals := {||},
-                         IS_TyArgs := ?tySubst, IS_Ghost := IF_Ghost f \<rparr>"
+                         IS_TyArgs := ?tySubst \<rparr>"
   have f_lookup': "fmlookup funs fnName = Some f" using f_lookup fs by simp
   from funs_match_compilable_fun[OF fmc f_lookup'] have
     req: "IF_Requires f = []" and ens: "IF_Ensures f = []" and
@@ -264,9 +263,12 @@ proof (rule call_simI)
   qed
   have len_valsF: "length ?valsF = length (FI_TmArgs funInfo)"
     and len_refsF: "length ?refsF = length (FI_TmArgs funInfo)" using len_args_fi by simp_all
+  \<comment> \<open>The cleared state keeps the mode of the call.\<close>
+  have cleared_mode: "?cleared \<lparr> IS_Ghost := IS_Ghost full \<rparr> = ?cleared"
+    by (rule IS_Ghost_update_same) simp
   note arg_sound = fold_process_one_arg_sound
                      [OF sme wf fi fi_match len_ty wk vals_sound lvals_sound len_valsF len_refsF,
-                      where ?gh0.0 = "IF_Ghost f"]
+                      where ?gh0.0 = "IS_Ghost full", unfolded tyargs_eq cleared_mode]
   let ?envB = "body_env_for env (map fst (IF_Args f)) funInfo"
   obtain bodyST where sme_body: "state_matches_env preF ?envB bodyST"
     using arg_sound[unfolded tyargs_eq] foldF
@@ -278,9 +280,9 @@ proof (rule call_simI)
   have feB: "TE_Functions ?envB = TE_Functions genv" by (simp add: body_env_for_def fe)
   have fsP: "IS_Functions preF = funs"
     using fold_process_one_arg_preserves_globals_funs[OF foldF] fs by simp
-  \<comment> \<open>The body runs in the mode of the callee, which is not ghost.\<close>
+  \<comment> \<open>The body runs in the mode of the call, which is executable.\<close>
   have gmP: "IS_Ghost preF = NotGhost"
-    using fold_process_one_arg_preserves_globals_funs[OF foldF] ghF by simp
+    using fold_process_one_arg_preserves_globals_funs[OF foldF] gm by simp
   have fghB: "TE_FunctionGhost ?envB = NotGhost" by (simp add: body_env_for_def ngF)
 
   \<comment> \<open>Binding the compiled arguments, at any fuel at which they agree, gives
@@ -292,8 +294,7 @@ proof (rule call_simI)
                  (map (interp_term d G (mc_state full)) (map match_compile_term argTms))))
        (Inr ((mc_state full) \<lparr> IS_Locals := fmempty, IS_Refs := fmempty, IS_ConstLocals := {||},
                               IS_TyArgs := fmap_of_list (zip (IF_TyArgs (mc_interp_fun f))
-                                             (map (apply_subst (IS_TyArgs (mc_state full))) tyArgs)),
-                              IS_Ghost := IF_Ghost (mc_interp_fun f) \<rparr>))
+                                             (map (apply_subst (IS_TyArgs (mc_state full))) tyArgs)) \<rparr>))
      = Inr (mc_state preF)"
     if agree: "\<forall>tm \<in> set argTms. args_agree fuel full G tm" for G
   proof -
@@ -461,7 +462,7 @@ proof (rule call_simI)
         compiled call makes the same check of the same value.\<close>
     from bodyF Inl obtain postF rv0 where
       bodyEval: "interp_statement_list d fuel preF body = Inr (Return postF retVal)" and
-      vp: "value_position (full \<lparr> IS_Ghost := IF_Ghost f \<rparr>) (Inr retVal) = Inr rv0" and
+      vp: "value_position full (Inr retVal) = Inr rv0" and
       newFull_eq: "newFull = restore_scope full postF"
       by (auto simp: call_body_def split: sum.splits ExecResult.splits)
     note cc = vp[unfolded value_position_InrD[OF vp, symmetric]]
@@ -537,7 +538,7 @@ proof (rule call_simI)
       aru: "apply_ref_updates (full \<lparr> IS_World := w \<rparr>)
               (rights (map (\<lambda>((_, vr, _), rr). if vr = Ref then rr else Inl TypeError)
                             (zip (IF_Args f) ?refsF))) upd = Inr fin" and
-      vp: "value_position (full \<lparr> IS_Ghost := IF_Ghost f \<rparr>) (Inr rv) = Inr rv0" and
+      vp: "value_position full (Inr rv) = Inr rv0" and
       nf: "newFull = fin" and rv: "retVal = rv"
       by (auto simp: call_body_def Let_def split: sum.splits)
     note cc = vp[unfolded value_position_InrD[OF vp, symmetric]]

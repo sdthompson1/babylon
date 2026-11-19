@@ -984,10 +984,19 @@ lemma interp_Block_scope_result:
   using assms by (cases bodyRes) simp_all
 
 lemma interp_Match_scope_result:
-  assumes "interp_term d fuel (state \<lparr>IS_Ghost := g\<rparr>) scrut = Inr scrutVal"
+  assumes "interp_term d fuel (raise_mode state g) scrut = Inr scrutVal"
     and "find_matching_arm scrutVal arms = Inr armStmts"
     and "interp_statement_list d fuel state armStmts = Inr bodyRes"
   shows "interp_statement d (Suc fuel) state (CoreStmt_Match g scrut arms)
+           = Inr (scope_result state bodyRes)"
+  using assms by (cases bodyRes) simp_all
+
+(* A Match that is not ghost evaluates its scrutinee in the state as it is. *)
+lemma interp_Match_scope_result_NotGhost:
+  assumes "interp_term d fuel state scrut = Inr scrutVal"
+    and "find_matching_arm scrutVal arms = Inr armStmts"
+    and "interp_statement_list d fuel state armStmts = Inr bodyRes"
+  shows "interp_statement d (Suc fuel) state (CoreStmt_Match NotGhost scrut arms)
            = Inr (scope_result state bodyRes)"
   using assms by (cases bodyRes) simp_all
 
@@ -1267,23 +1276,23 @@ qed
 (* ========================================================================== *)
 
 (* The states in which the binding of arguments starts: the caller's states
-   with empty frames. They are related in the environment of the callee's
-   body. (Its ghost variables are the callee's ghost parameters, and none of
+   with empty frames (and still in the caller's mode, which is the same in
+   both). They are related in the environment of the callee's body. (Its ghost variables are the callee's ghost parameters, and none of
    them is bound yet.) *)
 lemma state_erased_call_entry:
   assumes rel: "state_erased env emb full erased"
     and fns: "TE_Functions envB = TE_Functions env"
   shows "state_erased envB emb
            (full \<lparr> IS_Locals := fmempty, IS_Refs := fmempty,
-                   IS_ConstLocals := {||}, IS_TyArgs := tyArgs, IS_Ghost := gm \<rparr>)
+                   IS_ConstLocals := {||}, IS_TyArgs := tyArgs \<rparr>)
            (erased \<lparr> IS_Locals := fmempty, IS_Refs := fmempty,
-                     IS_ConstLocals := {||}, IS_TyArgs := tyArgs, IS_Ghost := gm \<rparr>)"
+                     IS_ConstLocals := {||}, IS_TyArgs := tyArgs \<rparr>)"
 proof -
   note D = state_erasedD[OF rel]
   let ?f = "full \<lparr> IS_Locals := fmempty, IS_Refs := fmempty,
-                   IS_ConstLocals := {||}, IS_TyArgs := tyArgs, IS_Ghost := gm \<rparr>"
+                   IS_ConstLocals := {||}, IS_TyArgs := tyArgs \<rparr>"
   let ?e = "erased \<lparr> IS_Locals := fmempty, IS_Refs := fmempty,
-                     IS_ConstLocals := {||}, IS_TyArgs := tyArgs, IS_Ghost := gm \<rparr>"
+                     IS_ConstLocals := {||}, IS_TyArgs := tyArgs \<rparr>"
   show ?thesis
   proof (rule state_erasedI)
     show "IS_Globals ?e = IS_Globals ?f" using D(1) by simp
@@ -1304,7 +1313,7 @@ proof -
       then show ?thesis using D(5) by (rule iffD2)
     qed
     show "IS_TyArgs ?e = IS_TyArgs ?f" by simp
-    show "IS_Ghost ?e = IS_Ghost ?f" by simp
+    show "IS_Ghost ?e = IS_Ghost ?f" using D(11) by simp
     show "locals_erased envB emb ?f ?e" by (simp add: locals_erased_def)
     show "ghost_locals_separate envB emb ?f"
       by (simp add: ghost_locals_separate_def)

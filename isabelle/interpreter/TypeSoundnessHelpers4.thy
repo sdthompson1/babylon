@@ -69,13 +69,35 @@ next
   from "10.prems" show ?case by (cases ty) auto
 qed
 
+(* A term typed in mode g is also typed in mode g raised by any mode m: that
+   mode is g or Ghost. *)
+lemma core_term_type_param_mode:
+  assumes t: "core_term_type env g tm = Some ty"
+  shows "core_term_type env (param_mode m g) tm = Some ty"
+proof (cases g)
+  case Ghost
+  with t show ?thesis by simp
+next
+  case gN: NotGhost
+  show ?thesis
+  proof (cases m)
+    case Ghost
+    with core_term_type_NotGhost_imp_Ghost[OF t] show ?thesis by simp
+  next
+    case NotGhost
+    with t gN show ?thesis by simp
+  qed
+qed
+
 (* The main type soundness theorem, stated at fixed depth d, given that terms are sound
    at every smaller depth.
 
    The mode: a term (or lvalue) is typed in the mode of the state it is evaluated
    in, IS_Ghost state. A statement is typed in any mode, and is run in a state
-   whose mode is that of the enclosing function (TE_FunctionGhost env); it sets
-   the mode itself for the terms it evaluates. In a call, each argument is typed
+   that is in NotGhost mode only if the enclosing function is not ghost
+   (TE_FunctionGhost env); it raises the mode itself for the terms it
+   evaluates. (A function that is not ghost runs in Ghost mode when ghost code
+   calls it, so the two modes need not be equal.) In a call, each argument is typed
    in the mode of its parameter (param_mode), and executable code does not call
    a ghost function. *)
 lemma type_soundness_at_depth:
@@ -99,11 +121,11 @@ lemma type_soundness_at_depth:
       sound_lvalue_result state env storeTyping ty (interp_writable_lvalue d fuel state tm)"
   and
     "core_statement_type env ghost stmt = Some env' \<and> TE_ProofGoal env = None
-       \<and> IS_Ghost state = TE_FunctionGhost env \<longrightarrow>
+       \<and> (IS_Ghost state = NotGhost \<longrightarrow> TE_FunctionGhost env = NotGhost) \<longrightarrow>
       sound_statement_result env env' storeTyping (interp_statement d fuel state stmt)"
   and
     "core_statement_list_type env ghost stmts = Some env' \<and> TE_ProofGoal env = None
-       \<and> IS_Ghost state = TE_FunctionGhost env \<longrightarrow>
+       \<and> (IS_Ghost state = NotGhost \<longrightarrow> TE_FunctionGhost env = NotGhost) \<longrightarrow>
       sound_statement_result env env' storeTyping (interp_statement_list d fuel state stmts)"
   and
     "\<lbrakk> fmlookup (TE_Functions env) fnName = Some funInfo;
@@ -984,25 +1006,55 @@ next
     show ?case proof (intro impI, elim conjE)
       assume typing: "core_statement_type env ghost stmt = Some env'"
         and no_goal: "TE_ProofGoal env = None"
-        and mode_fn: "IS_Ghost state = TE_FunctionGhost env"
-      \<comment> \<open>A statement evaluates a term of its own in a state whose mode has been set
-          to the mode g0 in which the term is typed. The induction hypotheses are
-          stated in that form: the term is typed in any mode g0, and evaluated in
-          the state with IS_Ghost := g0. \<close>
-      have IH_term: "\<And>env0 (state0 :: 'w InterpState) storeTyping0 g0 tm0 ty0.
+        and mode_fn: "(IS_Ghost state = NotGhost \<longrightarrow> TE_FunctionGhost env = NotGhost)"
+      \<comment> \<open>A statement evaluates a term of its own in a state whose mode it has
+          raised by its flag g0, the mode in which the term is typed. The mode of
+          that state is g0 or Ghost, and a term typed in mode g0 is also typed in
+          Ghost mode. The induction hypotheses are stated in that form: the term is
+          typed in any mode g0, and evaluated in raise_mode state0 g0. (IH_termG
+          is the same for a state whose mode has been set to g0; it is used for
+          the specification terms, where g0 is Ghost.) \<close>
+      note raise_ty = core_term_type_param_mode
+      have IH_termG: "\<And>env0 (state0 :: 'w InterpState) storeTyping0 g0 tm0 ty0.
                 state_matches_env state0 env0 storeTyping0 \<Longrightarrow>
                 tyenv_well_formed env0 \<Longrightarrow>
                 core_term_type env0 g0 tm0 = Some ty0 \<Longrightarrow>
                 sound_term_result state0 env0 ty0
                   (interp_term d fuel (state0 \<lparr>IS_Ghost := g0\<rparr>) tm0)"
         using Suc.IH(1)[where state = "state0 \<lparr>IS_Ghost := g0\<rparr>" for state0 g0] by simp
+      have IH_term: "\<And>env0 (state0 :: 'w InterpState) storeTyping0 g0 tm0 ty0.
+                state_matches_env state0 env0 storeTyping0 \<Longrightarrow>
+                tyenv_well_formed env0 \<Longrightarrow>
+                core_term_type env0 g0 tm0 = Some ty0 \<Longrightarrow>
+                sound_term_result state0 env0 ty0
+                  (interp_term d fuel (raise_mode state0 g0) tm0)"
+      proof -
+        fix env0 and state0 :: "'w InterpState" and storeTyping0 g0 tm0 ty0
+        assume sme0: "state_matches_env state0 env0 storeTyping0"
+          and wf0: "tyenv_well_formed env0"
+          and t0: "core_term_type env0 g0 tm0 = Some ty0"
+        from IH_termG[OF sme0 wf0 raise_ty[OF t0, where m = "IS_Ghost state0"]]
+        show "sound_term_result state0 env0 ty0 (interp_term d fuel (raise_mode state0 g0) tm0)" .
+      qed
       have IH_lvalue: "\<And>env0 (state0 :: 'w InterpState) storeTyping0 g0 tm0 ty0.
                 state_matches_env state0 env0 storeTyping0 \<Longrightarrow>
                 tyenv_well_formed env0 \<Longrightarrow>
                 is_writable_lvalue env0 tm0 \<and> core_term_type env0 g0 tm0 = Some ty0 \<Longrightarrow>
                 sound_lvalue_result state0 env0 storeTyping0 ty0
-                  (interp_writable_lvalue d fuel (state0 \<lparr>IS_Ghost := g0\<rparr>) tm0)"
-        using Suc.IH(3)[where state = "state0 \<lparr>IS_Ghost := g0\<rparr>" for state0 g0] by simp
+                  (interp_writable_lvalue d fuel (raise_mode state0 g0) tm0)"
+      proof -
+        fix env0 and state0 :: "'w InterpState" and storeTyping0 g0 tm0 ty0
+        assume sme0: "state_matches_env state0 env0 storeTyping0"
+          and wf0: "tyenv_well_formed env0"
+          and t0: "is_writable_lvalue env0 tm0 \<and> core_term_type env0 g0 tm0 = Some ty0"
+        let ?s = "raise_mode state0 g0"
+        have sme1: "state_matches_env ?s env0 storeTyping0" using sme0 by simp
+        have t1: "is_writable_lvalue env0 tm0 \<and> core_term_type env0 (IS_Ghost ?s) tm0 = Some ty0"
+          using t0 raise_ty[of env0 g0 tm0 ty0 "IS_Ghost state0"] by simp
+        from Suc.IH(3)[OF sme1 wf0, THEN mp, OF t1]
+        show "sound_lvalue_result state0 env0 storeTyping0 ty0
+                (interp_writable_lvalue d fuel ?s tm0)" by simp
+      qed
       have IH_fc: "\<And>env0 (state0 :: 'w InterpState) storeTyping0 g0 fnName0 argTms0 funInfo0 tyArgs0 retTy0.
                 state_matches_env state0 env0 storeTyping0 \<Longrightarrow>
                 tyenv_well_formed env0 \<Longrightarrow>
@@ -1019,8 +1071,43 @@ next
                   (fst (snd (FI_TmArgs funInfo0 ! i)) = Ref \<longrightarrow>
                    is_writable_lvalue env0 (argTms0 ! i)) \<Longrightarrow>
                 sound_function_call_result state0 env0 storeTyping0 retTy0
-                  (interp_function_call d fuel (state0 \<lparr>IS_Ghost := g0\<rparr>) fnName0 tyArgs0 argTms0)"
-        using Suc.IH(6)[where state = "state0 \<lparr>IS_Ghost := g0\<rparr>" for state0 g0] by simp
+                  (interp_function_call d fuel (raise_mode state0 g0) fnName0 tyArgs0 argTms0)"
+      proof -
+        fix env0 and state0 :: "'w InterpState"
+          and storeTyping0 g0 fnName0 argTms0 funInfo0 tyArgs0 retTy0
+        assume sme0: "state_matches_env state0 env0 storeTyping0"
+          and wf0: "tyenv_well_formed env0"
+          and fn0: "fmlookup (TE_Functions env0) fnName0 = Some funInfo0"
+          and args0: "list_all2 (\<lambda>tm (ty, _, gh).
+                    core_term_type env0 (param_mode g0 gh) tm
+                      = Some (apply_subst (fmap_of_list (zip (FI_TyArgs funInfo0) tyArgs0)) ty))
+                  argTms0 (FI_TmArgs funInfo0)"
+          and callee0: "g0 = NotGhost \<longrightarrow> FI_Ghost funInfo0 = NotGhost"
+          and rest0: "retTy0 = apply_subst (fmap_of_list (zip (FI_TyArgs funInfo0) tyArgs0)) (FI_ReturnType funInfo0)"
+                "length tyArgs0 = length (FI_TyArgs funInfo0)"
+                "list_all (is_well_kinded env0) tyArgs0"
+                "\<forall>i < length argTms0.
+                  (fst (snd (FI_TmArgs funInfo0 ! i)) = Ref \<longrightarrow>
+                   is_writable_lvalue env0 (argTms0 ! i))"
+        \<comment> \<open>The call is made in the raised mode, m. An argument typed in the
+            mode of its parameter under g0 is also typed in that mode under m. \<close>
+        let ?s = "raise_mode state0 g0"
+        have pm: "\<And>gh. param_mode (param_mode (IS_Ghost state0) g0) gh
+                         = param_mode (IS_Ghost state0) (param_mode g0 gh)"
+          by (simp add: param_mode_def)
+        have args1: "list_all2 (\<lambda>tm (ty, _, gh).
+                    core_term_type env0 (param_mode (IS_Ghost ?s) gh) tm
+                      = Some (apply_subst (fmap_of_list (zip (FI_TyArgs funInfo0) tyArgs0)) ty))
+                  argTms0 (FI_TmArgs funInfo0)"
+          using args0 by (rule list_all2_mono) (auto simp: pm intro: raise_ty)
+        have callee1: "IS_Ghost ?s = NotGhost \<longrightarrow> FI_Ghost funInfo0 = NotGhost"
+          using callee0 by simp
+        have sme1: "state_matches_env ?s env0 storeTyping0" using sme0 by simp
+        from Suc.IH(6)[OF fn0 args1 callee1 rest0 sme1 wf0]
+        show "sound_function_call_result state0 env0 storeTyping0 retTy0
+                (interp_function_call d fuel ?s fnName0 tyArgs0 argTms0)"
+          by simp
+      qed
       show "sound_statement_result env env' storeTyping (interp_statement d (Suc fuel) state stmt)"
       proof (cases stmt)
         case (CoreStmt_VarDecl declGhost varName varOrRef varTy initTm)
@@ -1048,15 +1135,16 @@ next
             let ?envX = "env \<lparr> TE_LocalVars := fmupd varName varTy (TE_LocalVars env),
                                TE_ConstLocals := fminus (TE_ConstLocals env) {|varName|} \<rparr>"
             \<comment> \<open>The initializer is in a value position: its value is checked (in the
-                declaration's mode), which cannot give a TypeError. \<close>
+                mode raised by the declaration's flag), which cannot give a
+                TypeError. \<close>
             from IH_term[OF "4.prems"(1,2) init_ty0]
             have init_sound: "sound_term_result state env varTy
-                                (value_position (state \<lparr>IS_Ghost := declGhost\<rparr>)
-                                   (interp_term d fuel (state \<lparr>IS_Ghost := declGhost\<rparr>) initTm))"
+                                (value_position (raise_mode state declGhost)
+                                   (interp_term d fuel (raise_mode state declGhost) initTm))"
               by (rule sound_term_result_value_position)
             show ?thesis
-            proof (cases "value_position (state \<lparr>IS_Ghost := declGhost\<rparr>)
-                            (interp_term d fuel (state \<lparr>IS_Ghost := declGhost\<rparr>) initTm)")
+            proof (cases "value_position (raise_mode state declGhost)
+                            (interp_term d fuel (raise_mode state declGhost) initTm)")
               case (Inl err)
               with init_sound have err_sound: "sound_error_result err" by simp
               from Inl have interp_err:
@@ -1192,9 +1280,9 @@ next
                                 \<or> fmlookup (IS_Refs state) baseName \<noteq> None" by simp_all
               from IH_lvalue[OF "4.prems"(1,2) conjI[OF writable init_ty0]]
               have lv_sound: "sound_lvalue_result state env storeTyping varTy
-                  (interp_writable_lvalue d fuel (state \<lparr>IS_Ghost := declGhost\<rparr>) initTm)" .
+                  (interp_writable_lvalue d fuel (raise_mode state declGhost) initTm)" .
               show ?thesis
-              proof (cases "interp_writable_lvalue d fuel (state \<lparr>IS_Ghost := declGhost\<rparr>) initTm")
+              proof (cases "interp_writable_lvalue d fuel (raise_mode state declGhost) initTm")
                 case (Inl err)
                 with lv_sound have err_sound: "sound_error_result err" by simp
                 have interp_err: "interp_statement d (Suc fuel) state
@@ -1234,9 +1322,9 @@ next
                                    \<or> (fmlookup (IS_Locals state) baseName = None
                                       \<and> fmlookup (IS_Refs state) baseName = None)" by auto
               from IH_term[OF "4.prems"(1,2) init_ty0]
-              have init_sound: "sound_term_result state env varTy (interp_term d fuel (state \<lparr>IS_Ghost := declGhost\<rparr>) initTm)" .
+              have init_sound: "sound_term_result state env varTy (interp_term d fuel (raise_mode state declGhost) initTm)" .
               show ?thesis
-              proof (cases "interp_term d fuel (state \<lparr>IS_Ghost := declGhost\<rparr>) initTm")
+              proof (cases "interp_term d fuel (raise_mode state declGhost) initTm")
                 case (Inl err)
                 with init_sound have err_sound: "sound_error_result err" by simp
                 have interp_err: "interp_statement d (Suc fuel) state
@@ -1313,9 +1401,9 @@ next
           from IH_fc[OF "4.prems"(1,2) fn_lookup args_check callee_mode fn_ty_eq
                         len_tyargs tyargs_wk ref_lvalues]
           have fc_sound: "sound_function_call_result state env storeTyping retTy
-              (interp_function_call d fuel (state \<lparr>IS_Ghost := declGhost\<rparr>) fnName tyArgs argTms)" .
+              (interp_function_call d fuel (raise_mode state declGhost) fnName tyArgs argTms)" .
           show ?thesis
-          proof (cases "interp_function_call d fuel (state \<lparr>IS_Ghost := declGhost\<rparr>) fnName tyArgs argTms")
+          proof (cases "interp_function_call d fuel (raise_mode state declGhost) fnName tyArgs argTms")
             case (Inl err)
             with fc_sound have err_sound: "sound_error_result err" by simp
             have interp_err: "interp_statement d (Suc fuel) state
@@ -1335,7 +1423,7 @@ next
             \<comment> \<open>The call's result, after the cast, is in a value position: a failed
                 cast or an allocated value is a RuntimeError. \<close>
             show ?thesis
-            proof (cases "value_position (state \<lparr>IS_Ghost := declGhost\<rparr>)
+            proof (cases "value_position (raise_mode state declGhost)
                             (apply_cast_opt castOpt retVal)")
               case (Inl err)
               have err_eq: "err = RuntimeError"
@@ -1366,7 +1454,7 @@ next
               have interp_eq: "interp_statement d (Suc fuel) state
                   (CoreStmt_VarDeclCall declGhost varName varTy castOpt fnName tyArgs argTms)
                     = Inr (Continue ?state'')"
-                using \<open>interp_function_call d fuel (state \<lparr>IS_Ghost := declGhost\<rparr>) fnName tyArgs argTms = Inr fcResult\<close>
+                using \<open>interp_function_call d fuel (raise_mode state declGhost) fnName tyArgs argTms = Inr fcResult\<close>
                       fcResult_eq Inr alloc_eq by (simp add: case_prod_beta)
               let ?subVarTy = "apply_subst (IS_TyArgs ?ns) varTy"
               from state_matches_env_add_nonconst_local[OF ns_sme val_typed_ns
@@ -1400,9 +1488,9 @@ next
             by (rule core_term_type_NotGhost_imp_Ghost[OF rhs_ty0])
           from IH_lvalue[OF "4.prems"(1,2) conjI[OF lhs_writable lhs_ty0]]
           have lhs_sound: "sound_lvalue_result state env storeTyping lhsTy
-              (interp_writable_lvalue d fuel (state \<lparr>IS_Ghost := assignGhost\<rparr>) lhsTm)" .
+              (interp_writable_lvalue d fuel (raise_mode state assignGhost) lhsTm)" .
           show ?thesis
-          proof (cases "interp_writable_lvalue d fuel (state \<lparr>IS_Ghost := assignGhost\<rparr>) lhsTm")
+          proof (cases "interp_writable_lvalue d fuel (raise_mode state assignGhost) lhsTm")
             case (Inl err)
             with lhs_sound have "sound_error_result err" by simp
             with Inl CoreStmt_Assign show ?thesis by simp
@@ -1419,17 +1507,17 @@ next
                 assignment's mode), which cannot give a TypeError. \<close>
             from IH_term[OF "4.prems"(1,2) rhs_ty0]
             have rhs_sound: "sound_term_result state env lhsTy
-                               (value_position (state \<lparr>IS_Ghost := assignGhost\<rparr>)
-                                  (interp_term d fuel (state \<lparr>IS_Ghost := assignGhost\<rparr>) rhsTm))"
+                               (value_position (raise_mode state assignGhost)
+                                  (interp_term d fuel (raise_mode state assignGhost) rhsTm))"
               by (rule sound_term_result_value_position)
             show ?thesis
-            proof (cases "value_position (state \<lparr>IS_Ghost := assignGhost\<rparr>)
-                            (interp_term d fuel (state \<lparr>IS_Ghost := assignGhost\<rparr>) rhsTm)")
+            proof (cases "value_position (raise_mode state assignGhost)
+                            (interp_term d fuel (raise_mode state assignGhost) rhsTm)")
               case (Inl err)
               with rhs_sound have err_sound: "sound_error_result err" by simp
               have interp_err: "interp_statement d (Suc fuel) state
                   (CoreStmt_Assign assignGhost lhsTy lhsTm rhsTm) = Inl err"
-                using Inl \<open>interp_writable_lvalue d fuel (state \<lparr>IS_Ghost := assignGhost\<rparr>) lhsTm = Inr addrPath\<close> ap_eq by simp
+                using Inl \<open>interp_writable_lvalue d fuel (raise_mode state assignGhost) lhsTm = Inr addrPath\<close> ap_eq by simp
               with err_sound CoreStmt_Assign show ?thesis by simp
             next
               case (Inr rhsVal)
@@ -1447,7 +1535,7 @@ next
                 have err_eq: "err = RuntimeError" .
                 have interp_err: "interp_statement d (Suc fuel) state
                     (CoreStmt_Assign assignGhost lhsTy lhsTm rhsTm) = Inl RuntimeError"
-                  using Inl rhs_eval \<open>interp_writable_lvalue d fuel (state \<lparr>IS_Ghost := assignGhost\<rparr>) lhsTm = Inr addrPath\<close>
+                  using Inl rhs_eval \<open>interp_writable_lvalue d fuel (raise_mode state assignGhost) lhsTm = Inr addrPath\<close>
                         ap_eq err_eq by simp
                 with CoreStmt_Assign show ?thesis by simp
               next
@@ -1458,7 +1546,7 @@ next
                 have interp_eq: "interp_statement d (Suc fuel) state
                     (CoreStmt_Assign assignGhost lhsTy lhsTm rhsTm) = Inr (Continue ?state')"
                   using Inr rhs_eval
-                    \<open>interp_writable_lvalue d fuel (state \<lparr>IS_Ghost := assignGhost\<rparr>) lhsTm = Inr addrPath\<close> ap_eq by simp
+                    \<open>interp_writable_lvalue d fuel (raise_mode state assignGhost) lhsTm = Inr addrPath\<close> ap_eq by simp
                 from state_matches_env_update_store[OF "4.prems"(1) addr_valid
                     new_slot_typed refl]
                 have new_sme: "state_matches_env ?state' env storeTyping" .
@@ -1517,9 +1605,9 @@ next
           from IH_fc[OF "4.prems"(1,2) fn_lookup args_check callee_mode fn_ty_eq
                         len_tyargs tyargs_wk ref_lvalues]
           have fc_sound: "sound_function_call_result state env storeTyping retTy
-              (interp_function_call d fuel (state \<lparr>IS_Ghost := assignGhost\<rparr>) fnName tyArgs argTms)" .
+              (interp_function_call d fuel (raise_mode state assignGhost) fnName tyArgs argTms)" .
           show ?thesis
-          proof (cases "interp_function_call d fuel (state \<lparr>IS_Ghost := assignGhost\<rparr>) fnName tyArgs argTms")
+          proof (cases "interp_function_call d fuel (raise_mode state assignGhost) fnName tyArgs argTms")
             case (Inl err)
             with fc_sound have err_sound: "sound_error_result err" by simp
             have interp_err: "interp_statement d (Suc fuel) state
@@ -1538,14 +1626,18 @@ next
               ret_typed: "value_has_type env retVal
                             (apply_subst (IS_TyArgs state) retTy)"
               by auto
-            \<comment> \<open>The call was made in the assignment's mode, and hands that mode back. \<close>
-            have ns_mode: "IS_Ghost newState = assignGhost"
+            \<comment> \<open>The call was made in the mode raised by the assignment's flag, and
+                hands that mode back; raising it by the same flag again changes
+                nothing. \<close>
+            have ns_mode: "IS_Ghost newState = param_mode (IS_Ghost state) assignGhost"
               using static_parts_eqD(7)[OF interp_function_call_static[OF call_eq]] by simp
+            have ns_same: "raise_mode newState assignGhost = newState"
+              by (rule IS_Ghost_update_same) (simp add: ns_mode param_mode_def)
             \<comment> \<open>Apply the optional cast to the call's return value. \<close>
-            \<comment> \<open>The result, after the cast, is in a value position (in the
-                assignment's mode). \<close>
+            \<comment> \<open>The result, after the cast, is in a value position (in the mode of
+                the call). \<close>
             show ?thesis
-            proof (cases "value_position (state \<lparr>IS_Ghost := assignGhost\<rparr>)
+            proof (cases "value_position (raise_mode state assignGhost)
                             (apply_cast_opt castOpt retVal)")
               case (Inl err)
               \<comment> \<open>A failed cast is a RuntimeError (apply_cast_opt overflow), and so is
@@ -1568,8 +1660,7 @@ next
               have lhs_sound: "sound_lvalue_result newState env storeTyping1 lhsTy
                   (interp_writable_lvalue d fuel newState lhsTm)"
                 using IH_lvalue[OF new_sme "4.prems"(2) conjI[OF lhs_writable lhs_ty0]]
-                      IS_Ghost_update_same[OF ns_mode]
-                by simp
+                unfolding ns_same .
               show ?thesis
               proof (cases "interp_writable_lvalue d fuel newState lhsTm")
                 case (Inl err)
@@ -1675,12 +1766,12 @@ next
             by (rule core_term_type_NotGhost_imp_Ghost[OF rhs_ty0])
           from IH_lvalue[OF "4.prems"(1,2) conjI[OF lhs_writable lhs_ty0]]
           have lhs_sound: "sound_lvalue_result state env storeTyping lhsTy
-              (interp_writable_lvalue d fuel (state \<lparr>IS_Ghost := swapGhost\<rparr>) lhsTm)" .
+              (interp_writable_lvalue d fuel (raise_mode state swapGhost) lhsTm)" .
           from IH_lvalue[OF "4.prems"(1,2) conjI[OF rhs_writable rhs_ty0]]
           have rhs_sound: "sound_lvalue_result state env storeTyping lhsTy
-              (interp_writable_lvalue d fuel (state \<lparr>IS_Ghost := swapGhost\<rparr>) rhsTm)" .
+              (interp_writable_lvalue d fuel (raise_mode state swapGhost) rhsTm)" .
           show ?thesis
-          proof (cases "interp_writable_lvalue d fuel (state \<lparr>IS_Ghost := swapGhost\<rparr>) lhsTm")
+          proof (cases "interp_writable_lvalue d fuel (raise_mode state swapGhost) lhsTm")
             case (Inl err)
             with lhs_sound have "sound_error_result err" by simp
             with Inl CoreStmt_Swap show ?thesis by simp
@@ -1694,7 +1785,7 @@ next
                             = Some (apply_subst (IS_TyArgs state) lhsTy)"
               by auto
             show ?thesis
-            proof (cases "interp_writable_lvalue d fuel (state \<lparr>IS_Ghost := swapGhost\<rparr>) rhsTm")
+            proof (cases "interp_writable_lvalue d fuel (raise_mode state swapGhost) rhsTm")
               case (Inl err)
               with rhs_sound have "sound_error_result err" by simp
               with Inl Inr_lhs ap1_eq CoreStmt_Swap show ?thesis by simp
@@ -1810,12 +1901,13 @@ next
           tm_ty0: "core_term_type env ghost tm = Some (TE_ReturnType env)" and
           env'_eq: "env' = env"
           by (auto split: if_splits)
-        \<comment> \<open>A Return is typed in the mode of the function, which is the mode of
-            the state. \<close>
+        \<comment> \<open>A Return is typed in the mode of the function, and a state in NotGhost
+            mode is running a function that is not ghost: raising the mode of the
+            state by the mode of the function changes nothing. \<close>
         from typing CoreStmt_Return have ghost_eq: "ghost = TE_FunctionGhost env"
           by (auto split: if_splits)
-        have same_state: "state \<lparr>IS_Ghost := ghost\<rparr> = state"
-          by (rule IS_Ghost_update_same) (simp add: mode_fn ghost_eq)
+        have same_state: "raise_mode state ghost = state"
+          using mode_fn ghost_eq by (cases ghost; cases "IS_Ghost state") simp_all
         have tm_sound: "sound_term_result state env (TE_ReturnType env) (interp_term d fuel state tm)"
           using IH_term[OF "4.prems"(1,2) tm_ty0] same_state by simp
         show ?thesis proof (cases "interp_term d fuel state tm")
@@ -1855,7 +1947,7 @@ next
           from typing CoreStmt_Assert Some have
             cond_ty: "core_term_type env Ghost condTm = Some CoreTy_Bool"
             by (auto simp: Let_def split: if_splits option.splits)
-          from IH_term[OF "4.prems"(1,2) cond_ty]
+          from IH_termG[OF "4.prems"(1,2) cond_ty]
           have cond_sound: "sound_term_result state env CoreTy_Bool
                               (interp_term d fuel (state \<lparr>IS_Ghost := Ghost\<rparr>) condTm)" .
           show ?thesis
@@ -1930,14 +2022,14 @@ next
           \<comment> \<open>The condition is in a value position. \<close>
           from IH_term[OF "4.prems"(1,2) cond_ty0]
           have cond_sound: "sound_term_result state env CoreTy_Bool
-                              (value_position (state \<lparr>IS_Ghost := whileGhost\<rparr>)
-                                 (interp_term d fuel (state \<lparr>IS_Ghost := whileGhost\<rparr>) condTm))"
+                              (value_position (raise_mode state whileGhost)
+                                 (interp_term d fuel (raise_mode state whileGhost) condTm))"
             by (rule sound_term_result_value_position)
           have IH_stmts: "\<And>env0 (state0 :: 'w InterpState) storeTyping0 ghost0 stmts0 env0'.
                   state_matches_env state0 env0 storeTyping0 \<Longrightarrow>
                   tyenv_well_formed env0 \<Longrightarrow>
                   TE_ProofGoal env0 = None \<Longrightarrow>
-                  IS_Ghost state0 = TE_FunctionGhost env0 \<Longrightarrow>
+                  (IS_Ghost state0 = NotGhost \<longrightarrow> TE_FunctionGhost env0 = NotGhost) \<Longrightarrow>
                   core_statement_list_type env0 ghost0 stmts0 = Some env0' \<Longrightarrow>
                   sound_statement_result env0 env0' storeTyping0
                     (interp_statement_list d fuel state0 stmts0)"
@@ -1946,7 +2038,7 @@ next
                   state_matches_env state0 env0 storeTyping0 \<Longrightarrow>
                   tyenv_well_formed env0 \<Longrightarrow>
                   TE_ProofGoal env0 = None \<Longrightarrow>
-                  IS_Ghost state0 = TE_FunctionGhost env0 \<Longrightarrow>
+                  (IS_Ghost state0 = NotGhost \<longrightarrow> TE_FunctionGhost env0 = NotGhost) \<Longrightarrow>
                   core_statement_type env0 ghost0 stmt0 = Some env0' \<Longrightarrow>
                   sound_statement_result env0 env0' storeTyping0
                     (interp_statement d fuel state0 stmt0)"
@@ -1982,8 +2074,8 @@ next
           have loop_sound: ?thesis
             if iv [simp]: "interp_term_list d fuel (state \<lparr>IS_Ghost := Ghost\<rparr>) invars = Inr invarVals"
             and ie [simp]: "conditions_error invarVals = None" for invarVals
-          proof (cases "value_position (state \<lparr>IS_Ghost := whileGhost\<rparr>)
-                          (interp_term d fuel (state \<lparr>IS_Ghost := whileGhost\<rparr>) condTm)")
+          proof (cases "value_position (raise_mode state whileGhost)
+                          (interp_term d fuel (raise_mode state whileGhost) condTm)")
             case (Inl err)
             with cond_sound have "sound_error_result err" by simp
             moreover have "interp_statement d (Suc fuel) state
@@ -2031,7 +2123,7 @@ next
                   decr_ty: "core_term_type env Ghost decrTm = Some decrTy" and
                   decr_valid: "is_valid_decreases_type decrTy"
                   by (auto split: option.splits)
-                from IH_term[OF sme0 "4.prems"(2) decr_ty]
+                from IH_termG[OF sme0 "4.prems"(2) decr_ty]
                 have ds: "sound_term_result state0 env decrTy (interp_term d fuel (state0 \<lparr>IS_Ghost := Ghost\<rparr>) decrTm)" .
                 show ?thesis
                 proof (cases "interp_term d fuel (state0 \<lparr>IS_Ghost := Ghost\<rparr>) decrTm")
@@ -2068,7 +2160,7 @@ next
                 by (simp add: tyenv_well_formed_TE_ProofTopLevel_irrelevant)
               have ng_benv: "TE_ProofGoal benv = None"
                 using no_goal unfolding benv_def by simp
-              have mode_benv: "IS_Ghost state = TE_FunctionGhost benv"
+              have mode_benv: "(IS_Ghost state = NotGhost \<longrightarrow> TE_FunctionGhost benv = NotGhost)"
                 using mode_fn unfolding benv_def by simp
               from IH_stmts[OF sme_benv wf_benv ng_benv mode_benv body_ty]
               have "sound_statement_result benv bodyEnv' storeTyping
@@ -2152,7 +2244,7 @@ next
                     next
                       case None
                       \<comment> \<open>Recursive call: apply the fuel-level statement IH. \<close>
-                      have mode_rs: "IS_Ghost (restore_scope state state1) = TE_FunctionGhost env"
+                      have mode_rs: "(IS_Ghost (restore_scope state state1) = NotGhost \<longrightarrow> TE_FunctionGhost env = NotGhost)"
                         using mode_fn by simp
                       from IH_stmt[OF sme_rs "4.prems"(2) no_goal mode_rs while_typed]
                       have rec_sound: "sound_statement_result env env storeTyping
@@ -2285,18 +2377,18 @@ next
           have ng_benv: "TE_ProofGoal benv = None"
             using no_goal unfolding benv_def by simp
           from IH_term[OF "4.prems"(1,2) scrut_ty0]
-          have scrut_sound: "sound_term_result state env scrutTy (interp_term d fuel (state \<lparr>IS_Ghost := matchGhost\<rparr>) scrut)" .
+          have scrut_sound: "sound_term_result state env scrutTy (interp_term d fuel (raise_mode state matchGhost) scrut)" .
           have IH_stmts: "\<And>env0 (state0 :: 'w InterpState) storeTyping0 ghost0 stmts0 env0'.
                   state_matches_env state0 env0 storeTyping0 \<Longrightarrow>
                   tyenv_well_formed env0 \<Longrightarrow>
                   TE_ProofGoal env0 = None \<Longrightarrow>
-                  IS_Ghost state0 = TE_FunctionGhost env0 \<Longrightarrow>
+                  (IS_Ghost state0 = NotGhost \<longrightarrow> TE_FunctionGhost env0 = NotGhost) \<Longrightarrow>
                   core_statement_list_type env0 ghost0 stmts0 = Some env0' \<Longrightarrow>
                   sound_statement_result env0 env0' storeTyping0
                     (interp_statement_list d fuel state0 stmts0)"
             using Suc.IH(5) by simp
           show ?thesis
-          proof (cases "interp_term d fuel (state \<lparr>IS_Ghost := matchGhost\<rparr>) scrut")
+          proof (cases "interp_term d fuel (raise_mode state matchGhost) scrut")
             case (Inl err)
             with scrut_sound have "sound_error_result err" by simp
             with Inl CoreStmt_Match show ?thesis by simp
@@ -2326,7 +2418,7 @@ next
               then obtain bodyEnv' where
                 body_typed: "core_statement_list_type benv matchGhost armBody = Some bodyEnv'"
                 by auto
-              have mode_benv: "IS_Ghost state = TE_FunctionGhost benv"
+              have mode_benv: "(IS_Ghost state = NotGhost \<longrightarrow> TE_FunctionGhost benv = NotGhost)"
                 using mode_fn unfolding benv_def by simp
               from IH_stmts[OF sme_benv wf_benv ng_benv mode_benv body_typed]
               have "sound_statement_result benv bodyEnv' storeTyping
@@ -2478,12 +2570,12 @@ next
                 state_matches_env state0 env0 storeTyping0 \<Longrightarrow>
                 tyenv_well_formed env0 \<Longrightarrow>
                 TE_ProofGoal env0 = None \<Longrightarrow>
-                  IS_Ghost state0 = TE_FunctionGhost env0 \<Longrightarrow>
+                  (IS_Ghost state0 = NotGhost \<longrightarrow> TE_FunctionGhost env0 = NotGhost) \<Longrightarrow>
                   core_statement_list_type env0 ghost0 stmts0 = Some env0' \<Longrightarrow>
                 sound_statement_result env0 env0' storeTyping0
                   (interp_statement_list d fuel state0 stmts0)"
           using Suc.IH(5) by simp
-        have mode_benv: "IS_Ghost state = TE_FunctionGhost benv"
+        have mode_benv: "(IS_Ghost state = NotGhost \<longrightarrow> TE_FunctionGhost benv = NotGhost)"
           using mode_fn unfolding benv_def by simp
         from IH_stmts[OF sme_benv wf_benv ng_benv mode_benv body_typed]
         have "sound_statement_result benv bodyEnv' storeTyping
@@ -2606,12 +2698,12 @@ next
     show ?case proof (intro impI, elim conjE)
       assume typing: "core_statement_list_type env ghost stmts = Some env'"
         and no_goal: "TE_ProofGoal env = None"
-        and mode_fn: "IS_Ghost state = TE_FunctionGhost env"
+        and mode_fn: "(IS_Ghost state = NotGhost \<longrightarrow> TE_FunctionGhost env = NotGhost)"
       have IH_stmt: "\<And>env0 (state0 :: 'w InterpState) storeTyping0 ghost0 stmt0 env0'.
                 state_matches_env state0 env0 storeTyping0 \<Longrightarrow>
                 tyenv_well_formed env0 \<Longrightarrow>
                 TE_ProofGoal env0 = None \<Longrightarrow>
-                IS_Ghost state0 = TE_FunctionGhost env0 \<Longrightarrow>
+                (IS_Ghost state0 = NotGhost \<longrightarrow> TE_FunctionGhost env0 = NotGhost) \<Longrightarrow>
                 core_statement_type env0 ghost0 stmt0 = Some env0' \<Longrightarrow>
                 sound_statement_result env0 env0' storeTyping0 (interp_statement d fuel state0 stmt0)"
         by (simp add: "5.prems"(1,2) Suc.IH(4))
@@ -2619,7 +2711,7 @@ next
                 state_matches_env state0 env0 storeTyping0 \<Longrightarrow>
                 tyenv_well_formed env0 \<Longrightarrow>
                 TE_ProofGoal env0 = None \<Longrightarrow>
-                  IS_Ghost state0 = TE_FunctionGhost env0 \<Longrightarrow>
+                  (IS_Ghost state0 = NotGhost \<longrightarrow> TE_FunctionGhost env0 = NotGhost) \<Longrightarrow>
                   core_statement_list_type env0 ghost0 stmts0 = Some env0' \<Longrightarrow>
                 sound_statement_result env0 env0' storeTyping0 (interp_statement_list d fuel state0 stmts0)"
         by (simp add: "5.prems"(1,2) Suc.IH(5))
@@ -2658,7 +2750,7 @@ next
               by simp
             \<comment> \<open>The statement hands back the mode it was started in, and the
                 function's mode is the same in env_mid. \<close>
-            have mode_mid: "IS_Ghost state' = TE_FunctionGhost env_mid"
+            have mode_mid: "(IS_Ghost state' = NotGhost \<longrightarrow> TE_FunctionGhost env_mid = NotGhost)"
               using static_parts_eqD(7)[OF interp_statement_static[OF interp_stmt_eq]]
                     core_statement_type_fixed_eq[OF stmt_ty] mode_fn
               by (simp add: tyenv_fixed_eq_def)
@@ -2776,7 +2868,7 @@ next
                 state_matches_env state0 env0 storeTyping0 \<Longrightarrow>
                 tyenv_well_formed env0 \<Longrightarrow>
                 TE_ProofGoal env0 = None \<Longrightarrow>
-                  IS_Ghost state0 = TE_FunctionGhost env0 \<Longrightarrow>
+                  (IS_Ghost state0 = NotGhost \<longrightarrow> TE_FunctionGhost env0 = NotGhost) \<Longrightarrow>
                   core_statement_list_type env0 ghost0 stmts0 = Some env0' \<Longrightarrow>
                   sound_statement_result env0 env0' storeTyping0 (interp_statement_list d fuel state0 stmts0)"
       using Suc.IH(5) by simp

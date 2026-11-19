@@ -116,8 +116,7 @@ lemma interp_function_call_I:
                                    (map (interp_term d fuel state) argTms)))
              (Inr (state \<lparr> IS_Locals := fmempty, IS_Refs := fmempty, IS_ConstLocals := {||},
                            IS_TyArgs := fmap_of_list (zip (IF_TyArgs f)
-                                          (map (apply_subst (IS_TyArgs state)) argTys)),
-                           IS_Ghost := IF_Ghost f \<rparr>))
+                                          (map (apply_subst (IS_TyArgs state)) argTys)) \<rparr>))
            = Inr preCallState"
       and "call_args_alias (IF_Args f) (map (interp_lvalue d fuel False state) argTms) = None"
       and "IF_Requires f = []" and "IF_Ensures f = []"
@@ -148,8 +147,9 @@ proof (rule nth_equalityI[OF assms(1)])
 qed
 
 
-(* A Match statement evaluates its scrutinee in its own mode; when that is the
-   mode of the state, the scrutinee is evaluated in the state as it is. *)
+(* A Match statement evaluates its scrutinee in the mode raised by its flag;
+   when the flag is the mode of the state, the scrutinee is evaluated in the
+   state as it is. *)
 lemma interp_Match_scope_result_same:
   assumes "IS_Ghost state = g"
       and "interp_term d fuel state scrut = Inr scrutVal"
@@ -158,9 +158,9 @@ lemma interp_Match_scope_result_same:
   shows "interp_statement d (Suc fuel) state (CoreStmt_Match g scrut arms)
            = Inr (scope_result state bodyRes)"
 proof -
-  have "state \<lparr> IS_Ghost := g \<rparr> = state" by (rule IS_Ghost_update_same[OF assms(1)])
+  have "raise_mode state g = state" by (rule raise_mode_same[OF assms(1)])
   with assms(2)
-  have "interp_term d fuel (state \<lparr> IS_Ghost := g \<rparr>) scrut = Inr scrutVal" by simp
+  have "interp_term d fuel (raise_mode state g) scrut = Inr scrutVal" by simp
   from interp_Match_scope_result[OF this assms(3,4)] show ?thesis .
 qed
 
@@ -217,7 +217,7 @@ next
   \<comment> \<open>The statement is not ghost and the state is in executable mode, so the
       statement evaluates its terms in the state as it is, in both runs.\<close>
   from gm g have gmg: "IS_Ghost full = g" by simp
-  note [simp] = IS_Ghost_update_same gmg
+  note [simp] = IS_Ghost_update_same gmg param_mode_same
   from typing g have t: "core_term_type env NotGhost initTm = Some ty" by (auto split: if_splits)
   from ok have ok': "core_term_match_scrutinees_ok initTm" by simp
   \<comment> \<open>The initializer is in a value position: the original run checked its
@@ -256,7 +256,7 @@ next
   \<comment> \<open>The statement is not ghost and the state is in executable mode, so the
       statement evaluates its terms in the state as it is, in both runs.\<close>
   from gm g have gmg: "IS_Ghost full = g" by simp
-  note [simp] = IS_Ghost_update_same gmg
+  note [simp] = IS_Ghost_update_same gmg param_mode_same
   from typing g have t: "core_term_type env NotGhost initTm = Some ty" and lv: "is_lvalue initTm"
     by (auto split: if_splits)
   from ok have ok': "core_term_match_scrutinees_ok initTm" by simp
@@ -370,9 +370,10 @@ proof -
                    param_mode_def)
 qed
 
-(* A call statement makes its call in its own mode and then puts the mode of
-   its state back. In executable mode neither changes anything: the state that
-   a call hands back is in the mode it was called in. *)
+(* A call statement makes its call in the mode raised by its flag and then puts
+   the mode of its state back. For a statement that is not ghost neither
+   changes anything: the state that a call hands back is in the mode it was
+   called in. *)
 lemma call_result_mode:
   assumes "interp_function_call d fuel full fnName tyArgs argTms = Inr (newFull, retVal)"
   shows "IS_Ghost newFull = IS_Ghost full"
@@ -400,7 +401,7 @@ next
   \<comment> \<open>The statement is not ghost and the state is in executable mode, so the
       statement evaluates its terms in the state as it is, in both runs.\<close>
   from gm g have gmg: "IS_Ghost full = g" by simp
-  note [simp] = IS_Ghost_update_same gmg
+  note [simp] = IS_Ghost_update_same gmg param_mode_same
   from typing g obtain retTy where
     c: "core_impure_call_type env NotGhost fnName tyArgs argTms = Some retTy"
     by (auto split: if_splits option.splits)
@@ -457,7 +458,7 @@ next
   \<comment> \<open>The statement is not ghost and the state is in executable mode, so the
       statement evaluates its terms in the state as it is, in both runs.\<close>
   from gm g have gmg: "IS_Ghost full = g" by simp
-  note [simp] = IS_Ghost_update_same gmg
+  note [simp] = IS_Ghost_update_same gmg param_mode_same
   from typing g have
     tl: "core_term_type env NotGhost lhs = Some ty" and
     tr: "core_term_type env NotGhost rhs = Some ty"
@@ -512,7 +513,7 @@ next
   \<comment> \<open>The statement is not ghost and the state is in executable mode, so the
       statement evaluates its terms in the state as it is, in both runs.\<close>
   from gm g have gmg: "IS_Ghost full = g" by simp
-  note [simp] = IS_Ghost_update_same gmg
+  note [simp] = IS_Ghost_update_same gmg param_mode_same
   from typing g obtain lhsTy retTy where
     tl: "core_term_type env NotGhost lhs = Some lhsTy" and
     c: "core_impure_call_type env NotGhost fnName tyArgs argTms = Some retTy"
@@ -599,7 +600,7 @@ next
   \<comment> \<open>The statement is not ghost and the state is in executable mode, so the
       statement evaluates its terms in the state as it is, in both runs.\<close>
   from gm g have gmg: "IS_Ghost full = g" by simp
-  note [simp] = IS_Ghost_update_same gmg
+  note [simp] = IS_Ghost_update_same gmg param_mode_same
   from typing g obtain lhsTy where
     tl: "core_term_type env NotGhost lhs = Some lhsTy" and
     tr: "core_term_type env NotGhost rhs = Some lhsTy"
@@ -682,7 +683,7 @@ proof -
   have wf1: "tyenv_well_formed ?env1"
     using wf by (simp add: tyenv_well_formed_TE_ProofTopLevel_irrelevant)
   have ng1: "TE_ProofGoal ?env1 = None" using ng by simp
-  have gfe: "IS_Ghost full = TE_FunctionGhost ?env1" using gm fgh by simp
+  have gfe: "(IS_Ghost full = NotGhost \<longrightarrow> TE_FunctionGhost ?env1 = NotGhost)" using gm fgh by simp
   from interp_statement_list_sound
          [OF sme1 wf1, THEN mp, OF conjI[OF typing conjI[OF ng1 gfe]], of d fuel] ev
   obtain st1 where sme_s1: "state_matches_env s1 envB st1"
@@ -764,7 +765,7 @@ proof (rule stmt_simI)
   \<comment> \<open>The statement is not ghost and the state is in executable mode, so the
       statement evaluates its terms in the state as it is, in both runs.\<close>
   from gm g have gmg: "IS_Ghost full = g" by simp
-  note [simp] = IS_Ghost_update_same gmg
+  note [simp] = IS_Ghost_update_same gmg param_mode_same
   from typing g obtain envB where
     tc: "core_term_type env NotGhost condTm = Some CoreTy_Bool" and
     tb: "core_statement_list_type ?env1 NotGhost body = Some envB"
@@ -873,7 +874,7 @@ proof (rule stmt_simI)
   \<comment> \<open>The statement is not ghost and the state is in executable mode, so the
       statement evaluates its terms in the state as it is, in both runs.\<close>
   from gm g have gmg: "IS_Ghost full = g" by simp
-  note [simp] = IS_Ghost_update_same gmg
+  note [simp] = IS_Ghost_update_same gmg param_mode_same
   from typing g obtain scrutTy where
     s_ty: "core_term_type env NotGhost scrut = Some scrutTy" and
     pats: "list_all (\<lambda>p. pattern_compatible env p scrutTy) (map fst arms)" and
@@ -1044,7 +1045,7 @@ proof (rule stmts_simI)
     case (Continue s1)
     with ev r1 have rest: "interp_statement_list d fuel s1 stmts = Inr res" by simp
     \<comment> \<open>The state after the first statement matches the environment after it.\<close>
-    have gfe: "IS_Ghost full = TE_FunctionGhost env" using gm fgh by simp
+    have gfe: "(IS_Ghost full = NotGhost \<longrightarrow> TE_FunctionGhost env = NotGhost)" using gm fgh by simp
     from interp_statement_sound[OF sme wf, THEN mp, OF conjI[OF t1 conjI[OF ng gfe]], of d fuel]
          r1 Continue
     obtain st1 where sme1: "state_matches_env s1 env1 st1" by auto

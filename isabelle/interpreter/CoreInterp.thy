@@ -759,14 +759,19 @@ lemma is_allocated_Record:
    position. In a place position the enclosing construct only needs to know where
    the thing is; in a value position it needs the contents, to store them somewhere
    else or to compute with them. Core has these rules about value positions; they
-   apply to executable (NotGhost) code only, and ghost code may copy allocated
-   values freely:
+   apply only while executable code is being run (IS_Ghost state = NotGhost, see
+   "Ghost and executable code" below), and ghost code may copy allocated values
+   freely:
 
     R1. A value in a value position must not be allocated.
     R3. CoreTm_Default must not produce an allocated value, whatever position
         it is in.
-    R4. A function that is not ghost must not return an allocated value. This
-        holds for an extern function as well as for one with a Core body.
+    R4. A function called by executable code must not return an allocated value.
+        This holds for an extern function as well as for one with a Core body.
+
+   "Ghost code" here includes everything that ghost code calls: a function that
+   is not ghost, when called from ghost code, runs as ghost code, and the rules
+   do not apply to that run of it.
 
    (R2 is the matching typing rule: a term in a value position must have a
    complete type. See complete_if_executable in CoreTypecheck.thy for the terms,
@@ -1456,10 +1461,10 @@ lemma checked_call_no_contract:
 (* This is the last step of a function call. It runs the body statement list, or calls the
    external function, and returns the resulting post-call interpreter state, and the return value.
 
-   When the function is not ghost, the returned value must not be allocated (R4,
-   see "Place positions and value positions" above). This applies to a Core body
-   and to an external function alike. The check is value_position, applied in the
-   mode of the function.
+   When the call is made by executable code, the returned value must not be
+   allocated (R4, see "Place positions and value positions" above). This applies
+   to a Core body and to an external function alike. The check is value_position,
+   applied in the caller's state, i.e. in the mode of the call.
 
    Inputs:
     - run: statement-list evaluator (interp_statement_list, partially applied to depth and fuel)
@@ -1484,8 +1489,9 @@ definition call_body ::
            producing postCallState and a return value.\<close>
         (case run preCallState bodyStmts of
           Inr (Return postCallState retVal) \<Rightarrow>
-            \<comment> \<open>A non-ghost function must not return an allocated value (R4).\<close>
-            (case value_position (state \<lparr> IS_Ghost := IF_Ghost f \<rparr>) (Inr retVal) of
+            \<comment> \<open>A function called by executable code must not return an allocated
+               value (R4).\<close>
+            (case value_position state (Inr retVal) of
                Inl err \<Rightarrow> Inl err
              | Inr _ \<Rightarrow>
                  \<comment> \<open>Restore the state how it was before the call (keeping ref updates)
@@ -1506,9 +1512,8 @@ definition call_body ::
              state' = state \<lparr> IS_World := newWorld \<rparr>
         in case apply_ref_updates state' refs refUpdates of
           Inr finalState \<Rightarrow>
-            \<comment> \<open>A non-ghost external function must not return an allocated value
-               either (R4).\<close>
-            (case value_position (state \<lparr> IS_Ghost := IF_Ghost f \<rparr>) (Inr retVal) of
+            \<comment> \<open>Nor must an external function called by executable code (R4).\<close>
+            (case value_position state (Inr retVal) of
                Inl err \<Rightarrow> Inl err
              | Inr _ \<Rightarrow> Inr (finalState, retVal))
         | Inl err \<Rightarrow> Inl err))"
@@ -1737,31 +1742,76 @@ qed
    amount of fuel used (so long as it is sufficient); see CoreInterpFuelMono.thy.
 
    Ghost and executable code: the field IS_Ghost of the state says which of the
-   two is being run. A term is evaluated in the state it is given. The mode is
-   set in these places:
-     - interp_function_call runs the body of f with IS_Ghost := IF_Ghost f, and
-       hands back a state with the caller's IS_Ghost (restore_scope);
-     - each argument of a call is evaluated with IS_Ghost := param_mode (IS_Ghost
-       state) g, where g is the ghost flag of its parameter (see map_args);
-     - a statement with a ghost flag evaluates its own terms with IS_Ghost := that
-       flag, but builds its result state from the state it was given, so the mode
-       is unchanged for the statements that follow, and loop bodies and match arms
-       run in the mode of the enclosing function;
+   two is being run. IS_Ghost = NotGhost means that what is being evaluated is
+   executable: it is still there after ghost erasure. IS_Ghost = Ghost means
+   that it is ghost code, or is being run on behalf of ghost code. A term is
+   evaluated in the state it is given.
+
+   The mode is only ever raised, from NotGhost to Ghost, and only for the
+   evaluation of one piece of code inside another. It is raised in these places:
+     - each argument of a call is evaluated in raise_mode state g, where g is the
+       ghost flag of its parameter (see arg_state, map_args);
+     - a statement with a ghost flag g evaluates its own terms, and makes its own
+       call, in raise_mode state g. It builds its result state from the state it
+       was given, so the mode is unchanged for the statements that follow, and
+       loop bodies and match arms run in the mode the statement was run in (the
+       statements inside them raise the mode for themselves);
      - assert conditions, loop invariants, decreases-terms, obtain conditions and
        contracts (checked_call) are evaluated with IS_Ghost := Ghost.
-   A ghost function cannot be called when IS_Ghost is NotGhost (TypeError).
+   Nothing lowers the mode. In particular interp_function_call runs the body of
+   the function in the mode of the call, whatever the function's own flag
+   (IF_Ghost) says: a function that is not ghost, called from ghost code, is run
+   as ghost code. The flag of the function matters in one place only: a ghost
+   function cannot be called when IS_Ghost is NotGhost (TypeError). So a
+   function that is not ghost can run in either mode, and a ghost function only
+   ever runs in Ghost mode. A call hands back a state with the mode it was
+   started in.
+
+   The mode has two effects: the check on value positions (value_position) is
+   made in NotGhost mode only, and so is the test for a call to a ghost function.
+   It is not a restriction on the values that may occur: the interpreter does
+   not test that ghost values (e.g. of type int or real) and ghost types stay
+   out of NotGhost mode. That is the business of the typing rules.
 *)
+
+(* The state with its mode raised by the ghost flag g: Ghost if g is Ghost, and
+   as it was otherwise. (param_mode is the same function as is used for typing
+   the arguments of a call.) *)
+abbreviation raise_mode :: "'w InterpState \<Rightarrow> GhostOrNot \<Rightarrow> 'w InterpState" where
+  "raise_mode state g \<equiv> state \<lparr> IS_Ghost := param_mode (IS_Ghost state) g \<rparr>"
 
 (* The state in which the actual for the parameter `arg` is evaluated. *)
 abbreviation arg_state :: "'w InterpState \<Rightarrow> string \<times> VarOrRef \<times> GhostOrNot \<Rightarrow> 'w InterpState" where
-  "arg_state state arg \<equiv> state \<lparr> IS_Ghost := param_mode (IS_Ghost state) (snd (snd arg)) \<rparr>"
+  "arg_state state arg \<equiv> raise_mode state (snd (snd arg))"
 
-(* When the mode of a state is already g, setting it to g changes nothing. This
-   is how the override of a NotGhost statement, or of the argument for a
-   NotGhost parameter, disappears in executable code. *)
+(* When the mode of a state is already g, setting it to g changes nothing. *)
 lemma IS_Ghost_update_same:
   "IS_Ghost state = g \<Longrightarrow> state \<lparr> IS_Ghost := g \<rparr> = state"
   by auto
+
+(* Raising the mode by a NotGhost flag changes nothing, and nor does raising
+   the mode of a state that is in Ghost mode already. Raising by a Ghost flag
+   gives Ghost mode. *)
+lemma raise_mode_NotGhost [simp]:
+  "raise_mode state NotGhost = state"
+  by (simp add: param_mode_def)
+
+lemma raise_mode_Ghost [simp]:
+  "raise_mode state Ghost = state \<lparr> IS_Ghost := Ghost \<rparr>"
+  by (simp add: param_mode_def)
+
+lemma raise_mode_in_Ghost:
+  "IS_Ghost state = Ghost \<Longrightarrow> raise_mode state g = state"
+  by (simp add: param_mode_def)
+
+(* Raising the mode by the mode the state is in already changes nothing. *)
+lemma param_mode_same:
+  "param_mode g g = g"
+  by (simp add: param_mode_def)
+
+lemma raise_mode_same:
+  "IS_Ghost state = g \<Longrightarrow> raise_mode state g = state"
+  by (cases g) (simp_all add: param_mode_def IS_Ghost_update_same)
 
 lemma arg_state_NotGhost_param [simp]:
   "arg_state state (n, vr, NotGhost) = state"
@@ -2067,22 +2117,22 @@ where
 | "interp_statement d (Suc fuel) state (CoreStmt_VarDecl declGhost varName Var varTy initialTm) =
     \<comment> \<open>The initializer is an ordinary (pure) term; impure-call initializers use
         CoreStmt_VarDeclCall. The state is unchanged by evaluating it.
-        The initializer is evaluated in the declaration's mode, and is in a value
-        position.\<close>
-    (case value_position (state \<lparr> IS_Ghost := declGhost \<rparr>)
-            (interp_term d fuel (state \<lparr> IS_Ghost := declGhost \<rparr>) initialTm) of
+        The initializer is evaluated in the mode raised by the declaration's flag,
+        and is in a value position.\<close>
+    (case value_position (raise_mode state declGhost)
+            (interp_term d fuel (raise_mode state declGhost) initialTm) of
        Inr initialVal \<Rightarrow> Inr (Continue (bind_mutable_local varName initialVal state))
      | Inl err \<Rightarrow> Inl err)"
 
 | "interp_statement d (Suc fuel) state (CoreStmt_VarDeclCall declGhost varName _ castOpt fnName argTys argTms) =
     \<comment> \<open>Run the (possibly impure) call, observing its state effect, then apply the
         optional cast to the returned value before binding it. The call is made in
-        the declaration's mode; the state that comes back carries that mode, so the
-        mode of the original state is put back. The call's result, after the cast,
-        is in a value position (in the declaration's mode).\<close>
-    (case interp_function_call d fuel (state \<lparr> IS_Ghost := declGhost \<rparr>) fnName argTys argTms of
+        the mode raised by the declaration's flag; the state that comes back carries
+        that mode, so the mode of the original state is put back. The call's result,
+        after the cast, is in a value position (in the mode of the call).\<close>
+    (case interp_function_call d fuel (raise_mode state declGhost) fnName argTys argTms of
        Inr (newState, retVal) \<Rightarrow>
-         (case value_position (state \<lparr> IS_Ghost := declGhost \<rparr>)
+         (case value_position (raise_mode state declGhost)
                  (apply_cast_opt castOpt retVal) of
             Inr initialVal \<Rightarrow>
               Inr (Continue (bind_mutable_local varName initialVal
@@ -2090,8 +2140,9 @@ where
           | Inl err \<Rightarrow> Inl err)
      | Inl err \<Rightarrow> Inl err)"
 | "interp_statement d (Suc fuel) state (CoreStmt_VarDecl declGhost varName Ref _ lvalueTm) =
-    \<comment> \<open>The lvalue term is evaluated in the declaration's mode. It is in a place
-        position (also when its value is copied, in the read-only case below).\<close>
+    \<comment> \<open>The lvalue term is evaluated in the mode raised by the declaration's flag.
+        It is in a place position (also when its value is copied, in the read-only
+        case below).\<close>
     (case lvalue_base_name lvalueTm of
       Some baseName \<Rightarrow>
         \<comment> \<open>Determine whether the base is read-only. The base is read-only iff:
@@ -2105,13 +2156,13 @@ where
           \<comment> \<open>Base variable is read-only: copy the value instead of aliasing.
              A compiler would likely use a read-only pointer, but copying is
              semantically equivalent since the source is immutable.\<close>
-          (case interp_term d fuel (state \<lparr> IS_Ghost := declGhost \<rparr>) lvalueTm of
+          (case interp_term d fuel (raise_mode state declGhost) lvalueTm of
             Inl err \<Rightarrow> Inl err
           | Inr val \<Rightarrow> Inr (Continue (bind_const_local varName val state)))
         else
           \<comment> \<open>Base variable is writable: use interp_lvalue (in writable mode) to
              get the address and path, and store those in IS_Refs. \<close>
-          (case interp_lvalue d fuel True (state \<lparr> IS_Ghost := declGhost \<rparr>) lvalueTm of
+          (case interp_lvalue d fuel True (raise_mode state declGhost) lvalueTm of
             Inr addrAndPath \<Rightarrow> Inr (Continue (bind_ref varName addrAndPath state))
           | Inl err \<Rightarrow> Inl err)
     | None \<Rightarrow> Inl TypeError)"
@@ -2121,12 +2172,12 @@ where
     \<comment> \<open>Resolve the lhs to an address and path; the rhs is an ordinary (pure)
         term (impure-call rhs's use CoreStmt_AssignCall). State is unchanged by
         evaluating it. The type annotation is not read. Both sides are evaluated
-        in the assignment's mode. The lhs is in a place position and the rhs in a
-        value position.\<close>
-    (case interp_lvalue d fuel True (state \<lparr> IS_Ghost := assignGhost \<rparr>) lhsLvalue of
+        in the mode raised by the assignment's flag. The lhs is in a place position
+        and the rhs in a value position.\<close>
+    (case interp_lvalue d fuel True (raise_mode state assignGhost) lhsLvalue of
       Inr (addr, path) \<Rightarrow>
-        (case value_position (state \<lparr> IS_Ghost := assignGhost \<rparr>)
-                (interp_term d fuel (state \<lparr> IS_Ghost := assignGhost \<rparr>) rhsTm) of
+        (case value_position (raise_mode state assignGhost)
+                (interp_term d fuel (raise_mode state assignGhost) rhsTm) of
           Inr rhsVal \<Rightarrow>
             (let oldVal = IS_Store state ! addr in
             case update_value_at_path oldVal path rhsVal of
@@ -2141,13 +2192,13 @@ where
     \<comment> \<open>Note the order of operations: evaluate the rhs first, then resolve the lhs to
         an address and path (in the new state). So in a[i] = f(i), where f modifies i,
         the element written is determined by the new value of i, not the old.
-        The call is made in the assignment's mode. The state that comes back
-        carries that mode: the lhs is resolved in it, and the mode of the original
-        state is put back in the final state. The call's result, after the cast,
-        is in a value position (in the assignment's mode).\<close>
-    (case interp_function_call d fuel (state \<lparr> IS_Ghost := assignGhost \<rparr>) fnName argTys argTms of
+        The call is made in the mode raised by the assignment's flag. The state
+        that comes back carries that mode: the lhs is resolved in it, and the mode
+        of the original state is put back in the final state. The call's result,
+        after the cast, is in a value position (in the mode of the call).\<close>
+    (case interp_function_call d fuel (raise_mode state assignGhost) fnName argTys argTms of
       Inr (newState, retVal) \<Rightarrow>
-        (case value_position (state \<lparr> IS_Ghost := assignGhost \<rparr>)
+        (case value_position (raise_mode state assignGhost)
                 (apply_cast_opt castOpt retVal) of
           Inr rhsVal \<Rightarrow>
             (case interp_lvalue d fuel True newState lhsLvalue of
@@ -2164,19 +2215,19 @@ where
 
   (* Swap *)
 | "interp_statement d (Suc fuel) state (CoreStmt_Swap swapGhost lhsTm rhsTm) =
-    \<comment> \<open>Both lvalues are resolved in the swap's mode. Both are in place positions.\<close>
-    (case interp_lvalue d fuel True (state \<lparr> IS_Ghost := swapGhost \<rparr>) lhsTm of
+    \<comment> \<open>Both lvalues are resolved in the mode raised by the swap's flag. Both are in place positions.\<close>
+    (case interp_lvalue d fuel True (raise_mode state swapGhost) lhsTm of
       Inl err \<Rightarrow> Inl err
     | Inr lhsLvalue \<Rightarrow>
-        (case interp_lvalue d fuel True (state \<lparr> IS_Ghost := swapGhost \<rparr>) rhsTm of
+        (case interp_lvalue d fuel True (raise_mode state swapGhost) rhsTm of
           Inl err \<Rightarrow> Inl err
         | Inr rhsLvalue \<Rightarrow>
             (case perform_swap state lhsLvalue rhsLvalue of
               Inl err \<Rightarrow> Inl err
             | Inr newState \<Rightarrow> Inr (Continue newState))))"
 
-  (* Return. The term is evaluated in the state as it is, i.e. in the mode of
-     the function being run. No check is made here: the returned value is checked
+  (* Return. The term is evaluated in the state as it is, i.e. in the mode the
+     function was called in. No check is made here: the returned value is checked
      when the call returns (call_body). *)
 | "interp_statement d (Suc fuel) state (CoreStmt_Return tm) =
     (case interp_term d fuel state tm of
@@ -2192,8 +2243,8 @@ where
         again, in the state the next iteration will start from, and it is a RuntimeError
         if its value has not strictly decreased (see decreases_error).
       - The invariants and the decreases-term are ghost code. The condition is
-        evaluated in the loop's mode, and is in a value position. The body runs in
-        the state as it is. *)
+        evaluated in the mode raised by the loop's flag, and is in a value position.
+        The body runs in the state as it is. *)
 | "interp_statement d (Suc fuel) state (CoreStmt_While whileGhost condTm invars decr bodyStmts) =
     (case interp_term_list d fuel (state \<lparr> IS_Ghost := Ghost \<rparr>) invars of
       Inl err \<Rightarrow> Inl err
@@ -2201,8 +2252,8 @@ where
         (case conditions_error invarVals of
           Some err \<Rightarrow> Inl err
         | None \<Rightarrow>
-            (case value_position (state \<lparr> IS_Ghost := whileGhost \<rparr>)
-                    (interp_term d fuel (state \<lparr> IS_Ghost := whileGhost \<rparr>) condTm) of
+            (case value_position (raise_mode state whileGhost)
+                    (interp_term d fuel (raise_mode state whileGhost) condTm) of
               Inr (CV_Bool True) \<Rightarrow>
                 (case eval_decreases (interp_term d fuel (state \<lparr> IS_Ghost := Ghost \<rparr>)) decr of
                   Inl err \<Rightarrow> Inl err
@@ -2225,10 +2276,10 @@ where
             | Inr _ \<Rightarrow> Inl TypeError
             | Inl err \<Rightarrow> Inl err)))"
 
-  (* Pattern match. The scrutinee is evaluated in the match's mode, and is in a
-     place position; the chosen arm runs in the state as it is. *)
+  (* Pattern match. The scrutinee is evaluated in the mode raised by the match's
+     flag, and is in a place position; the chosen arm runs in the state as it is. *)
 | "interp_statement d (Suc fuel) state (CoreStmt_Match matchGhost scrutTm arms) =
-    (case interp_term d fuel (state \<lparr> IS_Ghost := matchGhost \<rparr>) scrutTm of
+    (case interp_term d fuel (raise_mode state matchGhost) scrutTm of
       Inr scrutVal \<Rightarrow>
         (case find_matching_arm scrutVal arms of
           Inr armStmts \<Rightarrow>
@@ -2305,8 +2356,9 @@ where
             \<comment> \<open>Evaluate each argument, both as an lvalue and as an rvalue.\<close>
             \<comment> \<open>(Both are needed, because, e.g., `a[10]` might evaluate successfully as an
                 lvalue, but fail as an rvalue, if 10 was out of bounds for the array.)\<close>
-            \<comment> \<open>Each argument is evaluated in the mode of its parameter (map_args,
-                arg_state): the actual for a ghost parameter is ghost code.\<close>
+            \<comment> \<open>Each argument is evaluated in the mode raised by the flag of its
+                parameter (map_args, arg_state): the actual for a ghost parameter is
+                ghost code.\<close>
             let refResults = map_args (interp_lvalue d fuel True) state (IF_Args f) argTms;
                 valResults = map_args (interp_term d fuel) state (IF_Args f) argTms;
                 argTuples = zip (IF_Args f) (zip refResults valResults);
@@ -2316,13 +2368,12 @@ where
                 calleeTyArgs = fmap_of_list
                   (zip (IF_TyArgs f)
                        (map (apply_subst (IS_TyArgs state)) argTys));
-                \<comment> \<open>Create a 'cleared state' for running the function body. The body
-                    runs in the mode of the function.\<close>
+                \<comment> \<open>Create a 'cleared state' for running the function body. The mode
+                    (IS_Ghost) is kept: the body runs in the mode of the call.\<close>
                 clearedState = state \<lparr> IS_Locals := fmempty,
                                        IS_Refs := fmempty,
                                        IS_ConstLocals := {||},
-                                       IS_TyArgs := calleeTyArgs,
-                                       IS_Ghost := IF_Ghost f \<rparr>
+                                       IS_TyArgs := calleeTyArgs \<rparr>
             in
               \<comment> \<open>Create a 'pre call state' by adding the arguments, one by one, into the
                   cleared state.\<close>
@@ -2402,8 +2453,7 @@ lemma interp_function_call_InrE:
                      (map_args (interp_term d fuel) state (IF_Args f) argTms)))
            (Inr (state \<lparr> IS_Locals := fmempty, IS_Refs := fmempty, IS_ConstLocals := {||},
                          IS_TyArgs := fmap_of_list (zip (IF_TyArgs f)
-                                        (map (apply_subst (IS_TyArgs state)) argTys)),
-                         IS_Ghost := IF_Ghost f \<rparr>))
+                                        (map (apply_subst (IS_TyArgs state)) argTys)) \<rparr>))
          = Inr preCallState"
     and "call_body (interp_statement_list d fuel) state f
            (map_args (interp_writable_lvalue d fuel) state (IF_Args f) argTms)
@@ -2431,8 +2481,7 @@ next
     let ?calleeTyArgs = "fmap_of_list (zip (IF_TyArgs f) (map (apply_subst (IS_TyArgs state)) argTys))"
     let ?clearedState = "state \<lparr> IS_Locals := fmempty, IS_Refs := fmempty,
                                   IS_ConstLocals := {||},
-                                  IS_TyArgs := ?calleeTyArgs,
-                                  IS_Ghost := IF_Ghost f \<rparr>"
+                                  IS_TyArgs := ?calleeTyArgs \<rparr>"
     show ?thesis
     proof (cases "fold process_one_arg (zip (IF_Args f) (zip ?refResults ?valResults))
                     (Inr ?clearedState)")

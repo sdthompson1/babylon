@@ -73,12 +73,15 @@ record 'world InterpState =
   IS_TyArgs :: "(string, CoreType) fmap"
 
   (* Whether the code being run is ghost or executable. Terms carry no ghost
-     flag of their own, so the mode is kept here. It is the mode of the
-     function being run (IF_Ghost), except that the interpreter overrides it
-     temporarily while evaluating a term whose mode is fixed by its context:
-     the terms of a statement with a ghost flag, an argument for a ghost
-     parameter, and specification terms (assertions, invariants,
-     decreases-terms, contracts), which are always ghost. *)
+     flag of their own, so the mode is kept here. NotGhost means that what is
+     being evaluated is executable (it is still there after ghost erasure).
+     The interpreter raises the mode to Ghost while it evaluates ghost code:
+     the terms (and the call) of a statement with a ghost flag, an argument
+     for a ghost parameter, and specification terms (assertions, invariants,
+     decreases-terms, contracts). A function called from ghost code runs in
+     Ghost mode too, whether it is a ghost function or not; so the mode of a
+     function body is the mode of the call, not IF_Ghost. Nothing lowers the
+     mode. See "Ghost and executable code" in CoreInterp.thy. *)
   IS_Ghost :: GhostOrNot
 
   (* The datatypes of the program (name to number of type parameters), their
