@@ -566,9 +566,12 @@ next
                    = Some armEnv"
           by auto
         from H CoreStmt_Match sv arm obtain bodyRes where
-          body: "interp_statement_list d fuel state armStmts = Inr bodyRes"
+          body: "interp_statement_list d fuel (raise_mode state gm) armStmts = Inr bodyRes"
           by (auto split: sum.splits)
-        note w1 = IH_list[OF fnB funs_eq okB armT body]
+        \<comment> \<open>The arm runs in the mode raised by the match's flag. \<close>
+        have funsB: "IS_Functions (raise_mode state gm) = funs" using funs_eq by simp
+        from IH_list[OF fnB funsB okB armT body]
+        have w1: "IS_World (result_state bodyRes) = IS_World state" by simp
         show ?thesis
         proof (cases bodyRes)
           case (Return state1 v)

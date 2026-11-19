@@ -1906,16 +1906,16 @@ next
         thus ?thesis using f'_eq Inr Inl by simp
       next
         case (Inr armStmts)
-        hence arm_noFuel: "interp_statement_list d fuel state armStmts \<noteq> Inl InsufficientFuel"
+        hence arm_noFuel: "interp_statement_list d fuel (raise_mode state matchGhost) armStmts \<noteq> Inl InsufficientFuel"
           using noFuel \<open>interp_term d fuel (raise_mode state matchGhost) scrutTm = Inr scrutVal\<close>
           by (auto split: sum.splits)
-        hence IH_arm: "\<forall>f'\<ge>fuel. interp_statement_list d f' state armStmts
-                                   = interp_statement_list d fuel state armStmts"
+        hence IH_arm: "\<forall>f'\<ge>fuel. interp_statement_list d f' (raise_mode state matchGhost) armStmts
+                                   = interp_statement_list d fuel (raise_mode state matchGhost) armStmts"
           using "36.IH"(2) \<open>interp_term d fuel (raise_mode state matchGhost) scrutTm = Inr scrutVal\<close> Inr by blast
         have "interp_term d f'' (raise_mode state matchGhost) scrutTm = Inr scrutVal"
           using IH_scrut \<open>interp_term d fuel (raise_mode state matchGhost) scrutTm = Inr scrutVal\<close> f''_ge by metis
-        moreover have "interp_statement_list d f'' state armStmts
-                         = interp_statement_list d fuel state armStmts"
+        moreover have "interp_statement_list d f'' (raise_mode state matchGhost) armStmts
+                         = interp_statement_list d fuel (raise_mode state matchGhost) armStmts"
           using IH_arm f''_ge by metis
         ultimately show ?thesis
           using f'_eq \<open>interp_term d fuel (raise_mode state matchGhost) scrutTm = Inr scrutVal\<close> Inr by simp
@@ -3251,10 +3251,10 @@ next
         thus ?thesis using Scrut scrut_eq by simp
       next
         case (Inr armStmts)
-        hence "interp_statement_list d fuel state armStmts \<noteq> Inl InsufficientFuel"
+        hence "interp_statement_list d fuel (raise_mode state matchGhost) armStmts \<noteq> Inl InsufficientFuel"
           using "36.prems" Scrut by (auto split: sum.splits)
-        hence "interp_statement_list d' fuel state armStmts
-                 = interp_statement_list d fuel state armStmts"
+        hence "interp_statement_list d' fuel (raise_mode state matchGhost) armStmts
+                 = interp_statement_list d fuel (raise_mode state matchGhost) armStmts"
           using "36.IH"(2) Scrut Inr d'_ge by blast
         thus ?thesis using Scrut Inr scrut_eq by simp
       qed

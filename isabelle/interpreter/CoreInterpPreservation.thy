@@ -221,7 +221,7 @@ lemma static_parts_eq_restore_scope:
   using assms by (simp add: static_parts_eq_def)
 
 (* The same, when the scope was entered in another mode (the body of a ghost
-   loop runs in Ghost mode). *)
+   loop, or an arm of a ghost match, runs in Ghost mode). *)
 lemma static_parts_eq_restore_scope_mode:
   assumes "static_parts_eq (state \<lparr> IS_Ghost := g \<rparr>) state'"
   shows "static_parts_eq state (restore_scope state state')"
@@ -521,25 +521,25 @@ next
           arm: "find_matching_arm scrutVal arms = Inr armStmts"
           by (auto split: sum.splits)
         from H CoreStmt_Match sv arm obtain bodyRes where
-          body: "interp_statement_list d fuel state armStmts = Inr bodyRes"
+          body: "interp_statement_list d fuel (raise_mode state g) armStmts = Inr bodyRes"
           by (auto split: sum.splits)
         from IH_stmt_list body
-        have body_eq: "static_parts_eq state (result_state bodyRes)" by blast
+        have body_eq: "static_parts_eq (raise_mode state g) (result_state bodyRes)" by blast
         show ?thesis
         proof (cases bodyRes)
           case (Continue state1)
-          from body_eq Continue have eq1: "static_parts_eq state state1" by simp
+          from body_eq Continue have eq1: "static_parts_eq (raise_mode state g) state1" by simp
           from CoreStmt_Match H sv arm body Continue
           have res_eq: "res = Continue (restore_scope state state1)" by simp
           show ?thesis
-            by (simp only: res_eq result_state.simps static_parts_eq_restore_scope[OF eq1])
+            by (simp only: res_eq result_state.simps static_parts_eq_restore_scope_mode[OF eq1])
         next
           case (Return state1 v)
-          from body_eq Return have eq1: "static_parts_eq state state1" by simp
+          from body_eq Return have eq1: "static_parts_eq (raise_mode state g) state1" by simp
           from CoreStmt_Match H sv arm body Return
           have res_eq: "res = Return (restore_scope state state1) v" by simp
           show ?thesis
-            by (simp only: res_eq result_state.simps static_parts_eq_restore_scope[OF eq1])
+            by (simp only: res_eq result_state.simps static_parts_eq_restore_scope_mode[OF eq1])
         qed
       next
         case (CoreStmt_ShowHide _ _) with H

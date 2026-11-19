@@ -986,12 +986,13 @@ lemma interp_Block_scope_result:
 lemma interp_Match_scope_result:
   assumes "interp_term d fuel (raise_mode state g) scrut = Inr scrutVal"
     and "find_matching_arm scrutVal arms = Inr armStmts"
-    and "interp_statement_list d fuel state armStmts = Inr bodyRes"
+    and "interp_statement_list d fuel (raise_mode state g) armStmts = Inr bodyRes"
   shows "interp_statement d (Suc fuel) state (CoreStmt_Match g scrut arms)
            = Inr (scope_result state bodyRes)"
   using assms by (cases bodyRes) simp_all
 
-(* A Match that is not ghost evaluates its scrutinee in the state as it is. *)
+(* A Match that is not ghost evaluates its scrutinee, and runs the chosen arm,
+   in the state as it is. *)
 lemma interp_Match_scope_result_NotGhost:
   assumes "interp_term d fuel state scrut = Inr scrutVal"
     and "find_matching_arm scrutVal arms = Inr armStmts"

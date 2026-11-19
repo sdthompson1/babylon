@@ -797,8 +797,8 @@ proof -
   show ?thesis using assms by (simp add: state_erased_def 1 2 3)
 qed
 
-(* Leaving a scope whose body ran in another mode (the body of a ghost loop
-   runs in Ghost mode). The erased state does not move, so the relation
+(* Leaving a scope whose body ran in another mode (the body of a ghost loop,
+   or an arm of a ghost match, runs in Ghost mode). The erased state does not move, so the relation
    at the end of the body is with the erased state in the mode of the body;
    restore_scope puts the mode of the starting state back. *)
 lemma ghost_scope_exit_mode:
@@ -1313,10 +1313,18 @@ next
           armT: "core_statement_list_type (env \<lparr> TE_ProofTopLevel := False \<rparr>) Ghost armStmts
                    = Some armEnv"
           by auto
+        \<comment> \<open>The arm of a ghost match runs in Ghost mode. The erased state does
+            not move, but is related to the full state in that mode when it
+            is put in that mode too. \<close>
+        let ?fullG = "full \<lparr>IS_Ghost := Ghost\<rparr>"
+        let ?erasedG = "erased \<lparr>IS_Ghost := Ghost\<rparr>"
         from H CoreStmt_Match sv arm obtain bodyRes where
-          body: "interp_statement_list d fuel full armStmts = Inr bodyRes"
-          by (auto split: sum.splits)
-        note bodyIH = IH_list[OF fnB funs_eq fgB relB armT body]
+          body: "interp_statement_list d fuel ?fullG armStmts = Inr bodyRes"
+          by (auto simp: g_eq split: sum.splits)
+        have funsG: "IS_Functions ?fullG = funs" using funs_eq by simp
+        have relG: "state_erased (env \<lparr> TE_ProofTopLevel := False \<rparr>) emb ?fullG ?erasedG"
+          by (rule state_erased_set_ghost[OF relB])
+        note bodyIH = IH_list[OF fnB funsG fgB relG armT body]
         show ?thesis
         proof (cases bodyRes)
           case (Return state1 v)
@@ -1324,12 +1332,12 @@ next
         next
           case (Continue state1)
           from bodyIH Continue
-          have rel1: "state_erased armEnv emb state1 erased"
+          have rel1: "state_erased armEnv emb state1 ?erasedG"
             by simp
           have rel_rs: "state_erased env emb (restore_scope full state1) erased"
-            by (rule ghost_scope_exit[OF rel armT body[unfolded Continue] rel1])
+            by (rule ghost_scope_exit_mode[OF rel armT body[unfolded Continue] rel1])
           from CoreStmt_Match H sv arm body Continue
-          have res_eq: "res = Continue (restore_scope full state1)" by simp
+          have res_eq: "res = Continue (restore_scope full state1)" by (simp add: g_eq)
           show ?thesis unfolding env'_eq by (rule ghost_resultI[OF res_eq rel_rs])
         qed
       next

@@ -2420,21 +2420,25 @@ next
               then obtain bodyEnv' where
                 body_typed: "core_statement_list_type benv matchGhost armBody = Some bodyEnv'"
                 by auto
-              have mode_benv: "(IS_Ghost state = NotGhost \<longrightarrow> TE_FunctionGhost benv = NotGhost)"
-                using mode_fn unfolding benv_def by simp
-              from IH_stmts[OF sme_benv wf_benv ng_benv mode_benv body_typed]
+              \<comment> \<open>The arm runs in the mode raised by the match's flag. \<close>
+              let ?bstate = "raise_mode state matchGhost"
+              have sme_bstate: "state_matches_env ?bstate benv storeTyping"
+                using sme_benv by simp
+              have mode_benv: "(IS_Ghost ?bstate = NotGhost \<longrightarrow> TE_FunctionGhost benv = NotGhost)"
+                using mode_fn unfolding benv_def by (simp add: param_mode_def)
+              from IH_stmts[OF sme_bstate wf_benv ng_benv mode_benv body_typed]
               have "sound_statement_result benv bodyEnv' storeTyping
-                  (interp_statement_list d fuel state armBody)" .
+                  (interp_statement_list d fuel ?bstate armBody)" .
               \<comment> \<open>sound_statement_result ignores TE_ProofTopLevel of its first env. \<close>
               hence body_sound: "sound_statement_result env bodyEnv' storeTyping
-                  (interp_statement_list d fuel state armBody)"
+                  (interp_statement_list d fuel ?bstate armBody)"
                 unfolding benv_def by simp
               from core_statement_list_type_fixed_eq[OF body_typed]
               have "tyenv_fixed_eq benv bodyEnv'" .
               hence fxeq_body: "tyenv_fixed_eq env bodyEnv'"
                 unfolding benv_def by simp
               show ?thesis
-              proof (cases "interp_statement_list d fuel state armBody")
+              proof (cases "interp_statement_list d fuel ?bstate armBody")
                 case (Inl body_err)
                 with body_sound have "sound_error_result body_err" by simp
                 moreover have "interp_statement d (Suc fuel) state
@@ -2453,7 +2457,7 @@ next
                     by auto
                   \<comment> \<open>Globals/functions preserved through the body. \<close>
                   from body_eval Continue
-                  have body_list_eq: "interp_statement_list d fuel state armBody
+                  have body_list_eq: "interp_statement_list d fuel ?bstate armBody
                                       = Inr (Continue state1)" by simp
                   from static_parts_eqD(1)[OF interp_statement_list_static[OF body_list_eq]]
                   have globals_eq: "IS_Globals state1 = IS_Globals state" by simp
@@ -2497,7 +2501,7 @@ next
                     by blast
                   \<comment> \<open>Globals/functions preserved through the body (Return). \<close>
                   from body_eval Return
-                  have body_list_eq: "interp_statement_list d fuel state armBody
+                  have body_list_eq: "interp_statement_list d fuel ?bstate armBody
                                       = Inr (Return state1 retVal)" by simp
                   from static_parts_eqD(1)[OF interp_statement_list_static[OF body_list_eq]]
                   have globals_eq: "IS_Globals state1 = IS_Globals state" by simp

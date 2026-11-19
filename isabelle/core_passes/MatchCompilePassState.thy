@@ -505,10 +505,13 @@ qed
 
 (* A statement tree whose walk picks the leaf b runs, in the interpreter, as
    b does, at some fuel; a test (a CoreStmt_Match) runs its arm in a scope,
-   so the result of a tree that is not a single leaf is scoped. *)
+   so the result of a tree that is not a single leaf is scoped. A test also
+   runs its arm in the mode raised by its flag g, so this is for a state that
+   is in mode g already (where the arm runs in the state as it is). *)
 lemma match_tree_to_statements_exec:
   assumes "match_tree_eval (var_env s) t = Some b"
       and "interp_statement_list d fuel s b = Inr r"
+      and "IS_Ghost s = g"
   shows "\<exists>fuel'. interp_statement_list d fuel' s (match_tree_to_statements g t)
                    = Inr (case t of MT_Leaf _ \<Rightarrow> r | MT_Test _ _ \<Rightarrow> scope_result s r)"
   using assms
@@ -524,7 +527,7 @@ next
     by (auto split: option.splits)
   from arms_find_in[OF arm] obtain p where arm_in: "(p, t') \<in> set arms" by auto
   have t'_in: "t' \<in> Basic_BNFs.snds (p, t')" by simp
-  from MT_Test.IH[OF arm_in t'_in t'_eval MT_Test.prems(2)] obtain f1 where
+  from MT_Test.IH[OF arm_in t'_in t'_eval MT_Test.prems(2,3)] obtain f1 where
     f1: "interp_statement_list d f1 s (match_tree_to_statements g t')
            = Inr (case t' of MT_Leaf _ \<Rightarrow> r | MT_Test _ _ \<Rightarrow> scope_result s r)" by blast
   \<comment> \<open>The match evaluates its scrutinee in the mode raised by its flag, which
@@ -536,8 +539,13 @@ next
   let ?r' = "case t' of MT_Leaf _ \<Rightarrow> r | MT_Test _ _ \<Rightarrow> scope_result s r"
   have sc': "interp_term d ?F (raise_mode s g) sc = Inr w"
     by (rule interp_term_Inr_more_fuel[OF n]) simp
-  have t'': "interp_statement_list d ?F s (match_tree_to_statements g t') = Inr ?r'"
+  \<comment> \<open>The arm runs in that mode too, which is the mode of s.\<close>
+  have rm: "raise_mode s g = s" by (rule raise_mode_same[OF MT_Test.prems(3)])
+  have "interp_statement_list d ?F s (match_tree_to_statements g t') = Inr ?r'"
     by (rule interp_statement_list_Inr_more_fuel[OF f1]) simp
+  with rm
+  have t'': "interp_statement_list d ?F (raise_mode s g) (match_tree_to_statements g t') = Inr ?r'"
+    by simp
   have m: "interp_statement d (Suc ?F) s
              (CoreStmt_Match g sc (map (\<lambda>(p, t). (p, match_tree_to_statements g t)) arms))
            = Inr (scope_result s ?r')"

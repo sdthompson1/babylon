@@ -2195,13 +2195,15 @@ where
             | Inl err \<Rightarrow> Inl err)))"
 
   (* Pattern match. The scrutinee is evaluated in the mode raised by the match's
-     flag, and is in a place position; the chosen arm runs in the state as it is. *)
+     flag, and is in a place position. The chosen arm runs in the mode raised by
+     the match's flag too: every arm of a ghost match is ghost code. The mode is
+     put back afterwards (by restore_scope). *)
 | "interp_statement d (Suc fuel) state (CoreStmt_Match matchGhost scrutTm arms) =
     (case interp_term d fuel (raise_mode state matchGhost) scrutTm of
       Inr scrutVal \<Rightarrow>
         (case find_matching_arm scrutVal arms of
           Inr armStmts \<Rightarrow>
-            (case interp_statement_list d fuel state armStmts of
+            (case interp_statement_list d fuel (raise_mode state matchGhost) armStmts of
               Inr (Continue state') \<Rightarrow> Inr (Continue (restore_scope state state'))
             | Inr (Return state' retVal) \<Rightarrow> Inr (Return (restore_scope state state') retVal)
             | Inl err \<Rightarrow> Inl err)

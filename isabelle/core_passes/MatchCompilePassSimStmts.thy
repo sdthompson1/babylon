@@ -147,9 +147,9 @@ proof (rule nth_equalityI[OF assms(1)])
 qed
 
 
-(* A Match statement evaluates its scrutinee in the mode raised by its flag;
-   when the flag is the mode of the state, the scrutinee is evaluated in the
-   state as it is. *)
+(* A Match statement evaluates its scrutinee, and runs the chosen arm, in the
+   mode raised by its flag; when the flag is the mode of the state, that is
+   the state as it is. *)
 lemma interp_Match_scope_result_same:
   assumes "IS_Ghost state = g"
       and "interp_term d fuel state scrut = Inr scrutVal"
@@ -159,9 +159,11 @@ lemma interp_Match_scope_result_same:
            = Inr (scope_result state bodyRes)"
 proof -
   have "raise_mode state g = state" by (rule raise_mode_same[OF assms(1)])
-  with assms(2)
-  have "interp_term d fuel (raise_mode state g) scrut = Inr scrutVal" by simp
-  from interp_Match_scope_result[OF this assms(3,4)] show ?thesis .
+  with assms(2,4)
+  have "interp_term d fuel (raise_mode state g) scrut = Inr scrutVal"
+    and "interp_statement_list d fuel (raise_mode state g) armStmts = Inr bodyRes"
+    by simp_all
+  from interp_Match_scope_result[OF this(1) assms(3) this(2)] show ?thesis .
 qed
 
 
@@ -973,7 +975,7 @@ proof (rule stmt_simI)
       from interp_statement_list_single[OF run2] show ?thesis unfolding compiled_eq2 by blast
     next
       case (MT_Test s arms'')
-      from match_tree_to_statements_exec[OF tree' f2, of g] obtain f3 where
+      from match_tree_to_statements_exec[OF tree' f2 gmc] obtain f3 where
         f3: "interp_statement_list d f3 (mc_state full)
                (match_tree_to_statements g (compile_match_tree (CoreTm_Var x) ?arms'))
              = Inr (case compile_match_tree (CoreTm_Var x) ?arms' of

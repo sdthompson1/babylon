@@ -1024,10 +1024,14 @@ next
           arm: "find_matching_arm scrutVal arms = Inr armStmts"
           by (auto split: sum.splits)
         from H CoreStmt_Match sv arm obtain bodyRes where
-          body: "interp_statement_list d fuel state armStmts = Inr bodyRes"
+          body: "interp_statement_list d fuel (raise_mode state g) armStmts = Inr bodyRes"
           by (auto split: sum.splits)
+        \<comment> \<open>The arm runs in the mode raised by the match's flag; the mode of a
+            state has no part in frame_step. \<close>
         from IH_stmt_list body
-        have body_fs: "frame_step state (result_state bodyRes)" by blast
+        have "frame_step (raise_mode state g) (result_state bodyRes)" by blast
+        then have body_fs: "frame_step state (result_state bodyRes)"
+          by (simp add: frame_step_def)
         show ?thesis
         proof (cases bodyRes)
           case (Continue state1)
