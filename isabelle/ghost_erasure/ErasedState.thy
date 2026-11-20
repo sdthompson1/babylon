@@ -114,9 +114,7 @@ definition heap_erased ::
     funs_erased env full erased \<and>
     store_erased emb full erased"
 
-(* The whole relation. The two states are in the same mode (IS_Ghost): the
-   erased program runs its statements in the mode in which the full program
-   runs the corresponding statements. *)
+(* The whole relation. *)
 definition state_erased ::
     "CoreTyEnv \<Rightarrow> nat list \<Rightarrow> 'w InterpState \<Rightarrow> 'w InterpState \<Rightarrow> bool" where
   "state_erased env emb full erased \<equiv>

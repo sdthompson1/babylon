@@ -112,8 +112,8 @@ definition cast_ok :: "CoreTyEnv \<Rightarrow> CoreType \<Rightarrow> CoreType \
 
 (* Certain term positions (e.g. subterms of a CoreTm_Record, the body of a CoreTm_Let)
    are designated "value positions". In NotGhost mode, the typechecker enforces a rule
-   that terms in value positions must have a complete type. The following function is
-   used for checking that rule. *)
+   that terms in value positions must have a complete type (the so-called "rule R2").
+   The following function is used for checking that rule. *)
 abbreviation complete_if_executable :: "GhostOrNot \<Rightarrow> CoreType \<Rightarrow> bool" where
   "complete_if_executable ghost ty \<equiv> (ghost = NotGhost \<longrightarrow> is_complete_type ty)"
 

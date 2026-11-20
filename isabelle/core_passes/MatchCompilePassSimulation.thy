@@ -5,13 +5,13 @@ begin
 (* The simulation theorem for the match compilation pass.
 
    If a statement list (or a function call) that is well-typed in NotGhost
-   mode, ghost-free and has variable scrutinees runs to a result from a state
-   that matches its environment and is in executable mode (IS_Ghost =
-   NotGhost), then the compiled statement list runs to the
-   same result, with the function bodies compiled (mc_state, mc_result), from
-   the compiled state, at some fuel. The fuel of the compiled run is
-   existentially quantified because the compiled program nests extra Match
-   nodes, each of which consumes fuel.
+   mode, ghost-free and has variable scrutinees runs to a result (Inr), from a
+   state that matches its environment (and has IS_Ghost = NotGhost), then the
+   compiled statement list runs to the same result, with the function bodies
+   compiled (mc_state, mc_result), from the compiled state, at some fuel.
+
+   The fuel of the compiled run is existentially quantified because the
+   compiled program nests extra Match nodes, each of which consumes fuel.
 
    The proof is one induction on the fuel for the six interpreter functions
    together (sim_all); the cases of the induction step are the sim_* lemmas of
@@ -196,20 +196,15 @@ section \<open>The simulation theorems\<close>
    satisfy funs_match_compilable (no ghost functions or parameters, no
    contracts, ghost-free bodies with variable scrutinees); the last section
    shows that the state built from a ghost-free module with variable
-   scrutinees does.
-
-   The state is in executable mode (IS_Ghost full = NotGhost), and the
-   statements are those of a function that is not ghost (TE_FunctionGhost env
-   = NotGhost): the proof uses type soundness, which asks that a state in
-   executable mode run code that is typed as executable. The state built from a
-   module is in executable mode (make_interp_state_IS_Ghost). *)
+   scrutinees does satisfy that. *)
 theorem match_compile_simulation:
   fixes full :: "'w InterpState"
   assumes fmc: "funs_match_compilable env (IS_Functions full)"
     and sme: "state_matches_env full env storeTyping"
     and wf: "tyenv_well_formed env"
     and gm: "IS_Ghost full = NotGhost"
-    and ng: "TE_ProofGoal env = None" and fgh: "TE_FunctionGhost env = NotGhost"
+    and ng: "TE_ProofGoal env = None"
+    and fgh: "TE_FunctionGhost env = NotGhost"
     and T: "core_statement_list_type env NotGhost stmts = Some env'"
     and gf: "core_statement_list_ghost_free stmts"
     and ok: "core_statement_list_match_scrutinees_ok stmts"

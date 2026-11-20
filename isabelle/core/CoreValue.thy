@@ -14,14 +14,11 @@ begin
 (* Note: CV_Int and CV_Real arise only when ghost code is run. *)
 
 (* For arrays, all three array types (T[*], T[n] and T[]) are represented in essentially the
-   same way: as a big table mapping indices to values. CV_Array also contains an "allocatable
-   flag" which is used *only* to keep track of the type (it is True for T[*] arrays, False for
-   T[] and T[n]). Array casts rewrite the flag where needed.
-
-   In a compiled implementation, there would likely be more differences between the array
-   types (e.g. T[*] is a pointer to heap memory; T[n] is a fixed block of stack memory).
-   The language's various restrictions on "allocated" values allow this to be kept sound
-   without needing a garbage collector. *)
+   same way: as a table mapping indices to values. CV_Array also contains an "allocatable
+   flag" which is used only to keep track of the type (it is True for T[*] arrays, False for
+   T[] and T[n]). Array casts rewrite the flag where needed. The semantics (i.e. the
+   interpreter) copies array values when needed; a compiler might do something different
+   (e.g. pass pointers around) but that is its business. *)
 
 (* For extern types, CV_Extern carries the type itself (type name and alloc level), together
    with a nat "handle", which can be thought of as the "void *" value on the C side. The

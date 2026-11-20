@@ -95,14 +95,7 @@ definition resolve_callee_function ::
 
 (* Resolve a data constructor callee. Checks ghost, rejects payload-less
    constructors (which are not callable), resolves type args, and expects
-   exactly one argument, of the payload type.
-
-   The payload is a value position, so in executable code its type must be
-   complete (rule R2, see complete_if_executable in CoreTypecheck.thy). The
-   declared payload type is checked here; the type arguments are complete, so
-   the substituted payload type is complete as well. (elab_ctor_payload only
-   accepts complete payload types, so this check does not fail on an elaborated
-   datatype; it is made because tyenv_well_formed does not record that.) *)
+   exactly one argument, of the payload type. *)
 definition resolve_callee_data_ctor ::
   "CoreTyEnv \<Rightarrow> ElabEnv \<Rightarrow> GhostOrNot \<Rightarrow> Location \<Rightarrow> string \<Rightarrow> BabType list \<Rightarrow> nat
    \<Rightarrow> TypeError list + (string \<times> CoreType list \<times> CalleeInfo \<times> nat)" where
@@ -114,6 +107,9 @@ definition resolve_callee_data_ctor ::
         else if name |\<in>| EE_NullaryDataCtors elabEnv then
           Inl [TyErr_DataCtorNotCallable loc name]
         else if ghost = NotGhost \<and> \<not> is_complete_type payloadTy then
+          \<comment> \<open>Note: this error shouldn't occur, because elab_ctor_payload only accepts
+              complete payload types. However, tyenv_well_formed doesn't record this fact,
+              so we check again here.\<close>
           Inl [TyErr_IncompleteArrayType loc]
         else
           (case resolve_type_args env elabEnv ghost loc name tyvars tyArgs next_mv of
@@ -857,11 +853,7 @@ where
         | None \<Rightarrow> Inl [TyErr_IntLiteralOutOfRange loc])
     | BabLit_Array tms \<Rightarrow>
         \<comment> \<open>Allocate a fresh metavariable for the element type, then unify each
-            element's type against it (with integer coercion). The elements are
-            value positions, so the element type must be complete in executable
-            code (rule R2). No check is needed for that: the element type is a
-            metavariable, and a metavariable is never bound to an incomplete
-            type (see unify_type_lists).\<close>
+            element's type against it (with integer coercion).\<close>
         if \<not> int_in_range (int_range Unsigned IntBits_64) (int (length tms)) then
           Inl [TyErr_InvalidArrayDimension loc]
         else
@@ -954,9 +946,7 @@ where
             else
               Inl [TyErr_InvalidCast loc]))"
 
-  (* If/then/else - elaborates to CoreTm_Match with True and False patterns.
-     The branches are value positions: in executable code their type must be
-     complete (rule R2, see complete_if_executable in CoreTypecheck.thy). *)
+  (* If/then/else - elaborates to CoreTm_Match with True and False patterns *)
 | "elab_term env elabEnv ghost (BabTm_If loc condTm thenTm elseTm) next_mv =
     (case elab_term env elabEnv ghost condTm next_mv of
       Inl errs \<Rightarrow> Inl errs
@@ -979,7 +969,8 @@ where
                     \<comment> \<open>A metavariable may not be bound to an incomplete array type.\<close>
                     if \<not> typesubst_complete branchSubst
                     then Inl [TyErr_IncompleteTypeArgument loc]
-                    \<comment> \<open>The branches are value positions (rule R2).\<close>
+                    \<comment> \<open>The branches are value positions, so must have complete type
+                        (in NotGhost code).\<close>
                     else if ghost = NotGhost
                             \<and> \<not> is_complete_type (apply_subst branchSubst thenTy)
                     then Inl [TyErr_IncompleteArrayType loc]
@@ -1048,9 +1039,7 @@ where
             | Inr (resultTm, resultTy) \<Rightarrow>
                 Inr (resultTm, resultTy, next_mv2))))"
 
-  (* Let. The right-hand side is a place position, and may have an incomplete
-     type. The body is a value position: in executable code its type must be
-     complete (rule R2). *)
+  (* Let *)
 | "elab_term env elabEnv ghost (BabTm_Let loc varName rhs body) next_mv =
     (case elab_term env elabEnv ghost rhs next_mv of
       Inl errs \<Rightarrow> Inl errs
@@ -1065,6 +1054,8 @@ where
              in (case elab_term env' elabEnv ghost body next_mv1 of
                   Inl errs \<Rightarrow> Inl errs
                 | Inr (bodyTm, bodyTy, next_mv2) \<Rightarrow>
+                    \<comment> \<open>The body (unlike the rhs) is a value position, so must have
+                       complete type in NotGhost code.\<close>
                     if ghost = NotGhost \<and> \<not> is_complete_type bodyTy
                     then Inl [TyErr_IncompleteArrayType loc]
                     else Inr (CoreTm_Let varName rhsTm bodyTm, bodyTy, next_mv2)))"
@@ -1118,13 +1109,12 @@ where
                     Inl errs \<Rightarrow> Inl errs
                   | Inr (resultTm, resultTy) \<Rightarrow> Inr (resultTm, resultTy, next_mv2)))))"
 
-  (* Tuple: elaborated to a record with synthetic field names "0", "1", ...
-     The components are value positions: in executable code their types must
-     be complete (rule R2). *)
+  (* Tuple: elaborated to a record with synthetic field names "0", "1", ... *)
 | "elab_term env elabEnv ghost (BabTm_Tuple loc tms) next_mv =
     (case elab_term_list env elabEnv ghost tms next_mv of
       Inl errs \<Rightarrow> Inl errs
     | Inr (newTms, tys, next_mv') \<Rightarrow>
+        \<comment> \<open>Tuple fields are value positions, so must have complete type in NotGhost code\<close>
         if ghost = NotGhost \<and> \<not> list_all is_complete_type tys
         then Inl [TyErr_IncompleteArrayType loc]
         else
@@ -1133,8 +1123,7 @@ where
              CoreTy_Record (zip names tys),
              next_mv'))"
 
-  (* Record. The field values are value positions: in executable code their
-     types must be complete (rule R2). *)
+  (* Record *)
 | "elab_term env elabEnv ghost (BabTm_Record loc flds) next_mv =
     (case first_duplicate_name fst flds of
       Some dupName \<Rightarrow> Inl [TyErr_DuplicateFieldName loc dupName]
@@ -1142,6 +1131,7 @@ where
         (case elab_term_list env elabEnv ghost (map snd flds) next_mv of
           Inl errs \<Rightarrow> Inl errs
         | Inr (newTms, tys, next_mv') \<Rightarrow>
+            \<comment> \<open>Record fields are value positions, so must have complete type in NotGhost code\<close>
             if ghost = NotGhost \<and> \<not> list_all is_complete_type tys
             then Inl [TyErr_IncompleteArrayType loc]
             else
@@ -1150,10 +1140,7 @@ where
                  CoreTy_Record (zip names tys),
                  next_mv')))"
 
-  (* Record update. The result is a new record, whose fields are the update
-     terms and, for the other fields, projections of the base (see
-     build_record_update). All of them are value positions, so in executable
-     code the type of the result must be complete (rule R2). *)
+  (* Record update *)
 | "elab_term env elabEnv ghost (BabTm_RecordUpdate loc tm flds) next_mv =
     (case first_duplicate_name fst flds of
       Some dupName \<Rightarrow> Inl [TyErr_DuplicateFieldName loc dupName]
@@ -1178,6 +1165,8 @@ where
                           let coercedUpdates = zip (map fst flds) coercedTms;
                               (resultTm, resultTy) =
                                 build_updated_record finalSubst parentTm parentFields coercedUpdates
+                          \<comment> \<open>In NotGhost code, record fields can't have incomplete type.
+                             It suffices to check the result type.\<close>
                           in if ghost = NotGhost \<and> \<not> is_complete_type resultTy
                              then Inl [TyErr_IncompleteArrayType loc]
                              else Inr (resultTm, resultTy, next_mv2))))
@@ -1236,8 +1225,8 @@ where
 
      The type of the match is the first arm's body type. Every arm body is
      converted to it, using the same implicit conversions as function arguments.
-     The arm bodies are value positions: in executable code the type of the
-     match must be complete (rule R2).
+     The arm bodies are value positions, so in executable code the type of the match
+     must be complete.
 
      The result is handed off to finalize_match_term (which translates
      DecPatterns to CorePatterns and emits the binder-projection Lets). *)

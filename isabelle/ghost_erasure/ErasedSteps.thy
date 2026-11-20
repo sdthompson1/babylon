@@ -1278,8 +1278,8 @@ qed
 
 (* The states in which the binding of arguments starts: the caller's states
    with empty frames (and still in the caller's mode, which is the same in
-   both). They are related in the environment of the callee's body. (Its ghost variables are the callee's ghost parameters, and none of
-   them is bound yet.) *)
+   both). They are related in the environment of the callee's body. (Its ghost
+   variables are the callee's ghost parameters, and none of them is bound yet.) *)
 lemma state_erased_call_entry:
   assumes rel: "state_erased env emb full erased"
     and fns: "TE_Functions envB = TE_Functions env"

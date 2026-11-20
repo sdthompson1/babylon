@@ -7,28 +7,19 @@ begin
 (*-----------------------------------------------------------------------------*)
 
 (* Given a well-formed type environment, a machine state consistent with
-   that environment, and well-typed input (in either Ghost or NotGhost mode),
-   the interpreter either runs out of fuel, fails with a RuntimeError, or
-   produces a result consistent with the typechecking (e.g., in interp_term,
-   it produces a value of the correct type). It does not fail with a TypeError.
+   that environment, and well-typed input, the interpreter either runs out of
+   fuel, fails with a RuntimeError, or produces a result consistent with the
+   typechecking (e.g., in interp_term, it produces a value of the correct type).
+   It does not fail with a TypeError.
 
-   The mode of the state (IS_Ghost) has to fit the typing:
-    - a term, a list of terms or an lvalue is evaluated in a state whose mode
-      is the mode in which it is typed;
-    - a statement (typed in any mode) is run in a state that is in NotGhost
-      mode only if the enclosing function is not ghost (TE_FunctionGhost env).
-      The two modes need not be equal: a function that is not ghost runs in
-      Ghost mode when ghost code calls it. (The interpreter raises the mode
-      itself for the terms of a statement that has a ghost flag.)
-    - a function call is made in a state of mode `ghost`, each argument being
-      typed in the mode of its parameter (param_mode ghost g), and the function
-      called is not ghost if `ghost` is NotGhost.
-   Without these the theorem is false: a term typed in Ghost mode may call a
-   ghost function, and the interpreter gives a TypeError if that happens in a
-   state in NotGhost mode.
+   The machine's IS_Ghost flag must be set correctly:
+    - For terms, it must equal the typechecking mode used.
+    - For statements, the two can differ, but NotGhost execution cannot enter a Ghost function
+      (i.e. if IS_Ghost = NotGhost then TE_FunctionGhost must also be NotGhost).
+    - For function calls, see full theorem statement below.
 
-   For statements, the theorem only holds if TE_ProofGoal env = None; the
-   interpreter cannot execute proof bodies.
+   For statements, TE_ProofGoal env must be None, i.e. the interpreter cannot execute
+   proof bodies.
 
    For the definitions of sound_term_result, sound_statement_result, etc., see
    the top of TypeSoundnessHelpers1.thy.

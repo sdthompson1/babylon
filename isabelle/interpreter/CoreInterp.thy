@@ -416,11 +416,9 @@ fun type_at_path :: "CoreTyEnv \<Rightarrow> CoreType \<Rightarrow> LValuePath l
 | "type_at_path env (CoreTy_Array elemTy dims) (LVPath_ArrayProj _ # rest) =
     type_at_path env elemTy rest"
   \<comment> \<open>An array cast step changes the dimensions (e.g. from T[*] to T[]) while keeping
-      the element type the same. The dims must be well-kinded so that the value is
-      well-typed at, and the cast must not convert non-allocatable dimensions to
-      allocatable (get_value_at_path and update_value_at_path give TypeError for that
-      cast). (Whether the cast direction is otherwise admissible, dim_cast_ok, isn't
-      checked here; we rely on the typechecker for that.)\<close>
+      the element type the same. The new dims must be well-kinded, and the cast must not
+      convert non-allocatable dimensions to allocatable (get_value_at_path and
+      update_value_at_path give TypeError for that cast).\<close>
 | "type_at_path env (CoreTy_Array elemTy dims) (LVPath_ArrayCast dims' # rest) =
     (if array_dims_well_kinded dims' \<and> (allocatable_dims dims' \<longrightarrow> allocatable_dims dims)
      then type_at_path env (CoreTy_Array elemTy dims') rest
@@ -601,8 +599,7 @@ fun fixed_dim_sizes :: "CoreDimension list \<Rightarrow> int list" where
 | "fixed_dim_sizes (CoreDim_Fixed n # ds) = n # fixed_dim_sizes ds"
 | "fixed_dim_sizes (_ # ds) = fixed_dim_sizes ds"
 
-(* Compute the default value of a (ground) CoreType. The allocatable flag of an
-   array value is set from the type. Fuel is required
+(* Compute the default value of a (ground) CoreType. Fuel is required
    because the recursion goes through datatype payload types substituted by
    the datatype's tyArgs, which need not be syntactically smaller than the
    input. Runs out-of-fuel with InsufficientFuel; encounters a CoreTy_Var
@@ -986,9 +983,8 @@ lemma value_position_list_Nil [simp]: "value_position_list state (Inr []) = Inr 
 (* Apply a cast to a value.
     - RuntimeError if the cast fails (overflow for casts to a finite integer type;
       array's runtime size doesn't match for array casts to CoreDim_Fixed).
-    - TypeError if the cast itself is invalid (only array or numeric targets allowed;
-      T[] or T[n] cannot be cast to T[*]; note the other requirements of dim_cast_ok are
-      *not* checked).
+    - TypeError if the cast itself is invalid (only array or numeric targets are allowed,
+      and for array casts, T[]/T[n] to T[*] is illegal).
     - Otherwise: successful cast, returns the new value.
    A real cast to an integer type (finite or int) rounds downwards (towards minus
    infinity), i.e. takes the floor, before any range check. All other numeric
@@ -1412,9 +1408,9 @@ lemma checked_call_no_contract:
    external function, and returns the resulting post-call interpreter state, and the return value.
 
    When the call is made by executable code, the returned value must not be
-   allocated (R4, see "Place positions and value positions" above). This applies
-   to a Core body and to an external function alike. The check is value_position,
-   applied in the caller's state, i.e. in the mode of the call.
+   allocated (rule R4 above). This applies to a Core body and to an external function
+   alike. The check is value_position, applied in the caller's state, i.e. in the mode
+   of the call.
 
    Inputs:
     - run: statement-list evaluator (interp_statement_list, partially applied to depth and fuel)
@@ -2059,7 +2055,7 @@ where
      | Inl err \<Rightarrow> Inl err)"
 | "interp_statement d (Suc fuel) state (CoreStmt_VarDecl declGhost varName Ref _ lvalueTm) =
     \<comment> \<open>The lvalue term is evaluated in the mode raised by the declaration's flag.
-        It is in a place position (also when its value is copied, in the read-only
+        It is in a place position (even when its value is copied, in the read-only
         case below).\<close>
     (case lvalue_base_name lvalueTm of
       Some baseName \<Rightarrow>

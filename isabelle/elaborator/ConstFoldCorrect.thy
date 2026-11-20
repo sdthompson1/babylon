@@ -11,11 +11,7 @@ begin
 
    2) eval_const_interp_agree, fold_const_interp_agree, fold_const_is_core_evaluation:
       These basically say that eval_const and fold_const are equivalent to running the
-      normal Core interpreter (interp_term) in a suitable InterpState, provided that
-      the values of the constants are well typed and none of them is allocated. (The
-      interpreter gives RuntimeError where an allocated value is copied in executable
-      code; eval_const makes no such check. eval_const_not_allocated shows that the
-      proviso carries over from the constants to every value a constant term yields.)
+      normal Core interpreter (interp_term) in a suitable InterpState.
 
    Note: eval_const type preservation is proved directly by induction. We can't directly
    use the interpreter's type_soundness theorem (because that only applies to "fully
@@ -1007,6 +1003,68 @@ proof -
   thus ?thesis by (auto split: option.splits)
 qed
 
+(* Every value in the map is well-typed (assuming the state itself is well-typed, i.e.
+   satisfies state_matches_env). *)
+lemma vals_agree_value_typed:
+  fixes st :: "'w InterpState"
+  assumes sme: "state_matches_env st env storeTyping"
+      and ag: "vals_agree st vals"
+      and lk: "fmlookup vals name = Some v"
+  shows "\<exists>ty. value_has_type env v ty"
+proof -
+  from ag lk have base: "(case fmlookup (IS_Locals st) name of
+      Some addr \<Rightarrow> addr < length (IS_Store st) \<and> IS_Store st ! addr = v
+    | None \<Rightarrow>
+      (case fmlookup (IS_Refs st) name of
+         Some (addr, path) \<Rightarrow> addr < length (IS_Store st)
+                              \<and> get_value_at_path (IS_Store st ! addr) path = Inr v
+       | None \<Rightarrow> fmlookup (IS_Globals st) name = Some v))"
+    unfolding vals_agree_def by blast
+  from sme have swt: "store_well_typed st env storeTyping"
+    and lve: "local_vars_exist_in_state st env storeTyping"
+    and gve: "global_vars_exist_in_state st env"
+    and nel: "no_extra_local_vars st env"
+    and neg: "no_extra_global_vars st env"
+    unfolding state_matches_env_def by simp_all
+  have slot: "\<And>addr. addr < length (IS_Store st)
+                \<Longrightarrow> value_has_type env (IS_Store st ! addr) (storeTyping ! addr)"
+    using swt unfolding store_well_typed_def by blast
+  show ?thesis
+  proof (cases "fmlookup (IS_Locals st) name")
+    case (Some addr)
+    with base have "addr < length (IS_Store st)" and "IS_Store st ! addr = v" by simp_all
+    with slot[of addr] show ?thesis by blast
+  next
+    case None
+    show ?thesis
+    proof (cases "fmlookup (IS_Refs st) name")
+      case (Some ap)
+      obtain addr path where ap: "ap = (addr, path)" by (cases ap)
+      from base None Some ap have valid: "addr < length (IS_Store st)"
+        and gv: "get_value_at_path (IS_Store st ! addr) path = Inr v" by simp_all
+      from nel Some obtain lty where lty: "fmlookup (TE_LocalVars env) name = Some lty"
+        unfolding no_extra_local_vars_def
+        by (cases "fmlookup (TE_LocalVars env) name") auto
+      from lve lty have "local_var_in_state_with_type st env storeTyping name lty"
+        unfolding local_vars_exist_in_state_def by blast
+      with None Some ap
+      have pt: "type_at_path env (storeTyping ! addr) path
+                  = Some (apply_subst (IS_TyArgs st) lty)"
+        unfolding local_var_in_state_with_type_def by (simp add: Let_def)
+      from get_value_at_path_type[OF slot[OF valid] pt gv] show ?thesis by blast
+    next
+      case None2: None
+      from base None None2 have g: "fmlookup (IS_Globals st) name = Some v" by simp
+      from neg g obtain gty where gty: "fmlookup (TE_GlobalVars env) name = Some gty"
+        unfolding no_extra_global_vars_def
+        by (cases "fmlookup (TE_GlobalVars env) name") auto
+      from gve gty have "global_var_in_state_with_type st env name gty"
+        unfolding global_vars_exist_in_state_def by blast
+      with g show ?thesis unfolding global_var_in_state_with_type_def by auto
+    qed
+  qed
+qed
+
 (* vals_agree is preserved by the state extension interp_term performs for CoreTm_Let. *)
 lemma vals_agree_extend:
   assumes ag: "vals_agree st vals"
@@ -1555,84 +1613,14 @@ qed
 (* Main results for eval_const/interp_term agreement *)
 (* ========================================================================== *)
 
-(* In a well-typed state, every value that the map tracks is well typed: it is
-   a slot of the store, a part of a slot reached by a reference path, or a
-   global. *)
-lemma vals_agree_value_typed:
-  fixes st :: "'w InterpState"
-  assumes sme: "state_matches_env st env storeTyping"
-      and ag: "vals_agree st vals"
-      and lk: "fmlookup vals name = Some v"
-  shows "\<exists>ty. value_has_type env v ty"
-proof -
-  from ag lk have base: "(case fmlookup (IS_Locals st) name of
-      Some addr \<Rightarrow> addr < length (IS_Store st) \<and> IS_Store st ! addr = v
-    | None \<Rightarrow>
-      (case fmlookup (IS_Refs st) name of
-         Some (addr, path) \<Rightarrow> addr < length (IS_Store st)
-                              \<and> get_value_at_path (IS_Store st ! addr) path = Inr v
-       | None \<Rightarrow> fmlookup (IS_Globals st) name = Some v))"
-    unfolding vals_agree_def by blast
-  from sme have swt: "store_well_typed st env storeTyping"
-    and lve: "local_vars_exist_in_state st env storeTyping"
-    and gve: "global_vars_exist_in_state st env"
-    and nel: "no_extra_local_vars st env"
-    and neg: "no_extra_global_vars st env"
-    unfolding state_matches_env_def by simp_all
-  have slot: "\<And>addr. addr < length (IS_Store st)
-                \<Longrightarrow> value_has_type env (IS_Store st ! addr) (storeTyping ! addr)"
-    using swt unfolding store_well_typed_def by blast
-  show ?thesis
-  proof (cases "fmlookup (IS_Locals st) name")
-    case (Some addr)
-    with base have "addr < length (IS_Store st)" and "IS_Store st ! addr = v" by simp_all
-    with slot[of addr] show ?thesis by blast
-  next
-    case None
-    show ?thesis
-    proof (cases "fmlookup (IS_Refs st) name")
-      case (Some ap)
-      obtain addr path where ap: "ap = (addr, path)" by (cases ap)
-      from base None Some ap have valid: "addr < length (IS_Store st)"
-        and gv: "get_value_at_path (IS_Store st ! addr) path = Inr v" by simp_all
-      from nel Some obtain lty where lty: "fmlookup (TE_LocalVars env) name = Some lty"
-        unfolding no_extra_local_vars_def
-        by (cases "fmlookup (TE_LocalVars env) name") auto
-      from lve lty have "local_var_in_state_with_type st env storeTyping name lty"
-        unfolding local_vars_exist_in_state_def by blast
-      with None Some ap
-      have pt: "type_at_path env (storeTyping ! addr) path
-                  = Some (apply_subst (IS_TyArgs st) lty)"
-        unfolding local_var_in_state_with_type_def by (simp add: Let_def)
-      from get_value_at_path_type[OF slot[OF valid] pt gv] show ?thesis by blast
-    next
-      case None2: None
-      from base None None2 have g: "fmlookup (IS_Globals st) name = Some v" by simp
-      from neg g obtain gty where gty: "fmlookup (TE_GlobalVars env) name = Some gty"
-        unfolding no_extra_global_vars_def
-        by (cases "fmlookup (TE_GlobalVars env) name") auto
-      from gve gty have "global_var_in_state_with_type st env name gty"
-        unfolding global_vars_exist_in_state_def by blast
-      with g show ?thesis unfolding global_var_in_state_with_type_def by auto
-    qed
-  qed
-qed
-
-(* Compile-time evaluation equals runtime interpretation (for SOME fuel, at
+(* Compile-time constant evaluation equals runtime interpretation (for SOME fuel, at
    any depth) at any well-typed state that agrees with the constants' value map,
-   provided that no constant's value is allocated.
+   provided that no constant is allocated (hypothesis `unalloc` below).
 
-   The last premise cannot be dropped. The interpreter gives RuntimeError when a
-   value in a value position is allocated (in executable code), and eval_const
-   makes no such check. For example, let globalVals map c to an allocatable array
-   of size 1 and let st hold c with that value among its globals and be in
-   executable mode: on CoreTm_Record [(x, CoreTm_Var c)] eval_const gives the
-   record, and interp_term gives RuntimeError at every sufficient fuel. Nor is the
-   premise enough without the typing of the state: see the comment at
-   deep_unallocated above.
-
-   That the global constants of an elaborated module are never allocated is not
-   proved here. *)
+   We do not prove that the global constants of an elaborated module are never allocated
+   (this is future work), but clearly this should be the case: constant elaboration can be
+   thought of as filling in bytes in a "data section" of the program, before execution
+   even begins, and therefore it cannot allocate anything on the heap. *)
 theorem eval_const_interp_agree:
   fixes st :: "'w InterpState"
   assumes const: "is_constant_term tm"

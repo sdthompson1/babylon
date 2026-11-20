@@ -13,9 +13,9 @@ begin
    Instead of directly calling interp_term (the actual Core interpreter), which would
    not be possible (the interpreter is not executable), the elaborator defines its own
    eval_const and fold_const functions. A successful fold_const is then proved to give
-   the value that interp_term would have given, as long as no constant that the term
-   reads has an allocated value (see theorem fold_const_is_core_evaluation in
-   ConstFoldCorrect.thy).
+   the value that interp_term would have given, under certain conditions that are
+   believed (but not yet proved) to be true during elaboration (see theorem
+   fold_const_is_core_evaluation in ConstFoldCorrect.thy for full details).
 
    The other advantages of doing it this way are that no fuel is needed, and the full
    InterpState is not needed (we just need a map from global variable names to values).
