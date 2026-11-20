@@ -690,8 +690,10 @@ Core interpreter, is heavier and is not recommended.
 
 *Status (end of stage 4): implemented.* `interp_function_call`
 (`CoreInterp.thy`) binds the arguments (`fold process_one_arg`) and then
-runs `call_args_alias (IF_Args f) (map (interp_lvalue d fuel False state)
-argTms)` before the contract checks and the body:
+runs `call_args_alias (IF_Args f) (map_args (interp_lvalue d fuel False)
+state (IF_Args f) argTms)` before the contract checks and the body
+(`map_args` evaluates each argument in the mode of its parameter, see
+`arg_state`):
 
 - `interp_lvalue d fuel writable state tm` is the interpreter's lvalue
   resolver (one of the mutually recursive functions; it was
@@ -746,8 +748,8 @@ Fuel and depth monotonicity (`CoreInterpFuelMono`): the non-writable
 resolutions of the arguments are covered by the same induction case as the
 writable ones, and agree with more fuel or depth unless one ran out of fuel
 (`call_args_alias_not_fuelD`); frame, world, preservation and type
-soundness need nothing new (`interp_function_call_InrE` keeps its five
-facts; a call that succeeds passed the check,
+soundness need nothing new (`interp_function_call_InrE` keeps its
+facts, of which there are now six; a call that succeeds passed the check,
 `interp_function_call_Inr_no_alias`; the check fails only with
 `InsufficientFuel` or `RuntimeError`, `call_args_alias_Some_sound`). The
 two simulations carry the check across by `interp_lvalue_rel`
@@ -1158,10 +1160,12 @@ the slice of `bs` at its offset (`slice off n bs = take n (drop off bs)`,
   `ctor_tag C` at the tag type, and the payload is represented by the slice
   of `|payload[args]|` bytes after the tag (the bytes after that are
   unconstrained: `rep_val_variant_junk`);
-- `CV_Array sizes elems` at fixed dims: `sizes` match the dims, the element
+- `CV_Array al sizes elems` at fixed dims (`al` is the value's allocatable
+  flag, which `rep_val` does not read: the type decides): `sizes` match the
+  dims, the element
   map's domain is `all_indices sizes`, `|bs| = |T| · count`, and element
   `idx` is represented by the slice at `elem_offset`;
-- `CV_Array sizes elems` at allocatable/incomplete dims: `sizes` match the
+- `CV_Array al sizes elems` at allocatable/incomplete dims: `sizes` match the
   dims and are valid (each fits `uint64_t`), `count < 2^64` and
   `|T| · count < 2^64`, `|bs| = desc_size`, dimension `k` is the `uint64_t`
   `sizes ! k` at `desc_dim_offset k` (`desc_dims_ok`), and the first

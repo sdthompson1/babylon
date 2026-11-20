@@ -10,19 +10,30 @@ begin
 (* ========================================================================== *)
 
 (* Evaluated values *)
+
 (* Note: CV_Int and CV_Real arise only when ghost code is run. *)
+
+(* For arrays, all three array types (T[*], T[n] and T[]) are represented in essentially the
+   same way: as a table mapping indices to values. CV_Array also contains an "allocatable
+   flag" which is used only to keep track of the type (it is True for T[*] arrays, False for
+   T[] and T[n]). Array casts rewrite the flag where needed. The semantics (i.e. the
+   interpreter) copies array values when needed; a compiler might do something different
+   (e.g. pass pointers around) but that is its business. *)
+
+(* For extern types, CV_Extern carries the type itself (type name and alloc level), together
+   with a nat "handle", which can be thought of as the "void *" value on the C side. The
+   handle is zero for the default value of each type. *)
 datatype CoreValue =
   CV_Bool bool
   | CV_FiniteInt Signedness IntBits int
   | CV_Record "(string \<times> CoreValue) list"
   | CV_Variant string CoreValue
-  | CV_Array "int list" "(int list, CoreValue) fmap"  (* size list, array index \<rightarrow> value *)
+  | CV_Array bool "int list" "(int list, CoreValue) fmap"
+      (* allocatable flag, size list, array index \<rightarrow> value *)
   | CV_Int int
   | CV_Real real
   | CV_Extern string CoreAllocLevel nat
-      (* Values of an extern type carry the type itself (name and alloc level) plus a nat
-         "handle" (this can be thought of as the "void *" value on the C side). The handle
-         is zero for the default value of each type. *)
+      (* type name, alloc level, handle *)
 
 
 (* ========================================================================== *)
@@ -87,9 +98,10 @@ function value_has_type :: "CoreTyEnv \<Rightarrow> CoreValue \<Rightarrow> Core
                 (apply_subst (fmap_of_list (zip tyvars argTypes)) payloadTy))
         | None \<Rightarrow> False)
     | _ \<Rightarrow> False)"
-| "value_has_type env (CV_Array sizes valuesMap) ty =
+| "value_has_type env (CV_Array allocatable sizes valuesMap) ty =
     (case ty of
       CoreTy_Array elemTy dims \<Rightarrow>
+        allocatable = allocatable_dims dims \<and>
         is_well_kinded env elemTy \<and>
         type_tyvars elemTy = {} \<and>
         (\<forall>idx val. fmlookup valuesMap idx = Some val \<longrightarrow> value_has_type env val elemTy) \<and>
@@ -111,7 +123,7 @@ function value_has_type :: "CoreTyEnv \<Rightarrow> CoreValue \<Rightarrow> Core
 (* Values in an array are smaller than the array containing them *)
 lemma size_array_lookup:
   assumes "fmlookup vals idx = Some v"
-  shows "size v < size (CV_Array sizes vals)"
+  shows "size v < size (CV_Array al sizes vals)"
 proof -
   from assms have mem: "(idx, v) |\<in>| fset_of_fmap vals"
     by transfer auto
@@ -170,13 +182,14 @@ next
 next
   (* Array case *)
   fix env :: CoreTyEnv
+  fix al :: bool
   fix sizes :: "int list"
   fix valuesMap :: "(int list, CoreValue) fmap"
   fix ty :: CoreType 
   fix x71 x72 x
   fix xa :: CoreValue
   assume "fmlookup valuesMap x = Some xa"
-  then show "((env, xa, x71), env, CV_Array sizes valuesMap, ty)
+  then show "((env, xa, x71), env, CV_Array al sizes valuesMap, ty)
              \<in> measure (\<lambda>(env, val, ty). size val)"
     using size_array_lookup by auto
 qed
@@ -248,7 +261,7 @@ next
   show ?case
     using ty_eq dt_lookup len_eq args_wk by simp
 next
-  case (CV_Array sizes valuesMap)
+  case (CV_Array al sizes valuesMap)
   then obtain elemTy dims where
     ty_eq: "ty = CoreTy_Array elemTy dims" and
     elem_wk: "is_well_kinded env elemTy" and
@@ -318,7 +331,7 @@ next
   show ?case
     using ty_eq args_ground by (simp add: list_all_iff)
 next
-  case (CV_Array sizes valuesMap)
+  case (CV_Array al sizes valuesMap)
   then obtain elemTy dims where
     ty_eq: "ty = CoreTy_Array elemTy dims" and
     elem_ground: "type_tyvars elemTy = {}"
@@ -370,7 +383,7 @@ next
   show ?case using CV_Variant.prems CV_Variant.IH wk_eq
     by (cases ty) (auto split: option.splits)
 next
-  case (CV_Array sizes valuesMap)
+  case (CV_Array al sizes valuesMap)
   have wk_eq: "\<And>t. is_well_kinded env' t = is_well_kinded env t"
     using CV_Array.prems is_well_kinded_cong_env by blast
   have val_eq: "\<And>v t. v \<in> fmran' valuesMap \<Longrightarrow>
@@ -581,11 +594,12 @@ next
       by simp
   qed (use CV_Variant.prems(1) in auto)
 next
-  case (CV_Array sizes valuesMap)
+  case (CV_Array al sizes valuesMap)
   show ?case
   proof (cases ty)
     case (CoreTy_Array elemTy dims)
     from CV_Array.prems(1) CoreTy_Array have
+      al_eq: "al = allocatable_dims dims" and
       elem_wk: "is_well_kinded env elemTy" and
       elem_ground: "type_tyvars elemTy = {}" and
       elems_vht: "\<forall>idx val. fmlookup valuesMap idx = Some val
@@ -606,7 +620,7 @@ next
         by (auto simp: fmran'I)
     qed
     show ?thesis
-      using CoreTy_Array elem_wk' elem_ground elems_vht' dims_wk matches sizes_ok by simp
+      using CoreTy_Array al_eq elem_wk' elem_ground elems_vht' dims_wk matches sizes_ok by simp
   qed (use CV_Array.prems(1) in auto)
 next
   case (CV_Int i)
@@ -641,7 +655,7 @@ lemma value_has_type_Name:
 
 lemma value_has_type_Array:
   assumes "value_has_type env val (CoreTy_Array elemTy dims)"
-  shows "\<exists>sizes valuesMap. val = CV_Array sizes valuesMap \<and>
+  shows "\<exists>sizes valuesMap. val = CV_Array (allocatable_dims dims) sizes valuesMap \<and>
     (\<forall>idx v. fmlookup valuesMap idx = Some v \<longrightarrow> value_has_type env v elemTy)"
   using assms by (cases val; auto split: CoreType.splits)
 
@@ -661,12 +675,19 @@ lemma value_has_type_Extern:
   using assms by (cases val; auto split: CoreType.splits option.splits)
 
 (* An array value typed at dims is also typed at any well-kinded dims' that its
-   sizes match. *)
+   sizes match, once its flag is set from dims'. *)
 lemma value_has_type_array_redim:
-  assumes "value_has_type env (CV_Array sizes elems) (CoreTy_Array elemTy dims)"
+  assumes "value_has_type env (CV_Array al sizes elems) (CoreTy_Array elemTy dims)"
     and "sizes_match_dims sizes dims'"
     and "array_dims_well_kinded dims'"
-  shows "value_has_type env (CV_Array sizes elems) (CoreTy_Array elemTy dims')"
+  shows "value_has_type env (CV_Array (allocatable_dims dims') sizes elems)
+           (CoreTy_Array elemTy dims')"
+  using assms by simp
+
+(* The flag of a well-typed array value is the one its type gives. *)
+lemma value_has_type_array_flag:
+  assumes "value_has_type env (CV_Array al sizes elems) (CoreTy_Array elemTy dims)"
+  shows "al = allocatable_dims dims"
   using assms by simp
 
 end

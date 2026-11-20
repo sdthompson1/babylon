@@ -28,6 +28,11 @@ definition frame_addrs :: "'w InterpState \<Rightarrow> nat set" where
     {a. \<exists>name. fmlookup (IS_Locals state) name = Some a} \<union>
     {a. \<exists>name path. fmlookup (IS_Refs state) name = Some (a, path)}"
 
+(* The frame does not depend on the mode. *)
+lemma frame_addrs_IS_Ghost [simp]:
+  "frame_addrs (state \<lparr> IS_Ghost := g \<rparr>) = frame_addrs state"
+  by (simp add: frame_addrs_def)
+
 lemma frame_addrs_localI:
   "fmlookup (IS_Locals state) name = Some a \<Longrightarrow> a \<in> frame_addrs state"
   unfolding frame_addrs_def by blast
@@ -63,6 +68,10 @@ definition var_addr :: "'w InterpState \<Rightarrow> string \<Rightarrow> nat op
     (case fmlookup (IS_Locals state) name of
       Some addr \<Rightarrow> Some addr
     | None \<Rightarrow> map_option fst (fmlookup (IS_Refs state) name))"
+
+lemma var_addr_IS_Ghost [simp]:
+  "var_addr (state \<lparr> IS_Ghost := g \<rparr>) name = var_addr state name"
+  by (simp add: var_addr_def split: option.splits)
 
 lemma var_addr_in_frame:
   assumes "var_addr state name = Some a"
@@ -379,12 +388,12 @@ qed
    (parameter, lvalue result, value result) triples that process_one_arg
    consumes. *)
 definition ref_arg_addrs ::
-    "((string \<times> VarOrRef)
+    "((string \<times> VarOrRef \<times> GhostOrNot)
       \<times> (InterpError + nat \<times> LValuePath list)
       \<times> (InterpError + CoreValue)) list \<Rightarrow> nat set" where
   "ref_arg_addrs argTuples =
-    {a. \<exists>name path valRes.
-          ((name, Ref), Inr (a, path), valRes) \<in> set argTuples}"
+    {a. \<exists>name gh path valRes.
+          ((name, Ref, gh), Inr (a, path), valRes) \<in> set argTuples}"
 
 (* Binding one argument only appends to the store. The new frame refers to
    what the old one did, plus either a freshly allocated cell (Var parameter)
@@ -396,7 +405,7 @@ lemma process_one_arg_frame:
             a \<in> frame_addrs state \<or> a \<in> ref_arg_addrs [arg] \<or>
             (length (IS_Store state) \<le> a \<and> a < length (IS_Store state')))"
 proof -
-  obtain name vr refRes valRes where arg_eq: "arg = ((name, vr), refRes, valRes)"
+  obtain name vr gh refRes valRes where arg_eq: "arg = ((name, vr, gh), refRes, valRes)"
     by (cases arg) auto
   show ?thesis
   proof (cases vr)
@@ -524,16 +533,16 @@ qed
 lemma ref_arg_addrs_zip:
   assumes "a \<in> ref_arg_addrs (zip args (zip refResults valResults))"
   shows "\<exists>i path. i < length args \<and> i < length refResults \<and>
-                  snd (args ! i) = Ref \<and> refResults ! i = Inr (a, path)"
+                  fst (snd (args ! i)) = Ref \<and> refResults ! i = Inr (a, path)"
 proof -
-  from assms obtain name path valRes where
-    "((name, Ref), Inr (a, path), valRes) \<in> set (zip args (zip refResults valResults))"
+  from assms obtain name gh path valRes where
+    "((name, Ref, gh), Inr (a, path), valRes) \<in> set (zip args (zip refResults valResults))"
     unfolding ref_arg_addrs_def by blast
-  then obtain i where i: "args ! i = (name, Ref)" "refResults ! i = Inr (a, path)"
+  then obtain i where i: "args ! i = (name, Ref, gh)" "refResults ! i = Inr (a, path)"
                          "i < length args" "i < length refResults"
     by (auto simp: in_set_zip)
   have "i < length args \<and> i < length refResults \<and>
-        snd (args ! i) = Ref \<and> refResults ! i = Inr (a, path)"
+        fst (snd (args ! i)) = Ref \<and> refResults ! i = Inr (a, path)"
     using i by simp
   then show ?thesis by blast
 qed
@@ -550,20 +559,20 @@ lemma rights_set:
 (* The lvalues that an extern function may update are those passed in Ref
    argument positions. *)
 lemma extern_refs_addrs:
-  assumes "(a, path) \<in> set (rights (map (\<lambda>((_, vr), refResult).
+  assumes "(a, path) \<in> set (rights (map (\<lambda>((_, vr, _), refResult).
                                             if vr = Ref then refResult else Inl TypeError)
                                          (zip args refResults)))"
   shows "\<exists>i. i < length args \<and> i < length refResults \<and>
-             snd (args ! i) = Ref \<and> refResults ! i = Inr (a, path)"
+             fst (snd (args ! i)) = Ref \<and> refResults ! i = Inr (a, path)"
 proof -
-  from assms obtain name where
-    "((name, Ref), Inr (a, path)) \<in> set (zip args refResults)"
+  from assms obtain name gh where
+    "((name, Ref, gh), Inr (a, path)) \<in> set (zip args refResults)"
     by (auto simp: rights_set split: if_splits)
-  then obtain i where i: "args ! i = (name, Ref)" "refResults ! i = Inr (a, path)"
+  then obtain i where i: "args ! i = (name, Ref, gh)" "refResults ! i = Inr (a, path)"
                          "i < length args" "i < length refResults"
     by (auto simp: in_set_zip)
   have "i < length args \<and> i < length refResults \<and>
-        snd (args ! i) = Ref \<and> refResults ! i = Inr (a, path)"
+        fst (snd (args ! i)) = Ref \<and> refResults ! i = Inr (a, path)"
     using i by simp
   then show ?thesis by blast
 qed
@@ -617,9 +626,13 @@ definition call_ref_addrs :: "'w InterpState \<Rightarrow> string \<Rightarrow> 
     {a. \<exists>f i name.
           fmlookup (IS_Functions state) fnName = Some f \<and>
           i < length argTms \<and> i < length (IF_Args f) \<and>
-          snd (IF_Args f ! i) = Ref \<and>
+          fst (snd (IF_Args f ! i)) = Ref \<and>
           lvalue_base_name (argTms ! i) = Some name \<and>
           var_addr state name = Some a}"
+
+lemma call_ref_addrs_IS_Ghost [simp]:
+  "call_ref_addrs (state \<lparr> IS_Ghost := g \<rparr>) fnName argTms = call_ref_addrs state fnName argTms"
+  by (simp add: call_ref_addrs_def)
 
 lemma call_ref_addrs_subset:
   "call_ref_addrs state fnName argTms \<subseteq> frame_addrs state"
@@ -629,15 +642,16 @@ lemma ref_result_in_call_ref_addrs:
   assumes "fmlookup (IS_Functions state) fnName = Some f"
     and "i < length (IF_Args f)"
     and "i < length argTms"
-    and "snd (IF_Args f ! i) = Ref"
-    and "map (interp_writable_lvalue d fuel state) argTms ! i = Inr (a, path)"
+    and "fst (snd (IF_Args f ! i)) = Ref"
+    and "map_args (interp_writable_lvalue d fuel) state (IF_Args f) argTms ! i = Inr (a, path)"
   shows "a \<in> call_ref_addrs state fnName argTms"
 proof -
-  from assms(3,5) have "interp_writable_lvalue d fuel state (argTms ! i) = Inr (a, path)"
+  from assms(2,3,5)
+  have "interp_writable_lvalue d fuel (arg_state state (IF_Args f ! i)) (argTms ! i) = Inr (a, path)"
     by simp
   from interp_writable_lvalue_addr[OF this] obtain name where
     "lvalue_base_name (argTms ! i) = Some name" and "var_addr state name = Some a"
-    by blast
+    by auto
   with assms(1,2,3,4) show ?thesis
     unfolding call_ref_addrs_def by blast
 qed
@@ -655,6 +669,12 @@ definition call_frame ::
     length (IS_Store state') = length (IS_Store state) \<and>
     (\<forall>a < length (IS_Store state). a \<notin> call_ref_addrs state fnName argTms \<longrightarrow>
         IS_Store state' ! a = IS_Store state ! a)"
+
+(* A call statement makes its call in the mode raised by its flag; the caller's
+   frame is the same in either mode. *)
+lemma call_frame_IS_Ghost [simp]:
+  "call_frame (state \<lparr> IS_Ghost := g \<rparr>) fnName argTms state' = call_frame state fnName argTms state'"
+  by (simp add: call_frame_def)
 
 lemma call_frame_frame_addrs:
   assumes "call_frame state fnName argTms state'"
@@ -727,11 +747,11 @@ next
         proof (cases vr)
           case Var
           from Var H CoreStmt_VarDecl obtain initVal where
-            iv: "interp_term d fuel state initTm = Inr initVal"
+            vp: "value_position (raise_mode state g)
+                   (interp_term d fuel (raise_mode state g) initTm) = Inr initVal"
             by (auto split: sum.splits)
-          from Var H CoreStmt_VarDecl iv have
-            cc: "copy_check g state ty initVal = None"
-            by (auto split: option.splits)
+          note iv = value_position_InrD[OF vp]
+          note cc = vp[unfolded iv]
           from Var H[symmetric] CoreStmt_VarDecl iv cc have
             store': "IS_Store (result_state res) = IS_Store state @ [initVal]" and
             locals': "IS_Locals (result_state res)
@@ -751,7 +771,7 @@ next
                            \<and> fmlookup (IS_Refs state) baseName = None)")
             case True
             with Ref H CoreStmt_VarDecl base obtain val where
-              iv: "interp_term d fuel state initTm = Inr val"
+              iv: "interp_term d fuel (raise_mode state g) initTm = Inr val"
               by (auto split: sum.splits)
             from Ref H[symmetric] CoreStmt_VarDecl base True iv have
               store': "IS_Store (result_state res) = IS_Store state @ [val]" and
@@ -763,13 +783,13 @@ next
           next
             case False
             with Ref H CoreStmt_VarDecl base obtain addrPath where
-              lv: "interp_writable_lvalue d fuel state initTm = Inr addrPath"
+              lv: "interp_writable_lvalue d fuel (raise_mode state g) initTm = Inr addrPath"
               by (auto split: sum.splits)
             obtain addr path where ap: "addrPath = (addr, path)" by (cases addrPath)
-            from lv ap have lv': "interp_writable_lvalue d fuel state initTm = Inr (addr, path)"
+            from lv ap have lv': "interp_writable_lvalue d fuel (raise_mode state g) initTm = Inr (addr, path)"
               by simp
             have addr_in: "addr \<in> frame_addrs state"
-              by (rule interp_writable_lvalue_in_frame[OF lv'])
+              using interp_writable_lvalue_in_frame[OF lv'] by simp
             from Ref H[symmetric] CoreStmt_VarDecl base False lv' have
               store': "IS_Store (result_state res) = IS_Store state" and
               locals': "IS_Locals (result_state res) = fmdrop varName (IS_Locals state)" and
@@ -782,13 +802,18 @@ next
         case (CoreStmt_VarDeclCall g varName varTy castOpt fnName argTys argTms)
         \<comment> \<open>Run the call (giving newState), apply the cast, then alloc and bind. \<close>
         from H CoreStmt_VarDeclCall obtain newState retVal where
-          call: "interp_function_call d fuel state fnName argTys argTms = Inr (newState, retVal)"
+          call: "interp_function_call d fuel (raise_mode state g) fnName argTys argTms = Inr (newState, retVal)"
           by (auto split: sum.splits prod.splits)
-        from IH_call call have cf: "call_frame state fnName argTms newState" by blast
+        from IH_call call
+        have "call_frame (raise_mode state g) fnName argTms newState" by blast
+        hence cf: "call_frame state fnName argTms newState" by simp
         from H CoreStmt_VarDeclCall call obtain initVal where
-          cast: "apply_cast_opt castOpt retVal = Inr initVal"
+          vp0: "value_position (raise_mode state g) (apply_cast_opt castOpt retVal)
+                = Inr initVal"
           by (auto split: sum.splits)
-        from H[symmetric] CoreStmt_VarDeclCall call cast have
+        note cast = value_position_InrD[OF vp0]
+        note vp = vp0[unfolded cast]
+        from H[symmetric] CoreStmt_VarDeclCall call cast vp have
           store': "IS_Store (result_state res) = IS_Store newState @ [initVal]" and
           locals': "IS_Locals (result_state res)
                       = fmupd varName (length (IS_Store newState)) (IS_Locals newState)" and
@@ -818,14 +843,14 @@ next
       next
         case (CoreStmt_Assign g ty lhsLv rhsTm)
         from H CoreStmt_Assign obtain addr path where
-          lv: "interp_writable_lvalue d fuel state lhsLv = Inr (addr, path)"
+          lv: "interp_writable_lvalue d fuel (raise_mode state g) lhsLv = Inr (addr, path)"
           by (auto split: sum.splits)
         from H CoreStmt_Assign lv obtain rhsVal where
-          rv: "interp_term d fuel state rhsTm = Inr rhsVal"
+          vp: "value_position (raise_mode state g)
+                 (interp_term d fuel (raise_mode state g) rhsTm) = Inr rhsVal"
           by (auto split: sum.splits)
-        from H CoreStmt_Assign lv rv have
-          cc: "copy_check g state ty rhsVal = None"
-          by (auto split: option.splits)
+        note rv = value_position_InrD[OF vp]
+        note cc = vp[unfolded rv]
         from H CoreStmt_Assign lv rv cc obtain newVal where
           upd: "update_value_at_path (IS_Store state ! addr) path rhsVal = Inr newVal"
           by (auto simp: Let_def split: sum.splits)
@@ -835,18 +860,22 @@ next
           refs': "IS_Refs (result_state res) = IS_Refs state"
           by (simp_all add: Let_def)
         have addr_in: "addr \<in> frame_addrs state"
-          by (rule interp_writable_lvalue_in_frame[OF lv])
+          using interp_writable_lvalue_in_frame[OF lv] by simp
         show ?thesis by (rule frame_step_store_update[OF store' locals' refs' addr_in])
       next
         case (CoreStmt_AssignCall g lhsLv castOpt fnName argTys argTms)
         \<comment> \<open>Run the call (newState), apply cast, resolve lhs in newState, store. \<close>
         from H CoreStmt_AssignCall obtain newState retVal where
-          call: "interp_function_call d fuel state fnName argTys argTms = Inr (newState, retVal)"
+          call: "interp_function_call d fuel (raise_mode state g) fnName argTys argTms = Inr (newState, retVal)"
           by (auto split: sum.splits prod.splits)
-        from IH_call call have cf: "call_frame state fnName argTms newState" by blast
+        from IH_call call
+        have "call_frame (raise_mode state g) fnName argTms newState" by blast
+        hence cf: "call_frame state fnName argTms newState" by simp
         from H CoreStmt_AssignCall call obtain rhsVal where
-          cast: "apply_cast_opt castOpt retVal = Inr rhsVal"
+          vp0: "value_position (raise_mode state g) (apply_cast_opt castOpt retVal)
+                = Inr rhsVal"
           by (auto split: sum.splits)
+        note cast = value_position_InrD[OF vp0] vp0[unfolded value_position_InrD[OF vp0]]
         from H CoreStmt_AssignCall call cast obtain addr path where
           lv: "interp_writable_lvalue d fuel newState lhsLv = Inr (addr, path)"
           by (auto split: sum.splits)
@@ -859,17 +888,17 @@ next
           refs': "IS_Refs (result_state res) = IS_Refs newState"
           by (simp_all add: Let_def)
         have addr_in: "addr \<in> frame_addrs newState"
-          by (rule interp_writable_lvalue_in_frame[OF lv])
+          using interp_writable_lvalue_in_frame[OF lv] by simp
         have "frame_step newState (result_state res)"
           by (rule frame_step_store_update[OF store' locals' refs' addr_in])
         with call_frame_frame_step[OF cf] show ?thesis by (rule frame_step_trans)
       next
         case (CoreStmt_Swap g lhsTm rhsTm)
         from H CoreStmt_Swap obtain lhsLv where
-          lhs: "interp_writable_lvalue d fuel state lhsTm = Inr lhsLv"
+          lhs: "interp_writable_lvalue d fuel (raise_mode state g) lhsTm = Inr lhsLv"
           by (auto split: sum.splits)
         with H CoreStmt_Swap obtain rhsLv where
-          rhs: "interp_writable_lvalue d fuel state rhsTm = Inr rhsLv"
+          rhs: "interp_writable_lvalue d fuel (raise_mode state g) rhsTm = Inr rhsLv"
           by (auto split: sum.splits)
         with H CoreStmt_Swap lhs obtain newState where
           sw: "perform_swap state lhsLv rhsLv = Inr newState"
@@ -878,9 +907,9 @@ next
         obtain addr1 path1 where l_eq: "lhsLv = (addr1, path1)" by (cases lhsLv)
         obtain addr2 path2 where r_eq: "rhsLv = (addr2, path2)" by (cases rhsLv)
         have a1: "addr1 \<in> frame_addrs state"
-          by (rule interp_writable_lvalue_in_frame[OF lhs[unfolded l_eq]])
+          using interp_writable_lvalue_in_frame[OF lhs[unfolded l_eq]] by simp
         have a2: "addr2 \<in> frame_addrs state"
-          by (rule interp_writable_lvalue_in_frame[OF rhs[unfolded r_eq]])
+          using interp_writable_lvalue_in_frame[OF rhs[unfolded r_eq]] by simp
         have "frame_step state newState"
           by (rule perform_swap_frame[OF sw[unfolded l_eq r_eq] a1 a2])
         with res_eq show ?thesis by simp
@@ -900,7 +929,7 @@ next
         next
           case (Some condTm)
           from H CoreStmt_Assert Some obtain condVal where
-            cv: "interp_term d fuel state condTm = Inr condVal"
+            cv: "interp_term d fuel (state \<lparr>IS_Ghost := Ghost\<rparr>) condTm = Inr condVal"
             by (auto split: sum.splits)
           have "res = Continue state"
           proof (cases condVal)
@@ -917,13 +946,15 @@ next
         case (CoreStmt_While g condTm invars decr bodyStmts)
         \<comment> \<open>The run succeeded, so the invariants were evaluated and all held. \<close>
         from H CoreStmt_While obtain invarVals where
-          iv: "interp_term_list d fuel state invars = Inr invarVals" and
+          iv: "interp_term_list d fuel (state \<lparr>IS_Ghost := Ghost\<rparr>) invars = Inr invarVals" and
           ie: "conditions_error invarVals = None"
           by (auto split: sum.splits option.splits)
         note [simp] = iv ie
         from H CoreStmt_While obtain condVal where
-          cv: "interp_term d fuel state condTm = Inr condVal"
+          vp: "value_position (raise_mode state g)
+                 (interp_term d fuel (raise_mode state g) condTm) = Inr condVal"
           by (auto split: sum.splits)
+        note cv = value_position_InrD[OF vp] vp[unfolded value_position_InrD[OF vp]]
         show ?thesis
         proof (cases condVal)
           case (CV_Bool b)
@@ -938,15 +969,19 @@ next
             \<comment> \<open>The decreases-term (if any) was evaluated before the body. \<close>
             with CoreStmt_While H cv CV_Bool
             obtain decrVal where
-              dv: "eval_decreases (interp_term d fuel state) decr = Inr decrVal"
+              dv: "eval_decreases (interp_term d fuel (state \<lparr>IS_Ghost := Ghost\<rparr>)) decr = Inr decrVal"
               by (auto split: sum.splits)
             note [simp] = dv
             from CoreStmt_While H cv CV_Bool True
             obtain bodyRes where
-              body: "interp_statement_list d fuel state bodyStmts = Inr bodyRes"
+              body: "interp_statement_list d fuel (raise_mode state g) bodyStmts = Inr bodyRes"
               by (auto split: sum.splits)
+            \<comment> \<open>The body runs in the mode raised by the loop's flag; the mode of
+                a state has no part in frame_step. \<close>
             from IH_stmt_list body
-            have body_fs: "frame_step state (result_state bodyRes)" by blast
+            have "frame_step (raise_mode state g) (result_state bodyRes)" by blast
+            then have body_fs: "frame_step state (result_state bodyRes)"
+              by (simp add: frame_step_def)
             show ?thesis
             proof (cases bodyRes)
               case (Continue state1)
@@ -958,7 +993,7 @@ next
                   check passed. \<close>
               from CoreStmt_While H cv CV_Bool True body Continue
               obtain decrVal' where
-                dv': "eval_decreases (interp_term d fuel ?rs) decr = Inr decrVal'" and
+                dv': "eval_decreases (interp_term d fuel (?rs \<lparr>IS_Ghost := Ghost\<rparr>)) decr = Inr decrVal'" and
                 de: "decreases_error decrVal decrVal' = None"
                 by (auto split: sum.splits option.splits)
               from CoreStmt_While H cv CV_Bool True body Continue dv' de
@@ -983,16 +1018,20 @@ next
       next
         case (CoreStmt_Match g scrutTm arms)
         from H CoreStmt_Match obtain scrutVal where
-          sv: "interp_term d fuel state scrutTm = Inr scrutVal"
+          sv: "interp_term d fuel (raise_mode state g) scrutTm = Inr scrutVal"
           by (auto split: sum.splits)
         from H CoreStmt_Match sv obtain armStmts where
           arm: "find_matching_arm scrutVal arms = Inr armStmts"
           by (auto split: sum.splits)
         from H CoreStmt_Match sv arm obtain bodyRes where
-          body: "interp_statement_list d fuel state armStmts = Inr bodyRes"
+          body: "interp_statement_list d fuel (raise_mode state g) armStmts = Inr bodyRes"
           by (auto split: sum.splits)
+        \<comment> \<open>The arm runs in the mode raised by the match's flag; the mode of a
+            state has no part in frame_step. \<close>
         from IH_stmt_list body
-        have body_fs: "frame_step state (result_state bodyRes)" by blast
+        have "frame_step (raise_mode state g) (result_state bodyRes)" by blast
+        then have body_fs: "frame_step state (result_state bodyRes)"
+          by (simp add: frame_step_def)
         show ?thesis
         proof (cases bodyRes)
           case (Continue state1)
@@ -1077,20 +1116,26 @@ next
       \<comment> \<open>Take the call apart: the function, the state with the arguments bound, and
           the body's result. The contract checks passed and did not change the state,
           so the body's result is the call's result. \<close>
-      let ?refResults = "map (interp_writable_lvalue d fuel state) argTms"
-      let ?valResults = "map (interp_term d fuel state) argTms"
       from interp_function_call_InrE[OF H0] obtain f preCallState where
         f_lookup: "fmlookup (IS_Functions state) fnName = Some f" and
         len_eq: "length argTms = length (IF_Args f)" and
         tyLen_eq: "length argTys = length (IF_TyArgs f)" and
-        fold_eq: "fold process_one_arg (zip (IF_Args f) (zip ?refResults ?valResults))
+        fold_eq: "fold process_one_arg
+                    (zip (IF_Args f)
+                         (zip (map_args (interp_writable_lvalue d fuel) state (IF_Args f) argTms)
+                              (map_args (interp_term d fuel) state (IF_Args f) argTms)))
                     (Inr (state \<lparr> IS_Locals := fmempty, IS_Refs := fmempty,
                                   IS_ConstLocals := {||},
                                   IS_TyArgs := fmap_of_list (zip (IF_TyArgs f)
                                                  (map (apply_subst (IS_TyArgs state)) argTys)) \<rparr>))
                   = Inr preCallState" and
-        body: "call_body (interp_statement_list d fuel) state f ?refResults ?valResults preCallState
-                 = Inr (state', retVal)" .
+        body: "call_body (interp_statement_list d fuel) state f
+                 (map_args (interp_writable_lvalue d fuel) state (IF_Args f) argTms)
+                 (map_args (interp_term d fuel) state (IF_Args f) argTms) preCallState
+                 = Inr (state', retVal)"
+        by blast
+      let ?refResults = "map_args (interp_writable_lvalue d fuel) state (IF_Args f) argTms"
+      let ?valResults = "map_args (interp_term d fuel) state (IF_Args f) argTms"
       let ?argTuples = "zip (IF_Args f) (zip ?refResults ?valResults)"
       let ?calleeTyArgs = "fmap_of_list (zip (IF_TyArgs f) (map (apply_subst (IS_TyArgs state)) argTys))"
       let ?clearedState = "state \<lparr> IS_Locals := fmempty, IS_Refs := fmempty,
@@ -1116,7 +1161,7 @@ next
       proof -
         from ref_arg_addrs_zip[OF that] obtain i path where
           i: "i < length (IF_Args f)" "i < length ?refResults"
-             "snd (IF_Args f ! i) = Ref" "?refResults ! i = Inr (a, path)"
+             "fst (snd (IF_Args f ! i)) = Ref" "?refResults ! i = Inr (a, path)"
           by blast
         from i(2) have i_lt: "i < length argTms" by simp
         show ?thesis
@@ -1144,7 +1189,7 @@ next
           with Return have body_fs: "frame_step preCallState postCallState" by simp
           from body Inl bodyEval Return
           have state'_eq: "state' = restore_scope state postCallState"
-            by (simp add: call_body_def split: option.splits)
+            by (simp add: call_body_def split: sum.splits)
           have len2: "length (IS_Store preCallState) \<le> length (IS_Store postCallState)"
             by (rule frame_stepD(1)[OF body_fs])
           have len: "length (IS_Store state) \<le> length (IS_Store postCallState)"
@@ -1183,7 +1228,7 @@ next
         case (Inr externFun)
         \<comment> \<open>Extern function. \<close>
         let ?vals = "rights ?valResults"
-        let ?refs = "rights (map (\<lambda>((_, vr), refResult).
+        let ?refs = "rights (map (\<lambda>((_, vr, _), refResult).
                                       if vr = Ref then refResult else Inl TypeError)
                                  (zip (IF_Args f) ?refResults))"
         obtain newWorld refUpdates externRetVal where
@@ -1195,7 +1240,7 @@ next
           "apply_ref_updates ?stateW ?refs refUpdates = Inr finalState"
           and state'_eq: "state' = finalState" and "retVal = externRetVal"
           by (cases "apply_ref_updates ?stateW ?refs refUpdates")
-             (simp_all add: call_body_def Let_def)
+             (simp_all add: call_body_def Let_def split: sum.splits)
         note upd = apply_ref_updates_frame[OF final_eq]
         show ?thesis
           unfolding call_frame_def
@@ -1215,7 +1260,7 @@ next
             then obtain path where "(a, path) \<in> set ?refs" by auto
             from extern_refs_addrs[OF this] obtain i where
               i: "i < length (IF_Args f)" "i < length ?refResults"
-                 "snd (IF_Args f ! i) = Ref" "?refResults ! i = Inr (a, path)"
+                 "fst (snd (IF_Args f ! i)) = Ref" "?refResults ! i = Inr (a, path)"
               by blast
             from i(2) have i_lt: "i < length argTms" by simp
             from ref_result_in_call_ref_addrs[OF f_lookup i(1) i_lt i(3) i(4)] notin

@@ -125,16 +125,15 @@ definition fun_info_matches_interp_fun :: "CoreTyEnv \<Rightarrow> FunInfo \<Rig
   "fun_info_matches_interp_fun env funInfo interpFun =
     \<comment> \<open>Type arguments match\<close>
     (FI_TyArgs funInfo = IF_TyArgs interpFun \<and>
-    \<comment> \<open>Term arguments match: same length, and the Var/Ref markers agree.
-        (The ghost flags live only in the FunInfo.)\<close>
-    list_all2 (\<lambda>(_, vor1, _) (_, vor2). vor1 = vor2)
+    \<comment> \<open>Term arguments match: same length, and the Var/Ref markers and the
+        ghost flags agree.\<close>
+    list_all2 (\<lambda>(_, vor1, gh1) (_, vor2, gh2). vor1 = vor2 \<and> gh1 = gh2)
               (FI_TmArgs funInfo) (IF_Args interpFun) \<and>
     \<comment> \<open>Parameter names are distinct.\<close>
     distinct (map fst (IF_Args interpFun)) \<and>
-    \<comment> \<open>Impure flag, ghost flag and return type match\<close>
+    \<comment> \<open>Impure flag and ghost flag match\<close>
     FI_Impure funInfo = IF_Impure interpFun \<and>
     FI_Ghost funInfo = IF_Ghost interpFun \<and>
-    FI_ReturnType funInfo = IF_ReturnType interpFun \<and>
     \<comment> \<open>The contract matches, and it typechecks (CoreContractTypecheck.thy) in
         the body envs of the contract signatures.\<close>
     FI_Requires funInfo = IF_Requires interpFun \<and>
@@ -354,6 +353,22 @@ qed
 (* Lemma: state_matches_env does not depend on IS_World. *)
 lemma state_matches_env_IS_World_irrelevant [simp]:
   "state_matches_env (state \<lparr> IS_World := w \<rparr>) env storeTyping
+     = state_matches_env state env storeTyping"
+  by (simp add: state_matches_env_def
+        local_vars_exist_in_state_def global_vars_exist_in_state_def
+        no_extra_local_vars_def no_extra_global_vars_def
+        funs_exist_in_state_def no_extra_funs_def
+        const_locals_match_def
+        store_well_typed_def ty_args_well_formed_def
+        tables_match_def
+        local_var_in_state_with_type_def global_var_in_state_with_type_def
+        split: option.splits)
+
+(* Lemma: state_matches_env does not depend on IS_Ghost. (The mode of a state
+   is related to the type environment separately, where it matters: see the
+   hypotheses of type_soundness.) *)
+lemma state_matches_env_IS_Ghost_irrelevant [simp]:
+  "state_matches_env (state \<lparr> IS_Ghost := g \<rparr>) env storeTyping
      = state_matches_env state env storeTyping"
   by (simp add: state_matches_env_def
         local_vars_exist_in_state_def global_vars_exist_in_state_def

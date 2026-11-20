@@ -80,9 +80,8 @@ definition desc_dims_ok :: "MEncoding \<Rightarrow> int list \<Rightarrow> MByte
   "desc_dims_ok enc sizes bs =
     (\<forall>k < length sizes. slice (desc_dim_offset (enc_ptr_size enc) k) 8 bs = encode_val enc (MV_U64 (sizes ! k)))"
 
-(* True if there is an allocatable dimension. *)
-definition allocatable_dims :: "CoreDimension list \<Rightarrow> bool" where
-  "allocatable_dims dims = list_ex (\<lambda>d. d = CoreDim_Allocatable) dims"
+(* allocatable_dims (CoreKindcheck.thy) says whether a dimension list has an
+   allocatable dimension. *)
 
 (* True if there are n readable bytes at p, equal to data, and (if owned = True) p points
    to a whole heap block. *)
@@ -122,7 +121,7 @@ function rep_val :: "CoreTyEnv \<Rightarrow> MEncoding \<Rightarrow> (nat \<Righ
                   (slice (tag_size env dt) (gsz env enc (apply_subst (fmap_of_list (zip tyvars args)) payloadTy)) bs)
           | None \<Rightarrow> False)
      | _ \<Rightarrow> False)"
-| "rep_val env enc hmap mem ty (CV_Array sizes elems) bs =
+| "rep_val env enc hmap mem ty (CV_Array _ sizes elems) bs =
     (case ty of
        CoreTy_Array elemTy dims \<Rightarrow>
          sizes_match_dims sizes dims
@@ -197,14 +196,14 @@ lemma rep_val_Variant_E:
   using assms by (cases ty) (auto split: option.splits)
 
 lemma rep_val_Array_E:
-  assumes "rep_val env enc hmap mem ty (CV_Array sizes elems) bs"
+  assumes "rep_val env enc hmap mem ty (CV_Array al sizes elems) bs"
   obtains elemTy dims where "ty = CoreTy_Array elemTy dims"
     and "sizes_match_dims sizes dims" and "fmdom elems = fset_of_list (all_indices sizes)"
   using assms by (cases ty) auto
 
 (* The fixed-array clause. *)
 lemma rep_val_FixedArray_E:
-  assumes "rep_val env enc hmap mem (CoreTy_Array elemTy dims) (CV_Array sizes elems) bs"
+  assumes "rep_val env enc hmap mem (CoreTy_Array elemTy dims) (CV_Array al sizes elems) bs"
     and "dims_all_fixed dims"
   shows "sizes = dims_sizes dims"
     and "fmdom elems = fset_of_list (all_indices sizes)"
@@ -225,7 +224,7 @@ qed (use assms in simp_all)
 
 (* The array descriptor clause. *)
 lemma rep_val_Desc_E:
-  assumes "rep_val env enc hmap mem (CoreTy_Array elemTy dims) (CV_Array sizes elems) bs"
+  assumes "rep_val env enc hmap mem (CoreTy_Array elemTy dims) (CV_Array al sizes elems) bs"
     and "\<not> dims_all_fixed dims"
   obtains p where "sizes_match_dims sizes dims" and "fmdom elems = fset_of_list (all_indices sizes)"
     and "sizes_valid sizes" and "sizes_count sizes < u64_max"
@@ -297,7 +296,7 @@ next
   case (CV_Variant ctor payload)
   with assms(2) show ?thesis by (auto split: CoreType.splits option.splits)
 next
-  case (CV_Array sizes elems)
+  case (CV_Array al sizes elems)
   with assms(2) obtain elemTy dims where ty: "ty = CoreTy_Array elemTy dims"
     and match: "sizes_match_dims sizes dims" by (auto split: CoreType.splits)
   show ?thesis
@@ -444,7 +443,7 @@ function reach_blocks :: "CoreTyEnv \<Rightarrow> MEncoding \<Rightarrow> MMem \
                 (slice (tag_size env dt) (gsz env enc (apply_subst (fmap_of_list (zip tyvars args)) payloadTy)) bs)
           | None \<Rightarrow> {})
      | _ \<Rightarrow> {})"
-| "reach_blocks env enc mem ty (CV_Array sizes elems) bs =
+| "reach_blocks env enc mem ty (CV_Array _ sizes elems) bs =
     (case ty of
        CoreTy_Array elemTy dims \<Rightarrow>
          (if dims_all_fixed dims then
@@ -506,13 +505,13 @@ lemma reach_blocks_Variant_payload:
 lemma reach_blocks_FixedArray_elem:
   assumes "dims_all_fixed dims" and "fmlookup elems idx = Some v"
   shows "reach_blocks env enc mem elemTy v (slice (elem_offset (gsz env enc elemTy) sizes idx) (gsz env enc elemTy) bs)
-         \<subseteq> reach_blocks env enc mem (CoreTy_Array elemTy dims) (CV_Array sizes elems) bs"
+         \<subseteq> reach_blocks env enc mem (CoreTy_Array elemTy dims) (CV_Array al sizes elems) bs"
   using assms by auto
 
 lemma reach_blocks_Desc:
   assumes "valid_encoding enc" and "\<not> dims_all_fixed dims"
     and "take (enc_ptr_size enc) bs = encode_ptr enc (MP_Addr blk off)"
-  shows "blk \<in> reach_blocks env enc mem (CoreTy_Array elemTy dims) (CV_Array sizes elems) bs"
+  shows "blk \<in> reach_blocks env enc mem (CoreTy_Array elemTy dims) (CV_Array al sizes elems) bs"
 proof -
   have "decode_ptr enc (take (enc_ptr_size enc) bs) = Some (MP_Addr blk off)"
     unfolding assms(3) by (rule decode_ptr_encode_ptr[OF assms(1)])
@@ -525,7 +524,7 @@ lemma reach_blocks_Desc_elem:
     and "mem_read mem (MP_Addr blk off) (gsz env enc elemTy * sizes_count sizes) = Some data"
     and "fmlookup elems idx = Some v"
   shows "reach_blocks env enc mem elemTy v (slice (elem_offset (gsz env enc elemTy) sizes idx) (gsz env enc elemTy) data)
-         \<subseteq> reach_blocks env enc mem (CoreTy_Array elemTy dims) (CV_Array sizes elems) bs"
+         \<subseteq> reach_blocks env enc mem (CoreTy_Array elemTy dims) (CV_Array al sizes elems) bs"
 proof -
   have "decode_ptr enc (take (enc_ptr_size enc) bs) = Some (MP_Addr blk off)"
     unfolding assms(3) by (rule decode_ptr_encode_ptr[OF assms(1)])
@@ -592,7 +591,7 @@ next
     qed
   qed simp_all
 next
-  case (CV_Array sizes elems)
+  case (CV_Array al sizes elems)
   show ?case
   proof (cases ty)
     case (CoreTy_Array elemTy dims)
@@ -605,7 +604,7 @@ next
       proof -
         fix idx v assume lk: "fmlookup elems idx = Some v"
         have sub: "reach_blocks env enc mem elemTy v (slice (elem_offset (gsz env enc elemTy) sizes idx) (gsz env enc elemTy) bs)
-                   \<subseteq> reach_blocks env enc mem ty (CV_Array sizes elems) bs"
+                   \<subseteq> reach_blocks env enc mem ty (CV_Array al sizes elems) bs"
           unfolding CoreTy_Array using True lk by auto
         show "?thesis idx v"
           using CV_Array.IH[of v elemTy] lk blocks_agree_subset[OF CV_Array.prems sub]
@@ -626,7 +625,7 @@ next
           then show ?thesis unfolding CoreTy_Array using False Some by simp
         next
           case (MP_Addr blk off)
-          have blk_in: "blk \<in> reach_blocks env enc mem ty (CV_Array sizes elems) bs"
+          have blk_in: "blk \<in> reach_blocks env enc mem ty (CV_Array al sizes elems) bs"
             unfolding CoreTy_Array using False Some MP_Addr by simp
           have rd: "mem_read mem' (MP_Addr blk off) n = mem_read mem (MP_Addr blk off) n" for n
             by (rule blocks_agree_read[OF CV_Array.prems blk_in])
@@ -642,7 +641,7 @@ next
             proof -
               fix idx v assume lk: "fmlookup elems idx = Some v"
               have sub: "reach_blocks env enc mem elemTy v (slice (elem_offset (gsz env enc elemTy) sizes idx) (gsz env enc elemTy) data)
-                         \<subseteq> reach_blocks env enc mem ty (CV_Array sizes elems) bs"
+                         \<subseteq> reach_blocks env enc mem ty (CV_Array al sizes elems) bs"
                 unfolding CoreTy_Array using False \<open>decode_ptr enc (take (enc_ptr_size enc) bs) = Some p\<close> MP_Addr Some lk
                 by auto
               show "?thesis idx v"
@@ -711,7 +710,7 @@ next
     using CV_Variant.prems(2) unfolding ty reach_blocks_Variant_payload[OF lk] .
   from CV_Variant.IH[OF r agree] rest lk show ?case unfolding ty by simp
 next
-  case (CV_Array sizes elems)
+  case (CV_Array al sizes elems)
   from rep_val_Array_E[OF CV_Array.prems(1)] obtain elemTy dims where
     ty: "ty = CoreTy_Array elemTy dims" by blast
   let ?esz = "gsz env enc elemTy"
@@ -724,7 +723,7 @@ next
     proof -
       fix idx v assume lk: "fmlookup elems idx = Some v"
       have sub: "reach_blocks env enc mem elemTy v (slice (elem_offset ?esz sizes idx) ?esz bs)
-                 \<subseteq> reach_blocks env enc mem ty (CV_Array sizes elems) bs"
+                 \<subseteq> reach_blocks env enc mem ty (CV_Array al sizes elems) bs"
         unfolding ty by (rule reach_blocks_FixedArray_elem[OF True lk])
       show "rep_val env enc hmap mem' elemTy v (slice (elem_offset ?esz sizes idx) ?esz bs)"
         by (rule CV_Array.IH[OF fmran'I[OF lk] E(4)[OF lk] blocks_agree_subset[OF CV_Array.prems(2) sub]])
@@ -757,7 +756,7 @@ next
         by simp
     next
       case (MP_Addr blk off)
-      have blk_in: "blk \<in> reach_blocks env enc mem ty (CV_Array sizes elems) bs"
+      have blk_in: "blk \<in> reach_blocks env enc mem ty (CV_Array al sizes elems) bs"
         unfolding ty by (rule reach_blocks_Desc[OF assms False D(8)[unfolded MP_Addr]])
       note agree_blk = CV_Array.prems(2)[unfolded blocks_agree_def, rule_format, OF blk_in]
       show ?thesis
@@ -781,7 +780,7 @@ next
         proof -
           fix idx v assume lk: "fmlookup elems idx = Some v"
           have sub: "reach_blocks env enc mem elemTy v (slice (elem_offset ?esz sizes idx) ?esz data)
-                     \<subseteq> reach_blocks env enc mem ty (CV_Array sizes elems) bs"
+                     \<subseteq> reach_blocks env enc mem ty (CV_Array al sizes elems) bs"
             unfolding ty by (rule reach_blocks_Desc_elem[OF assms False D(8)[unfolded MP_Addr] rd lk])
           show "rep_val env enc hmap mem' elemTy v (slice (elem_offset ?esz sizes idx) ?esz data)"
             by (rule CV_Array.IH[OF fmran'I[OF lk] elems_r[OF lk] blocks_agree_subset[OF CV_Array.prems(2) sub]])

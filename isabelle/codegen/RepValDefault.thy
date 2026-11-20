@@ -343,7 +343,7 @@ next
         case True
         hence fixed: "list_all (\<lambda>d. dim_category d = DimCat_Fixed) dims" by (simp add: dims_all_fixed_def)
         from dv obtain ev where de: "default_value fuel st elemTy = Inr ev"
-          and v: "v = CV_Array (fixed_dim_sizes dims) (fmap_of_list (map (\<lambda>idx. (idx, ev)) (all_indices (fixed_dim_sizes dims))))"
+          and v: "v = CV_Array (allocatable_dims dims) (fixed_dim_sizes dims) (fmap_of_list (map (\<lambda>idx. (idx, ev)) (all_indices (fixed_dim_sizes dims))))"
           unfolding CoreTy_Array using fixed by (auto simp: Let_def split: sum.splits)
         note E = IHv[OF ewk emf de]
         have sizes: "fixed_dim_sizes dims = dims_sizes dims" by (rule fixed_dim_sizes_dims_sizes[OF True])
@@ -370,7 +370,7 @@ next
       next
         case False
         hence nfixed: "\<not> list_all (\<lambda>d. dim_category d = DimCat_Fixed) dims" by (simp add: dims_all_fixed_def)
-        from dv have v: "v = CV_Array (replicate (length dims) 0) fmempty"
+        from dv have v: "v = CV_Array (allocatable_dims dims) (replicate (length dims) 0) fmempty"
           unfolding CoreTy_Array using nfixed by simp
         have d: "length dims > 0" using dwk unfolding array_dims_well_kinded_def by (cases dims) auto
         have nonfixed: "list_all (\<lambda>d. dim_category d \<noteq> DimCat_Fixed) dims"

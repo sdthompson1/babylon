@@ -20,20 +20,20 @@ section \<open>Argument results\<close>
    parameters) only depend on the results at Ref positions. *)
 lemma ref_results_selection_eq:
   assumes "length refs' = length refs" and "length args = length refs"
-      and "\<And>i. i < length args \<Longrightarrow> snd (args ! i) = Ref \<Longrightarrow> refs' ! i = refs ! i"
-  shows "map (\<lambda>((_, vr), rr). if vr = Ref then rr else Inl TypeError) (zip args refs')
-         = map (\<lambda>((_, vr), rr). if vr = Ref then rr else Inl TypeError) (zip args refs)"
+      and "\<And>i. i < length args \<Longrightarrow> fst (snd (args ! i)) = Ref \<Longrightarrow> refs' ! i = refs ! i"
+  shows "map (\<lambda>((_, vr, _), rr). if vr = Ref then rr else Inl TypeError) (zip args refs')
+         = map (\<lambda>((_, vr, _), rr). if vr = Ref then rr else Inl TypeError) (zip args refs)"
 proof (rule nth_equalityI)
-  show "length (map (\<lambda>((_, vr), rr). if vr = Ref then rr else Inl TypeError) (zip args refs'))
-        = length (map (\<lambda>((_, vr), rr). if vr = Ref then rr else Inl TypeError) (zip args refs))"
+  show "length (map (\<lambda>((_, vr, _), rr). if vr = Ref then rr else Inl TypeError) (zip args refs'))
+        = length (map (\<lambda>((_, vr, _), rr). if vr = Ref then rr else Inl TypeError) (zip args refs))"
     using assms(1,2) by simp
 next
   fix i
-  assume "i < length (map (\<lambda>((_, vr), rr). if vr = Ref then rr else Inl TypeError) (zip args refs'))"
+  assume "i < length (map (\<lambda>((_, vr, _), rr). if vr = Ref then rr else Inl TypeError) (zip args refs'))"
   hence i_lt: "i < length args" using assms(1,2) by simp
-  obtain name vr where a_eq: "args ! i = (name, vr)" by (cases "args ! i")
-  show "map (\<lambda>((_, vr), rr). if vr = Ref then rr else Inl TypeError) (zip args refs') ! i
-        = map (\<lambda>((_, vr), rr). if vr = Ref then rr else Inl TypeError) (zip args refs) ! i"
+  obtain name vr gh where a_eq: "args ! i = (name, vr, gh)" by (cases "args ! i")
+  show "map (\<lambda>((_, vr, _), rr). if vr = Ref then rr else Inl TypeError) (zip args refs') ! i
+        = map (\<lambda>((_, vr, _), rr). if vr = Ref then rr else Inl TypeError) (zip args refs) ! i"
   proof (cases vr)
     case Var
     with i_lt assms(1,2) a_eq show ?thesis by simp
@@ -81,6 +81,7 @@ lemma compiled_args_one_fuel:
   assumes IH_tm: "\<And>tm. term_sim fuel tm" and IH_lv: "\<And>tm. lvalue_sim fuel tm"
       and fe: "TE_Functions env = TE_Functions genv" and fs: "IS_Functions full = funs"
       and sme: "state_matches_env full env storeTyping" and wf: "tyenv_well_formed env"
+      and gm: "IS_Ghost full = NotGhost"
       and typed: "\<And>tm. tm \<in> set argTms \<Longrightarrow> \<exists>ty. core_term_type env NotGhost tm = Some ty"
       and ok: "list_all core_term_match_scrutinees_ok argTms"
   shows "\<exists>n. \<forall>tm \<in> set argTms. args_agree fuel full n tm"
@@ -95,7 +96,7 @@ proof (rule ex_fuel_all)
     thus ?thesis by simp
   next
     case (Inr v)
-    from term_simD[OF IH_tm fe fs sme wf t ok1 Inr] Inr show ?thesis by auto
+    from term_simD[OF IH_tm fe fs sme wf gm t ok1 Inr] Inr show ?thesis by auto
   qed
   then obtain n1 where
     n1: "\<forall>v. interp_term d fuel full tm = Inr v
@@ -107,7 +108,7 @@ proof (rule ex_fuel_all)
     thus ?thesis by simp
   next
     case (Inr r)
-    from lvalue_simD[OF IH_lv fe fs sme wf t ok1 Inr] Inr show ?thesis by auto
+    from lvalue_simD[OF IH_lv fe fs sme wf gm t ok1 Inr] Inr show ?thesis by auto
   qed
   then obtain n2 where
     n2: "\<forall>r. interp_writable_lvalue d fuel full tm = Inr r
@@ -144,6 +145,7 @@ proof (rule call_simI)
   fix env storeTyping and full :: "'w InterpState" and funInfo newFull retVal
   assume fe: "TE_Functions env = TE_Functions genv" and fs: "IS_Functions full = funs"
     and sme: "state_matches_env full env storeTyping" and wf: "tyenv_well_formed env"
+    and gm: "IS_Ghost full = NotGhost"
     and fi: "fmlookup (TE_Functions env) fnName = Some funInfo"
     and args_typed: "list_all2 (\<lambda>tm expectedTy. core_term_type env NotGhost tm = Some expectedTy)
          argTms (map (\<lambda>(ty, _). apply_subst (fmap_of_list (zip (FI_TyArgs funInfo) tyArgs)) ty)
@@ -162,13 +164,21 @@ proof (rule call_simI)
     f_lookup: "fmlookup (IS_Functions full) fnName = Some f" and
     len_args: "length argTms = length (IF_Args f)" and
     len_tys: "length tyArgs = length (IF_TyArgs f)" and
-    foldF: "fold process_one_arg (zip (IF_Args f) (zip ?refsF ?valsF))
-              (Inr (full \<lparr> IS_Locals := fmempty, IS_Refs := fmempty, IS_ConstLocals := {||},
-                           IS_TyArgs := fmap_of_list (zip (IF_TyArgs f)
-                                          (map (apply_subst (IS_TyArgs full)) tyArgs)) \<rparr>))
-            = Inr preF" and
-    bodyF: "call_body (interp_statement_list d fuel) full f ?refsF ?valsF preF
-              = Inr (newFull, retVal)" .
+    foldF0: "fold process_one_arg
+               (zip (IF_Args f)
+                    (zip (map_args (interp_writable_lvalue d fuel) full (IF_Args f) argTms)
+                         (map_args (interp_term d fuel) full (IF_Args f) argTms)))
+               (Inr (full \<lparr> IS_Locals := fmempty, IS_Refs := fmempty, IS_ConstLocals := {||},
+                            IS_TyArgs := fmap_of_list (zip (IF_TyArgs f)
+                                           (map (apply_subst (IS_TyArgs full)) tyArgs)) \<rparr>))
+             = Inr preF" and
+    bodyF0: "call_body (interp_statement_list d fuel) full f
+               (map_args (interp_writable_lvalue d fuel) full (IF_Args f) argTms)
+               (map_args (interp_term d fuel) full (IF_Args f) argTms) preF
+             = Inr (newFull, retVal)" and
+    ghF0: "IS_Ghost full = NotGhost \<Longrightarrow> IF_Ghost f = NotGhost"
+    by blast
+  have ghF: "IF_Ghost f = NotGhost" by (rule ghF0[OF gm])
   let ?tySubst = "fmap_of_list (zip (IF_TyArgs f) (map (apply_subst (IS_TyArgs full)) tyArgs))"
   let ?cleared = "full \<lparr> IS_Locals := fmempty, IS_Refs := fmempty, IS_ConstLocals := {||},
                          IS_TyArgs := ?tySubst \<rparr>"
@@ -179,7 +189,38 @@ proof (rule call_simI)
                   \<Longrightarrow> core_statement_list_ghost_free body \<and> core_statement_list_match_scrutinees_ok body"
     by blast+
   from funs_match_compilable_info[OF fmc fi[unfolded fe]]
-  have ngF: "FI_Ghost funInfo = NotGhost" by simp
+  have ngF: "FI_Ghost funInfo = NotGhost" and ngp: "no_ghost_params funInfo" by simp_all
+
+  \<comment> \<open>The function of the state against its signature.\<close>
+  have fes: "funs_exist_in_state full env" using sme unfolding state_matches_env_def by blast
+  have abs_empty: "TE_AbstractTypes env = {||}" using sme unfolding state_matches_env_def by blast
+  have fi_match: "fun_info_matches_interp_fun env funInfo f"
+    using fes fi f_lookup unfolding funs_exist_in_state_def by (auto split: option.splits)
+  have tyargs_eq: "FI_TyArgs funInfo = IF_TyArgs f"
+    using fi_match unfolding fun_info_matches_interp_fun_def by simp
+  have len_fi: "length (FI_TmArgs funInfo) = length (IF_Args f)"
+    using fi_match unfolding fun_info_matches_interp_fun_def by (auto dest: list_all2_lengthD)
+
+  \<comment> \<open>No parameter is ghost, so every argument is evaluated in the caller's
+      state as it is (in its mode).\<close>
+  have argsNG: "snd (snd arg) = NotGhost" if "arg \<in> set (IF_Args f)" for arg
+  proof -
+    from that obtain i where i: "i < length (IF_Args f)" and a: "IF_Args f ! i = arg"
+      by (auto simp: in_set_conv_nth)
+    from fi_match have "list_all2 (\<lambda>(_, vor1, gh1) (_, vor2, gh2). vor1 = vor2 \<and> gh1 = gh2)
+                          (FI_TmArgs funInfo) (IF_Args f)"
+      unfolding fun_info_matches_interp_fun_def by simp
+    from list_all2_nthD2[OF this i] a
+    have "snd (snd (FI_TmArgs funInfo ! i)) = snd (snd arg)" by (auto simp: case_prod_beta)
+    moreover from ngp i len_fi have "snd (snd (FI_TmArgs funInfo ! i)) = NotGhost"
+      by (auto simp: no_ghost_params_def list_all_length case_prod_beta)
+    ultimately show ?thesis by simp
+  qed
+  have mapF: "map_args ev full (IF_Args f) argTms = map (ev full) argTms"
+    for ev :: "'w InterpState \<Rightarrow> CoreTerm \<Rightarrow> 'r"
+    by (rule map_args_no_ghost[OF len_args[symmetric] argsNG])
+  note foldF = foldF0[unfolded mapF]
+  note bodyF = bodyF0[unfolded mapF]
 
   \<comment> \<open>The typing of the arguments.\<close>
   have len_args_fi: "length argTms = length (FI_TmArgs funInfo)"
@@ -193,18 +234,8 @@ proof (rule call_simI)
     using arg_ty by (auto simp: in_set_conv_nth)
 
   \<comment> \<open>The compiled arguments agree with the original ones at some fuel F0.\<close>
-  from compiled_args_one_fuel[OF IH_tm IH_lv fe fs sme wf typed ok] obtain F0 where
+  from compiled_args_one_fuel[OF IH_tm IH_lv fe fs sme wf gm typed ok] obtain F0 where
     F0: "\<forall>tm \<in> set argTms. args_agree fuel full F0 tm" by blast
-
-  \<comment> \<open>The function of the state against its signature.\<close>
-  have fes: "funs_exist_in_state full env" using sme unfolding state_matches_env_def by blast
-  have abs_empty: "TE_AbstractTypes env = {||}" using sme unfolding state_matches_env_def by blast
-  have fi_match: "fun_info_matches_interp_fun env funInfo f"
-    using fes fi f_lookup unfolding funs_exist_in_state_def by (auto split: option.splits)
-  have tyargs_eq: "FI_TyArgs funInfo = IF_TyArgs f"
-    using fi_match unfolding fun_info_matches_interp_fun_def by simp
-  have len_fi: "length (FI_TmArgs funInfo) = length (IF_Args f)"
-    using fi_match unfolding fun_info_matches_interp_fun_def by (auto dest: list_all2_lengthD)
 
   \<comment> \<open>The callee's frame matches the callee's body environment (type soundness).\<close>
   have vals_sound: "\<forall>i < length (FI_TmArgs funInfo).
@@ -213,7 +244,7 @@ proof (rule call_simI)
     fix i assume i_lt: "i < length (FI_TmArgs funInfo)"
     hence i_lt': "i < length argTms" using len_args_fi by simp
     have "sound_term_result full env (?expTy i) (interp_term d fuel full (argTms ! i))"
-      by (rule interp_term_sound[OF sme wf, THEN mp, OF arg_ty[OF i_lt']])
+      by (rule interp_term_sound[OF sme wf, THEN mp, OF conjI[OF arg_ty[OF i_lt'] gm]])
     thus "sound_term_result full env (?expTy i) (?valsF ! i)" using i_lt' by simp
   qed
   have lvals_sound: "\<forall>i < length (FI_TmArgs funInfo).
@@ -226,11 +257,18 @@ proof (rule call_simI)
     have wlv: "is_writable_lvalue env (argTms ! i)" using refs_w i_lt' is_ref by blast
     have "sound_lvalue_result full env storeTyping (?expTy i)
             (interp_writable_lvalue d fuel full (argTms ! i))"
-      by (rule interp_writable_lvalue_sound[OF sme wf, THEN mp, OF conjI[OF wlv arg_ty[OF i_lt']]])
+      by (rule interp_writable_lvalue_sound
+                 [OF sme wf, THEN mp, OF conjI[OF wlv conjI[OF arg_ty[OF i_lt'] gm]]])
     thus "sound_lvalue_result full env storeTyping (?expTy i) (?refsF ! i)" using i_lt' by simp
   qed
+  have len_valsF: "length ?valsF = length (FI_TmArgs funInfo)"
+    and len_refsF: "length ?refsF = length (FI_TmArgs funInfo)" using len_args_fi by simp_all
+  \<comment> \<open>The cleared state keeps the mode of the call.\<close>
+  have cleared_mode: "?cleared \<lparr> IS_Ghost := IS_Ghost full \<rparr> = ?cleared"
+    by (rule IS_Ghost_update_same) simp
   note arg_sound = fold_process_one_arg_sound
-                     [OF sme wf fi fi_match len_ty wk vals_sound lvals_sound len_args_fi]
+                     [OF sme wf fi fi_match len_ty wk vals_sound lvals_sound len_valsF len_refsF,
+                      where ?gh0.0 = "IS_Ghost full", unfolded tyargs_eq cleared_mode]
   let ?envB = "body_env_for env (map fst (IF_Args f)) funInfo"
   obtain bodyST where sme_body: "state_matches_env preF ?envB bodyST"
     using arg_sound[unfolded tyargs_eq] foldF
@@ -242,6 +280,10 @@ proof (rule call_simI)
   have feB: "TE_Functions ?envB = TE_Functions genv" by (simp add: body_env_for_def fe)
   have fsP: "IS_Functions preF = funs"
     using fold_process_one_arg_preserves_globals_funs[OF foldF] fs by simp
+  \<comment> \<open>The body runs in the mode of the call, which is executable.\<close>
+  have gmP: "IS_Ghost preF = NotGhost"
+    using fold_process_one_arg_preserves_globals_funs[OF foldF] gm by simp
+  have fghB: "TE_FunctionGhost ?envB = NotGhost" by (simp add: body_env_for_def ngF)
 
   \<comment> \<open>Binding the compiled arguments, at any fuel at which they agree, gives
       the compiled callee frame.\<close>
@@ -294,7 +336,7 @@ proof (rule call_simI)
       same values by the term list simulation, and a compiled match never an
       lvalue, compile_match_term_is_Match).\<close>
   have aliasF: "call_args_alias (IF_Args f) (map (interp_lvalue d fuel False full) argTms) = None"
-    by (rule interp_function_call_Inr_no_alias[OF ev f_lookup])
+    using interp_function_call_Inr_no_alias[OF ev f_lookup] unfolding mapF .
   have allInr: "\<exists>v. interp_term d fuel full tm = Inr v" if "tm \<in> set argTms" for tm
   proof -
     have l1: "length (IF_Args f) = length ?refsF" using len_args by simp
@@ -316,7 +358,7 @@ proof (rule call_simI)
       have typed: "\<forall>tm \<in> set tms. \<exists>ty. core_term_type env NotGhost tm = Some ty"
         and ok1: "list_all core_term_match_scrutinees_ok tms"
         using that(1) by (auto simp: list_all_iff)
-      from terms_simD[OF IH_tms fe fs sme wf typed ok1 that(2)] obtain n where
+      from terms_simD[OF IH_tms fe fs sme wf gm typed ok1 that(2)] obtain n where
         n: "interp_term_list d n (mc_state full) (map match_compile_term tms) = Inr vs" by blast
       have "interp_term_list d (max n G) (mc_state full) (map match_compile_term tms) = Inr vs"
         by (rule interp_term_list_Inr_more_fuel[OF n]) simp
@@ -406,24 +448,31 @@ proof (rule call_simI)
   have lenT: "length tyArgs = length (IF_TyArgs (mc_interp_fun f))" by (simp add: len_tys)
   have req': "IF_Requires (mc_interp_fun f) = []" by (simp add: req)
   have ens': "IF_Ensures (mc_interp_fun f) = []" by (simp add: ens)
+  have gh': "IS_Ghost (mc_state full) = NotGhost \<longrightarrow> IF_Ghost (mc_interp_fun f) = NotGhost"
+    by (simp add: ghF)
+  have argsNG': "\<And>arg. arg \<in> set (IF_Args (mc_interp_fun f)) \<Longrightarrow> snd (snd arg) = NotGhost"
+    using argsNG by simp
 
   show "\<exists>fuel'. interp_function_call d fuel' (mc_state full) fnName tyArgs
                   (map match_compile_term argTms) = Inr (mc_state newFull, retVal)"
   proof (cases "IF_Body f")
     case (Inl body)
     \<comment> \<open>A Babylon body: run the compiled body in the compiled frame.\<close>
-    from bodyF Inl obtain postF where
+    \<comment> \<open>The returned value passed the check of the original call (R4); the
+        compiled call makes the same check of the same value.\<close>
+    from bodyF Inl obtain postF rv0 where
       bodyEval: "interp_statement_list d fuel preF body = Inr (Return postF retVal)" and
-      cc: "copy_check (IF_Ghost f) preF (IF_ReturnType f) retVal = None" and
+      vp: "value_position full (Inr retVal) = Inr rv0" and
       newFull_eq: "newFull = restore_scope full postF"
-      by (auto simp: call_body_def split: sum.splits ExecResult.splits option.splits)
+      by (auto simp: call_body_def split: sum.splits ExecResult.splits)
+    note cc = vp[unfolded value_position_InrD[OF vp, symmetric]]
     from fi_match Inl have "core_statement_list_type ?envB (FI_Ghost funInfo) body \<noteq> None"
       unfolding fun_info_matches_interp_fun_def by auto
     then obtain envB' where bodyT: "core_statement_list_type ?envB NotGhost body = Some envB'"
       using ngF by auto
     from body_props[OF Inl] have gfB: "core_statement_list_ghost_free body"
       and okB: "core_statement_list_match_scrutinees_ok body" by simp_all
-    from stmts_simD[OF IH_stmts feB fsP sme_body wfB ngB bodyT gfB okB bodyEval] obtain F1 where
+    from stmts_simD[OF IH_stmts feB fsP sme_body wfB gmP ngB fghB bodyT gfB okB bodyEval] obtain F1 where
       F1: "interp_statement_list d F1 (mc_state preF) (match_compile_statement_list body)
              = Inr (Return (mc_state postF) retVal)" by auto
     let ?G = "max F0 F1"
@@ -439,7 +488,8 @@ proof (rule call_simI)
       unfolding call_body_def mc_interp_fun_simps using Inl F1' cc newFull_eq by simp
     have "interp_function_call d (Suc ?G) (mc_state full) fnName tyArgs (map match_compile_term argTms)
             = Inr (mc_state newFull, retVal)"
-      by (rule interp_function_call_I[OF lk lenA lenT compiled_fold[OF agreeG] compiled_alias[OF agreeG] req' ens' cb])
+      by (rule interp_function_call_I[OF lk lenA lenT gh' argsNG' compiled_fold[OF agreeG]
+                                         compiled_alias[OF agreeG] req' ens' cb])
     thus ?thesis by blast
   next
     case (Inr ext)
@@ -465,13 +515,13 @@ proof (rule call_simI)
       then obtain i where "i < length argTms" and "x = ?valsF ! i" by (auto simp: in_set_conv_nth)
       with inv len_args show "\<exists>v. x = Inr v" by auto
     qed
-    have refs_eq: "map (\<lambda>((_, vr), rr). if vr = Ref then rr else Inl TypeError) (zip (IF_Args f) ?refsG)
-                   = map (\<lambda>((_, vr), rr). if vr = Ref then rr else Inl TypeError) (zip (IF_Args f) ?refsF)"
+    have refs_eq: "map (\<lambda>((_, vr, _), rr). if vr = Ref then rr else Inl TypeError) (zip (IF_Args f) ?refsG)
+                   = map (\<lambda>((_, vr, _), rr). if vr = Ref then rr else Inl TypeError) (zip (IF_Args f) ?refsF)"
     proof (rule ref_results_selection_eq)
       show "length ?refsG = length ?refsF" by simp
       show "length (IF_Args f) = length ?refsF" using len_args by simp
     next
-      fix i assume i_lt: "i < length (IF_Args f)" and is_ref: "snd (IF_Args f ! i) = Ref"
+      fix i assume i_lt: "i < length (IF_Args f)" and is_ref: "fst (snd (IF_Args f ! i)) = Ref"
       from inv i_lt is_ref obtain a p where r: "?refsF ! i = Inr (a, p)" by blast
       hence ev_i: "interp_writable_lvalue d fuel full (argTms ! i) = Inr (a, p)"
         using i_lt len_args by simp
@@ -482,23 +532,28 @@ proof (rule call_simI)
     qed
     obtain w upd rv where ext_eq: "ext (IS_World full) (rights ?valsF) = (w, upd, rv)"
       by (cases "ext (IS_World full) (rights ?valsF)") auto
-    from bodyF Inr ext_eq obtain fin where
+    \<comment> \<open>The returned value passed the check of the original call (R4); the
+        compiled call makes the same check of the same value.\<close>
+    from bodyF Inr ext_eq obtain fin rv0 where
       aru: "apply_ref_updates (full \<lparr> IS_World := w \<rparr>)
-              (rights (map (\<lambda>((_, vr), rr). if vr = Ref then rr else Inl TypeError)
+              (rights (map (\<lambda>((_, vr, _), rr). if vr = Ref then rr else Inl TypeError)
                             (zip (IF_Args f) ?refsF))) upd = Inr fin" and
+      vp: "value_position full (Inr rv) = Inr rv0" and
       nf: "newFull = fin" and rv: "retVal = rv"
       by (auto simp: call_body_def Let_def split: sum.splits)
+    note cc = vp[unfolded value_position_InrD[OF vp, symmetric]]
     have aru': "apply_ref_updates ((mc_state full) \<lparr> IS_World := w \<rparr>)
-                  (rights (map (\<lambda>((_, vr), rr). if vr = Ref then rr else Inl TypeError)
+                  (rights (map (\<lambda>((_, vr, _), rr). if vr = Ref then rr else Inl TypeError)
                                 (zip (IF_Args f) ?refsF))) upd = Inr (mc_state fin)"
       using apply_ref_updates_mc[of "full \<lparr> IS_World := w \<rparr>"] aru by simp
     have cb: "call_body (interp_statement_list d F0) (mc_state full) (mc_interp_fun f) ?refsG ?valsG
                 (mc_state preF) = Inr (mc_state newFull, retVal)"
       unfolding call_body_def mc_interp_fun_simps vals_eq refs_eq
-      using Inr ext_eq aru' nf rv by (simp add: Let_def)
+      using Inr ext_eq aru' nf rv cc by (simp add: Let_def)
     have "interp_function_call d (Suc F0) (mc_state full) fnName tyArgs (map match_compile_term argTms)
             = Inr (mc_state newFull, retVal)"
-      by (rule interp_function_call_I[OF lk lenA lenT compiled_fold[OF F0] compiled_alias[OF F0] req' ens' cb])
+      by (rule interp_function_call_I[OF lk lenA lenT gh' argsNG' compiled_fold[OF F0]
+                                         compiled_alias[OF F0] req' ens' cb])
     thus ?thesis by blast
   qed
 qed

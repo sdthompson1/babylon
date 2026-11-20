@@ -306,7 +306,8 @@ using assms proof (induction tm arbitrary: env env' ghost ty)
     elemTy_rt: "ghost = NotGhost \<longrightarrow> is_runtime_type env elemTy" and
     all_tms: "list_all (\<lambda>tm. core_term_type env ghost tm = Some elemTy) tms" and
     len_range: "int_in_range (int_range Unsigned IntBits_64) (int (length tms))" and
-    ty_eq: "ty = CoreTy_Array elemTy [CoreDim_Fixed (int (length tms))]"
+    ty_eq: "ty = CoreTy_Array elemTy [CoreDim_Fixed (int (length tms))]" and
+    elemTy_cp: "complete_if_executable ghost elemTy"
     by (auto split: if_splits)
   have elemTy_wk': "is_well_kinded env' elemTy"
     using is_well_kinded_tyenv_extends[OF ext elemTy_wk] .
@@ -321,7 +322,7 @@ using assms proof (induction tm arbitrary: env env' ghost ty)
     then show "core_term_type env' ghost x = Some elemTy"
       using CoreTm_LitArray.IH[OF x_in ext cons] by blast
   qed
-  show ?case using elemTy_wk' elemTy_rt' all_tms' len_range ty_eq by simp
+  show ?case using elemTy_wk' elemTy_rt' all_tms' len_range ty_eq elemTy_cp by simp
 next
   case (CoreTm_Var name)
   from CoreTm_Var.prems(3) obtain vty where
@@ -383,8 +384,9 @@ next
                TE_GhostLocals := (if ghost = Ghost then finsert var (TE_GhostLocals env)
                                    else fminus (TE_GhostLocals env) {|var|}),
                TE_ConstLocals := finsert var (TE_ConstLocals env) \<rparr>)
-        ghost body = Some ty"
-    by (auto simp: Let_def split: option.splits)
+        ghost body = Some ty" and
+    body_cp: "complete_if_executable ghost ty"
+    by (auto simp: Let_def split: option.splits if_splits)
   have rhs_ty': "core_term_type env' ghost rhs = Some rhsTy"
     using CoreTm_Let.IH(1)[OF ext cons rhs_ty] .
   let ?bodyEnv = "env \<lparr> TE_LocalVars := fmupd var rhsTy (TE_LocalVars env),
@@ -401,7 +403,7 @@ next
     using cons unfolding tyenv_ctors_consistent_def by simp
   have body_ty': "core_term_type ?bodyEnv' ghost body = Some ty"
     using CoreTm_Let.IH(2)[OF ext_body cons_body body_ty] .
-  show ?case using rhs_ty' body_ty' by (simp add: Let_def)
+  show ?case using rhs_ty' body_ty' body_cp by (simp add: Let_def)
 next
   case (CoreTm_Quantifier quant var varTy body)
   note ext = CoreTm_Quantifier.prems(1) and cons = CoreTm_Quantifier.prems(2)
@@ -481,6 +483,8 @@ next
     ng_dt: "ghost = NotGhost \<longrightarrow> dtName \<notin> ghost_datatypes env" and
     payload_ty: "core_term_type env ghost payload
                    = Some (apply_subst (fmap_of_list (zip tyvars tyArgs)) payloadTy)" and
+    payload_cp: "complete_if_executable ghost
+                   (apply_subst (fmap_of_list (zip tyvars tyArgs)) payloadTy)" and
     ty_eq: "ty = CoreTy_Datatype dtName tyArgs"
     by (auto simp: Let_def split: if_splits option.splits)
   have wk_args': "list_all (is_well_kinded env') tyArgs"
@@ -499,7 +503,7 @@ next
   have payload_ty': "core_term_type env' ghost payload
                        = Some (apply_subst (fmap_of_list (zip tyvars tyArgs)) payloadTy)"
     using CoreTm_VariantCtor.IH[OF ext cons payload_ty] .
-  show ?case using ctor_lk' len_eq wk_args' cp_args ng_fail' payload_ty' ty_eq
+  show ?case using ctor_lk' len_eq wk_args' cp_args ng_fail' payload_ty' payload_cp ty_eq
     by (simp add: Let_def)
 next
   case (CoreTm_Record flds)
@@ -511,7 +515,7 @@ next
     have tm_in: "tm \<in> Basic_BNFs.snds (nm, tm)" by simp
     show "core_term_type env' ghost tm = Some T"
       by (rule CoreTm_Record.IH[OF mem tm_in ext cons t])
-  qed
+  qed simp
 next
   case (CoreTm_RecordProj tm fldName)
   from CoreTm_RecordProj.prems(3) obtain fieldTypes where
@@ -577,7 +581,7 @@ next
     have b_snd: "b \<in> Basic_BNFs.snds (p, b)" by simp
     show "core_term_type env' ghost b = Some T"
       by (rule CoreTm_Match.IH(2)[OF arm_in b_snd ext cons b_ty])
-  qed
+  qed simp
 next
   case (CoreTm_Sizeof tm)
   from CoreTm_Sizeof.prems(3) obtain elemTy dims where

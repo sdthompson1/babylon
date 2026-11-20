@@ -13,8 +13,9 @@ begin
    Instead of directly calling interp_term (the actual Core interpreter), which would
    not be possible (the interpreter is not executable), the elaborator defines its own
    eval_const and fold_const functions. A successful fold_const is then proved to give
-   the value that interp_term would have given (see theorem fold_const_is_core_evaluation
-   in ConstFoldCorrect.thy).
+   the value that interp_term would have given, under certain conditions that are
+   believed (but not yet proved) to be true during elaboration (see theorem
+   fold_const_is_core_evaluation in ConstFoldCorrect.thy for full details).
 
    The other advantages of doing it this way are that no fuel is needed, and the full
    InterpState is not needed (we just need a map from global variable names to values).
@@ -33,7 +34,8 @@ begin
    allocated and default - can't occur in legal non-ghost consts anyway, so these are
    not "real" restrictions.
 
-   On a term that satisfies is_constant_term, eval_const and interp_term agree. *)
+   On a term that satisfies is_constant_term, eval_const and interp_term agree (see
+   eval_const_interp_agree in ConstFoldCorrect.thy for the conditions). *)
 
 fun is_constant_term :: "CoreTerm \<Rightarrow> bool" where
   "is_constant_term (CoreTm_LitBool _) = True"
@@ -243,7 +245,7 @@ where
   (* Array projection (indexing) *)
 | "eval_const vals (CoreTm_ArrayProj arrayTm idxTms) =
     (case eval_const vals arrayTm of
-      Inr (CV_Array _ elementMap) \<Rightarrow>
+      Inr (CV_Array _ _ elementMap) \<Rightarrow>
         (case eval_const_list vals idxTms of
           Inr indexVals \<Rightarrow>
             (case interpret_index_vals indexVals of
@@ -268,7 +270,7 @@ where
   (* Sizeof *)
 | "eval_const vals (CoreTm_Sizeof tm) =
     (case eval_const vals tm of
-      Inr (CV_Array sizes _) \<Rightarrow> Inr (array_size_to_value sizes)
+      Inr (CV_Array _ sizes _) \<Rightarrow> Inr (array_size_to_value sizes)
     | Inr _ \<Rightarrow> Inl TypeError
     | Inl err \<Rightarrow> Inl err)"
 

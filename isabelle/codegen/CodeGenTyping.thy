@@ -310,7 +310,7 @@ next
        (use chk in simp, simp add: fits_def chk, use 4(7) gs in blast, intro expr_ok_ptr_add[OF 4(8)], simp_all)
   show ?case unfolding S by (rule pure_ok_Cons[OF st rest])
 next
-  case (5 env g ty sizes elems base)
+  case (5 env g ty al sizes elems base)
   obtain elemTy dims where ty: "ty = CoreTy_Array elemTy dims" using 5(3) by (cases ty) auto
   have closed: "type_tyvars elemTy = {}" and vts: "\<And>idx v. fmlookup elems idx = Some v \<Longrightarrow> value_has_type env v elemTy"
     and fms: "fmap_matches_sizes sizes elems" and smd: "sizes_match_dims sizes dims"
@@ -326,7 +326,7 @@ next
   let ?dimStores = "map (\<lambda>k. MS_Store CTy_U64 (ptr_add base (dim_off k)) (u64_lit (nat (sizes ! k)))) [0..<length sizes]"
   let ?chk = "size_fits env 0 (\<lambda>_. 0) elemTy \<and> sizes_count sizes < u64_max
               \<and> type_size env 0 (\<lambda>_. 0) elemTy * sizes_count sizes < u64_max"
-  have unf: "init_value env g ty (CV_Array sizes elems) base =
+  have unf: "init_value env g ty (CV_Array al sizes elems) base =
       (if dims_all_fixed dims then cg_bind (?initElems base) (\<lambda>rs. cg_return (concat (map fst rs), concat (map snd rs)))
        else if \<not> ?chk then cg_fail (CGE_Internal g ''global array value too large'')
        else if sizes_count sizes = 0 then cg_return ([], ?dimStores)
@@ -486,7 +486,7 @@ next
     unfolding init_value.simps ty lk using chk by (auto simp: cg_return_def elim!: cg_bind_InrE)
   show ?case by (rule 4(1)[OF ty lk refl refl _ iv vt]) (use chk in simp)
 next
-  case (5 env g ty sizes elems base)
+  case (5 env g ty al sizes elems base)
   obtain elemTy dims where ty: "ty = CoreTy_Array elemTy dims" using 5(3) by (cases ty) auto
   have closed: "type_tyvars elemTy = {}" and vts: "\<And>idx v. fmlookup elems idx = Some v \<Longrightarrow> value_has_type env v elemTy"
     and fms: "fmap_matches_sizes sizes elems"
@@ -501,7 +501,7 @@ next
   let ?dimStores = "map (\<lambda>k. MS_Store CTy_U64 (ptr_add base (dim_off k)) (u64_lit (nat (sizes ! k)))) [0..<length sizes]"
   let ?chk = "size_fits env 0 (\<lambda>_. 0) elemTy \<and> sizes_count sizes < u64_max
               \<and> type_size env 0 (\<lambda>_. 0) elemTy * sizes_count sizes < u64_max"
-  have unf: "init_value env g ty (CV_Array sizes elems) base =
+  have unf: "init_value env g ty (CV_Array al sizes elems) base =
       (if dims_all_fixed dims then cg_bind (?initElems base) (\<lambda>rs. cg_return (concat (map fst rs), concat (map snd rs)))
        else if \<not> ?chk then cg_fail (CGE_Internal g ''global array value too large'')
        else if sizes_count sizes = 0 then cg_return ([], ?dimStores)

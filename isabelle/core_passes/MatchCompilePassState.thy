@@ -36,7 +36,6 @@ lemma mc_interp_fun_simps [simp]:
   "IF_Body (mc_interp_fun f) = map_sum match_compile_statement_list id (IF_Body f)"
   "IF_Impure (mc_interp_fun f) = IF_Impure f"
   "IF_Ghost (mc_interp_fun f) = IF_Ghost f"
-  "IF_ReturnType (mc_interp_fun f) = IF_ReturnType f"
   "IF_Requires (mc_interp_fun f) = IF_Requires f"
   "IF_Ensures (mc_interp_fun f) = IF_Ensures f"
   by (simp_all add: mc_interp_fun_def)
@@ -58,6 +57,7 @@ lemma mc_state_simps [simp]:
   "IS_DataCtorsByType (mc_state s) = IS_DataCtorsByType s"
   "IS_Functions (mc_state s) = fmmap mc_interp_fun (IS_Functions s)"
   "IS_World (mc_state s) = IS_World s"
+  "IS_Ghost (mc_state s) = IS_Ghost s"
   "IS_ExternAlloc (mc_state s) = IS_ExternAlloc s"
   by (simp_all add: mc_state_def)
 
@@ -72,6 +72,7 @@ lemma mc_state_update_simps [simp]:
   "mc_state (s \<lparr> IS_Refs := r \<rparr>) = (mc_state s) \<lparr> IS_Refs := r \<rparr>"
   "mc_state (s \<lparr> IS_ConstLocals := c \<rparr>) = (mc_state s) \<lparr> IS_ConstLocals := c \<rparr>"
   "mc_state (s \<lparr> IS_TyArgs := t \<rparr>) = (mc_state s) \<lparr> IS_TyArgs := t \<rparr>"
+  "mc_state (s \<lparr> IS_Ghost := gm \<rparr>) = (mc_state s) \<lparr> IS_Ghost := gm \<rparr>"
   "mc_state (s \<lparr> IS_World := w \<rparr>) = (mc_state s) \<lparr> IS_World := w \<rparr>"
   by (simp_all add: mc_state_def)
 
@@ -116,9 +117,35 @@ lemma is_pure_fun_mc [simp]:
   "is_pure_fun (mc_state s) fnName = is_pure_fun s fnName"
   by (simp split: option.splits)
 
-lemma copy_check_mc [simp]:
-  "copy_check g (mc_state s) ty v = copy_check g s ty v"
-  by (rule copy_check_cong_state) simp_all
+(* The check of a value position only reads the mode and the allocation
+   oracle, which mc_state keeps. *)
+lemma value_position_mc [simp]:
+  "value_position (mc_state s) = value_position s"
+  by (rule ext, rule value_position_cong_state) simp_all
+
+lemma value_position_list_mc [simp]:
+  "value_position_list (mc_state s) = value_position_list s"
+  by (rule ext, rule value_position_list_cong_state) simp_all
+
+lemma value_position_mc_ghost [simp]:
+  "value_position ((mc_state s) \<lparr> IS_Ghost := g \<rparr>) = value_position (s \<lparr> IS_Ghost := g \<rparr>)"
+  by (rule ext, rule value_position_cong_state) simp_all
+
+lemma value_position_list_mc_ghost [simp]:
+  "value_position_list ((mc_state s) \<lparr> IS_Ghost := g \<rparr>)
+   = value_position_list (s \<lparr> IS_Ghost := g \<rparr>)"
+  by (rule ext, rule value_position_list_cong_state) simp_all
+
+(* The Let case of the interpreter, with the binding kept folded. The check of
+   the body's result does not depend on the binding. *)
+lemma interp_term_Let_vp:
+  "interp_term d (Suc fuel) state (CoreTm_Let varName rhsTm bodyTm) =
+    (case interp_term d fuel state rhsTm of
+       Inl err \<Rightarrow> Inl err
+     | Inr rhsVal \<Rightarrow>
+         value_position state
+           (interp_term d fuel (bind_const_local varName rhsVal state) bodyTm))"
+  by (simp del: bind_const_local.simps split: sum.splits)
 
 lemma default_value_mc [simp]:
   "default_value n (mc_state s) ty = default_value n s ty"
@@ -138,7 +165,7 @@ lemma interp_term_Var_fuel:
 lemma process_one_arg_mc:
   "process_one_arg t (Inr (mc_state s)) = map_sum id mc_state (process_one_arg t (Inr s))"
 proof -
-  obtain name vr r v where t_eq: "t = ((name, vr), r, v)" by (cases t) auto
+  obtain name vr gh r v where t_eq: "t = ((name, vr, gh), r, v)" by (cases t) auto
   show ?thesis unfolding t_eq by (cases vr; cases r; cases v) auto
 qed
 
@@ -295,7 +322,7 @@ proof (induction fnArgs arbitrary: refs vals refs' vals' s)
   then show ?case by simp
 next
   case (Cons a fnArgs)
-  obtain name vr where a_eq: "a = (name, vr)" by (cases a)
+  obtain name vr gh where a_eq: "a = (name, vr, gh)" by (cases a)
   from Cons.prems(2,3,4,5) obtain r rs v vs r' rs' v' vs' where
     refs_eq: "refs = r # rs" and vals_eq: "vals = v # vs" and
     refs'_eq: "refs' = r' # rs'" and vals'_eq: "vals' = v' # vs'"
@@ -311,11 +338,11 @@ next
     using Cons.prems(2,3,4,5) refs_eq vals_eq refs'_eq vals'_eq by simp_all
   \<comment> \<open>The first argument succeeded in the original run.\<close>
   from Cons.prems(1) refs_eq vals_eq a_eq
-  obtain s0 where step: "process_one_arg ((name, vr), r, v) (Inr s) = Inr s0"
+  obtain s0 where step: "process_one_arg ((name, vr, gh), r, v) (Inr s) = Inr s0"
     and rest: "fold process_one_arg (zip fnArgs (zip rs vs)) (Inr s0) = Inr s1"
-    by (cases "process_one_arg ((name, vr), r, v) (Inr s)")
+    by (cases "process_one_arg ((name, vr, gh), r, v) (Inr s)")
        (auto simp: fold_process_one_arg_error)
-  have step': "process_one_arg ((name, vr), r', v') (Inr (mc_state s)) = Inr (mc_state s0)"
+  have step': "process_one_arg ((name, vr, gh), r', v') (Inr (mc_state s)) = Inr (mc_state s0)"
   proof (cases vr)
     case Var
     from step Var obtain w where v_eq: "v = Inr w" by (cases v) auto
@@ -353,6 +380,16 @@ lemma var_env_SomeI:
 lemma var_env_mc [simp]:
   "var_env (mc_state s) = var_env s"
   by (unfold var_env_def interp_term_Var_mc) (rule refl)
+
+(* The value of a variable does not depend on the mode of the state. *)
+lemma interp_term_Var_IS_Ghost:
+  "interp_term d (Suc n) (s \<lparr> IS_Ghost := gm \<rparr>) (CoreTm_Var x)
+     = interp_term d (Suc n) s (CoreTm_Var x)"
+  by (simp split: option.splits)
+
+lemma var_env_IS_Ghost [simp]:
+  "var_env (s \<lparr> IS_Ghost := gm \<rparr>) = var_env s"
+  by (unfold var_env_def interp_term_Var_IS_Ghost) (rule refl)
 
 (* A test scrutinee (a variable with projections) that the match compiler's
    walker evaluates is evaluated to the same value by the interpreter, at
@@ -419,19 +456,25 @@ lemma interp_statement_list_single:
    \<Longrightarrow> interp_statement_list d (Suc (Suc f)) s [stmt] = Inr res"
   by (cases res) simp_all
 
-(* A match with one wildcard arm evaluates as its arm body does. *)
+(* A match with one wildcard arm evaluates as its arm body does, provided the
+   value of the body passes the check of a value position (the result of the
+   arm of a match is in a value position). *)
 lemma interp_wild_match:
   "interp_term d f1 s scrut = Inr sv \<Longrightarrow> interp_term d f2 s body = Inr v
+   \<Longrightarrow> value_position s (Inr v) = Inr v
    \<Longrightarrow> interp_term d (Suc (max f1 f2)) s (CoreTm_Match scrut [(CorePat_Wildcard, body)]) = Inr v"
   using interp_term_more_fuel[of d f1 s scrut "Inr sv" "max f1 f2"]
         interp_term_more_fuel[of d f2 s body "Inr v" "max f1 f2"]
   by simp
 
 (* A term tree whose walk picks the leaf b evaluates, in the interpreter, as
-   b does, at some fuel. *)
+   b does, at some fuel, provided the value of b passes the check of a value
+   position: every test of the tree is a match, which applies that check to the
+   result of its arm, i.e. to the value of b. *)
 lemma match_tree_to_term_eval:
   assumes "match_tree_eval (var_env s) t = Some b"
       and "interp_term d fuel s b = Inr v"
+      and "value_position s (Inr v) = Inr v"
   shows "\<exists>fuel'. interp_term d fuel' s (match_tree_to_term t) = Inr v"
   using assms
 proof (induction t arbitrary: fuel)
@@ -446,7 +489,7 @@ next
     by (auto split: option.splits)
   from arms_find_in[OF arm] obtain p where arm_in: "(p, t') \<in> set arms" by auto
   have t'_in: "t' \<in> Basic_BNFs.snds (p, t')" by simp
-  from MT_Test.IH[OF arm_in t'_in t'_eval MT_Test.prems(2)] obtain f1 where
+  from MT_Test.IH[OF arm_in t'_in t'_eval MT_Test.prems(2,3)] obtain f1 where
     f1: "interp_term d f1 s (match_tree_to_term t') = Inr v" by blast
   from eval_match_scrut_interp[OF sc_eval] obtain n where
     n: "interp_term d n s sc = Inr w" by blast
@@ -455,16 +498,20 @@ next
   have t'': "interp_term d ?F s (match_tree_to_term t') = Inr v"
     by (rule interp_term_Inr_more_fuel[OF f1]) simp
   have "interp_term d (Suc ?F) s (match_tree_to_term (MT_Test sc arms)) = Inr v"
-    using sc' arms_find_find_matching_arm[OF arm, of match_tree_to_term] t'' by simp
+    using sc' arms_find_find_matching_arm[OF arm, of match_tree_to_term] t'' MT_Test.prems(3)
+    by simp
   thus ?case by blast
 qed
 
 (* A statement tree whose walk picks the leaf b runs, in the interpreter, as
    b does, at some fuel; a test (a CoreStmt_Match) runs its arm in a scope,
-   so the result of a tree that is not a single leaf is scoped. *)
+   so the result of a tree that is not a single leaf is scoped. A test also
+   runs its arm in the mode raised by its flag g, so this is for a state that
+   is in mode g already (where the arm runs in the state as it is). *)
 lemma match_tree_to_statements_exec:
   assumes "match_tree_eval (var_env s) t = Some b"
       and "interp_statement_list d fuel s b = Inr r"
+      and "IS_Ghost s = g"
   shows "\<exists>fuel'. interp_statement_list d fuel' s (match_tree_to_statements g t)
                    = Inr (case t of MT_Leaf _ \<Rightarrow> r | MT_Test _ _ \<Rightarrow> scope_result s r)"
   using assms
@@ -480,16 +527,25 @@ next
     by (auto split: option.splits)
   from arms_find_in[OF arm] obtain p where arm_in: "(p, t') \<in> set arms" by auto
   have t'_in: "t' \<in> Basic_BNFs.snds (p, t')" by simp
-  from MT_Test.IH[OF arm_in t'_in t'_eval MT_Test.prems(2)] obtain f1 where
+  from MT_Test.IH[OF arm_in t'_in t'_eval MT_Test.prems(2,3)] obtain f1 where
     f1: "interp_statement_list d f1 s (match_tree_to_statements g t')
            = Inr (case t' of MT_Leaf _ \<Rightarrow> r | MT_Test _ _ \<Rightarrow> scope_result s r)" by blast
-  from eval_match_scrut_interp[OF sc_eval] obtain n where
-    n: "interp_term d n s sc = Inr w" by blast
+  \<comment> \<open>The match evaluates its scrutinee in the mode raised by its flag, which
+      makes no difference to the value of a variable with projections.\<close>
+  from sc_eval have "eval_match_scrut (var_env (raise_mode s g)) sc = Some w" by simp
+  from eval_match_scrut_interp[OF this] obtain n where
+    n: "interp_term d n (raise_mode s g) sc = Inr w" by blast
   let ?F = "max f1 n"
   let ?r' = "case t' of MT_Leaf _ \<Rightarrow> r | MT_Test _ _ \<Rightarrow> scope_result s r"
-  have sc': "interp_term d ?F s sc = Inr w" by (rule interp_term_Inr_more_fuel[OF n]) simp
-  have t'': "interp_statement_list d ?F s (match_tree_to_statements g t') = Inr ?r'"
+  have sc': "interp_term d ?F (raise_mode s g) sc = Inr w"
+    by (rule interp_term_Inr_more_fuel[OF n]) simp
+  \<comment> \<open>The arm runs in that mode too, which is the mode of s.\<close>
+  have rm: "raise_mode s g = s" by (rule raise_mode_same[OF MT_Test.prems(3)])
+  have "interp_statement_list d ?F s (match_tree_to_statements g t') = Inr ?r'"
     by (rule interp_statement_list_Inr_more_fuel[OF f1]) simp
+  with rm
+  have t'': "interp_statement_list d ?F (raise_mode s g) (match_tree_to_statements g t') = Inr ?r'"
+    by simp
   have m: "interp_statement d (Suc ?F) s
              (CoreStmt_Match g sc (map (\<lambda>(p, t). (p, match_tree_to_statements g t)) arms))
            = Inr (scope_result s ?r')"
@@ -530,8 +586,13 @@ proof -
   let ?envM = "env \<lparr> TE_LocalVars := fmupd x ?T (TE_LocalVars env),
                      TE_GhostLocals := finsert x (TE_GhostLocals env),
                      TE_ConstLocals := finsert x (TE_ConstLocals env) \<rparr>"
+  \<comment> \<open>Type soundness is applied in a state in the mode g of the typing; the
+      value of a variable does not depend on the mode.\<close>
+  have sme': "state_matches_env (s \<lparr> IS_Ghost := g \<rparr>) env storeTyping" using sme by simp
+  have ev': "interp_term d (Suc n) (s \<lparr> IS_Ghost := g \<rparr>) (CoreTm_Var x) = Inr v"
+    using ev by (simp only: interp_term_Var_IS_Ghost)
   have vt: "value_has_type env v ?T"
-    using interp_term_sound[OF sme wf, THEN mp, OF ty, of d "Suc n"] ev by simp
+    using interp_term_sound[OF sme' wf, THEN mp, OF conjI[OF ty], of d "Suc n"] ev' by simp
   have abs_empty: "TE_AbstractTypes env = {||}"
     using sme unfolding state_matches_env_def by blast
   have wk: "is_well_kinded env scrutTy" by (rule core_term_type_well_kinded[OF ty wf])

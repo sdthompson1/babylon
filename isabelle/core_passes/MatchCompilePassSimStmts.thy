@@ -103,11 +103,14 @@ proof -
 qed
 
 (* The result of a successful call, built from its parts (the converse of
-   interp_function_call_InrE, for a function without a contract). *)
+   interp_function_call_InrE, for a function without a contract and without
+   ghost parameters, so that every argument is evaluated in the state itself). *)
 lemma interp_function_call_I:
   assumes "fmlookup (IS_Functions state) fnName = Some f"
       and "length argTms = length (IF_Args f)"
       and "length argTys = length (IF_TyArgs f)"
+      and "IS_Ghost state = NotGhost \<longrightarrow> IF_Ghost f = NotGhost"
+      and ng: "\<And>arg. arg \<in> set (IF_Args f) \<Longrightarrow> snd (snd arg) = NotGhost"
       and "fold process_one_arg
              (zip (IF_Args f) (zip (map (interp_writable_lvalue d fuel state) argTms)
                                    (map (interp_term d fuel state) argTms)))
@@ -121,7 +124,13 @@ lemma interp_function_call_I:
              (map (interp_writable_lvalue d fuel state) argTms)
              (map (interp_term d fuel state) argTms) preCallState = Inr r"
   shows "interp_function_call d (Suc fuel) state fnName argTys argTms = Inr r"
-  using assms by (simp add: Let_def checked_call_no_contract)
+proof -
+  have m: "map_args ev state (IF_Args f) argTms = map (ev state) argTms"
+    for ev :: "'a InterpState \<Rightarrow> CoreTerm \<Rightarrow> 'b"
+    by (rule map_args_no_ghost[OF assms(2)[symmetric] ng])
+  from assms(1-4,6-10) show ?thesis
+    by (auto simp: Let_def checked_call_no_contract m)
+qed
 
 (* Lists of argument results that agree wherever the first succeeds, and
    whose first all succeed, are equal. *)
@@ -138,6 +147,26 @@ proof (rule nth_equalityI[OF assms(1)])
 qed
 
 
+(* A Match statement evaluates its scrutinee, and runs the chosen arm, in the
+   mode raised by its flag; when the flag is the mode of the state, that is
+   the state as it is. *)
+lemma interp_Match_scope_result_same:
+  assumes "IS_Ghost state = g"
+      and "interp_term d fuel state scrut = Inr scrutVal"
+      and "find_matching_arm scrutVal arms = Inr armStmts"
+      and "interp_statement_list d fuel state armStmts = Inr bodyRes"
+  shows "interp_statement d (Suc fuel) state (CoreStmt_Match g scrut arms)
+           = Inr (scope_result state bodyRes)"
+proof -
+  have "raise_mode state g = state" by (rule raise_mode_same[OF assms(1)])
+  with assms(2,4)
+  have "interp_term d fuel (raise_mode state g) scrut = Inr scrutVal"
+    and "interp_statement_list d fuel (raise_mode state g) armStmts = Inr bodyRes"
+    by simp_all
+  from interp_Match_scope_result[OF this(1) assms(3) this(2)] show ?thesis .
+qed
+
+
 context match_compile_sim
 begin
 
@@ -148,8 +177,8 @@ lemma stmt_sim_single:
   assumes "match_compile_statement stmt = [stmt']"
       and "\<And>env env' storeTyping (full :: 'w InterpState) res.
        TE_Functions env = TE_Functions genv \<Longrightarrow> IS_Functions full = funs \<Longrightarrow>
-       state_matches_env full env storeTyping \<Longrightarrow> tyenv_well_formed env \<Longrightarrow>
-       TE_ProofGoal env = None \<Longrightarrow>
+       state_matches_env full env storeTyping \<Longrightarrow> tyenv_well_formed env \<Longrightarrow> IS_Ghost full = NotGhost \<Longrightarrow>
+       TE_ProofGoal env = None \<Longrightarrow> TE_FunctionGhost env = NotGhost \<Longrightarrow>
        core_statement_type env NotGhost stmt = Some env' \<Longrightarrow>
        core_statement_ghost_free stmt \<Longrightarrow> core_statement_match_scrutinees_ok stmt \<Longrightarrow>
        interp_statement d (Suc fuel) full stmt = Inr res \<Longrightarrow>
@@ -158,7 +187,8 @@ lemma stmt_sim_single:
 proof (rule stmt_simI)
   fix env env' storeTyping and full :: "'w InterpState" and res
   assume "TE_Functions env = TE_Functions genv" "IS_Functions full = funs"
-    "state_matches_env full env storeTyping" "tyenv_well_formed env" "TE_ProofGoal env = None"
+    "state_matches_env full env storeTyping" "tyenv_well_formed env" "IS_Ghost full = NotGhost"
+    "TE_ProofGoal env = None" "TE_FunctionGhost env = NotGhost"
     "core_statement_type env NotGhost stmt = Some env'"
     "core_statement_ghost_free stmt" "core_statement_match_scrutinees_ok stmt"
     "interp_statement d (Suc fuel) full stmt = Inr res"
@@ -180,18 +210,26 @@ next
   fix env env' storeTyping and full :: "'w InterpState" and res
   assume fe: "TE_Functions env = TE_Functions genv" and fs: "IS_Functions full = funs"
     and sme: "state_matches_env full env storeTyping" and wf: "tyenv_well_formed env"
+    and gm: "IS_Ghost full = NotGhost"
     and typing: "core_statement_type env NotGhost (CoreStmt_VarDecl g x Var ty initTm) = Some env'"
     and gf: "core_statement_ghost_free (CoreStmt_VarDecl g x Var ty initTm)"
     and ok: "core_statement_match_scrutinees_ok (CoreStmt_VarDecl g x Var ty initTm)"
     and ev: "interp_statement d (Suc fuel) full (CoreStmt_VarDecl g x Var ty initTm) = Inr res"
   from gf have g: "g = NotGhost" by simp
+  \<comment> \<open>The statement is not ghost and the state is in executable mode, so the
+      statement evaluates its terms in the state as it is, in both runs.\<close>
+  from gm g have gmg: "IS_Ghost full = g" by simp
+  note [simp] = IS_Ghost_update_same gmg param_mode_same
   from typing g have t: "core_term_type env NotGhost initTm = Some ty" by (auto split: if_splits)
   from ok have ok': "core_term_match_scrutinees_ok initTm" by simp
-  from ev obtain v where v: "interp_term d fuel full initTm = Inr v"
-    and cc: "copy_check g full ty v = None"
+  \<comment> \<open>The initializer is in a value position: the original run checked its
+      value, and the compiled run checks the same value in the same mode.\<close>
+  from ev obtain v where vp: "value_position full (interp_term d fuel full initTm) = Inr v"
     and res_eq: "res = Continue (bind_mutable_local x v full)"
-    by (auto split: sum.splits option.splits)
-  from term_simD[OF IH fe fs sme wf t ok' v] obtain f1 where
+    by (auto split: sum.splits)
+  note v = value_position_InrD[OF vp]
+  note cc = vp[unfolded v]
+  from term_simD[OF IH fe fs sme wf gm t ok' v] obtain f1 where
     f1: "interp_term d f1 (mc_state full) (match_compile_term initTm) = Inr v" by auto
   have "interp_statement d (Suc f1) (mc_state full) (CoreStmt_VarDecl g x Var ty (match_compile_term initTm))
           = Inr (mc_result res)"
@@ -211,11 +249,16 @@ next
   fix env env' storeTyping and full :: "'w InterpState" and res
   assume fe: "TE_Functions env = TE_Functions genv" and fs: "IS_Functions full = funs"
     and sme: "state_matches_env full env storeTyping" and wf: "tyenv_well_formed env"
+    and gm: "IS_Ghost full = NotGhost"
     and typing: "core_statement_type env NotGhost (CoreStmt_VarDecl g x Ref ty initTm) = Some env'"
     and gf: "core_statement_ghost_free (CoreStmt_VarDecl g x Ref ty initTm)"
     and ok: "core_statement_match_scrutinees_ok (CoreStmt_VarDecl g x Ref ty initTm)"
     and ev: "interp_statement d (Suc fuel) full (CoreStmt_VarDecl g x Ref ty initTm) = Inr res"
   from gf have g: "g = NotGhost" by simp
+  \<comment> \<open>The statement is not ghost and the state is in executable mode, so the
+      statement evaluates its terms in the state as it is, in both runs.\<close>
+  from gm g have gmg: "IS_Ghost full = g" by simp
+  note [simp] = IS_Ghost_update_same gmg param_mode_same
   from typing g have t: "core_term_type env NotGhost initTm = Some ty" and lv: "is_lvalue initTm"
     by (auto split: if_splits)
   from ok have ok': "core_term_match_scrutinees_ok initTm" by simp
@@ -233,7 +276,7 @@ next
     from ev base True obtain v where v: "interp_term d fuel full initTm = Inr v"
       and res_eq: "res = Continue (bind_const_local x v full)"
       by (auto split: sum.splits)
-    from term_simD[OF IH fe fs sme wf t ok' v] obtain f1 where
+    from term_simD[OF IH fe fs sme wf gm t ok' v] obtain f1 where
       f1: "interp_term d f1 (mc_state full) ?init' = Inr v" by auto
     have "interp_statement d (Suc f1) (mc_state full) (CoreStmt_VarDecl g x Ref ty ?init')
             = Inr (mc_result res)"
@@ -245,7 +288,7 @@ next
     from ev base False obtain ap where ap: "interp_writable_lvalue d fuel full initTm = Inr ap"
       and res_eq: "res = Continue (bind_ref x ap full)"
       by (auto split: sum.splits)
-    from lvalue_simD[OF IHl fe fs sme wf t ok' ap] obtain f1 where
+    from lvalue_simD[OF IHl fe fs sme wf gm t ok' ap] obtain f1 where
       f1: "interp_writable_lvalue d f1 (mc_state full) ?init' = Inr ap" by auto
     have "interp_statement d (Suc f1) (mc_state full) (CoreStmt_VarDecl g x Ref ty ?init')
             = Inr (mc_result res)"
@@ -304,6 +347,40 @@ proof -
   from fi args' len_ty wk refs show ?thesis by blast
 qed
 
+(* No function has a ghost parameter and no function is ghost, so the typing of
+   the arguments in the form of the call claim gives the form that the type
+   soundness theorem asks for (each argument typed in the mode of its
+   parameter). *)
+lemma call_args_param_modes:
+  assumes fe: "TE_Functions env = TE_Functions genv"
+      and fi: "fmlookup (TE_Functions env) fnName = Some funInfo"
+      and args: "list_all2 (\<lambda>tm expectedTy. core_term_type env NotGhost tm = Some expectedTy)
+                   argTms (map (\<lambda>(ty, _). apply_subst tySubst ty) (FI_TmArgs funInfo))"
+  shows "list_all2 (\<lambda>tm (ty, _, gh).
+                      core_term_type env (param_mode NotGhost gh) tm = Some (apply_subst tySubst ty))
+           argTms (FI_TmArgs funInfo)"
+    and "NotGhost = NotGhost \<longrightarrow> FI_Ghost funInfo = NotGhost"
+proof -
+  from funs_match_compilable_info[OF fmc fi[unfolded fe]]
+  have ng: "FI_Ghost funInfo = NotGhost" and ngp: "no_ghost_params funInfo" by simp_all
+  from ng show "NotGhost = NotGhost \<longrightarrow> FI_Ghost funInfo = NotGhost" by simp
+  from args ngp
+  show "list_all2 (\<lambda>tm (ty, _, gh).
+                      core_term_type env (param_mode NotGhost gh) tm = Some (apply_subst tySubst ty))
+           argTms (FI_TmArgs funInfo)"
+    by (auto simp: list_all2_conv_all_nth no_ghost_params_def list_all_length case_prod_beta
+                   param_mode_def)
+qed
+
+(* A call statement makes its call in the mode raised by its flag and then puts
+   the mode of its state back. For a statement that is not ghost neither
+   changes anything: the state that a call hands back is in the mode it was
+   called in. *)
+lemma call_result_mode:
+  assumes "interp_function_call d fuel full fnName tyArgs argTms = Inr (newFull, retVal)"
+  shows "IS_Ghost newFull = IS_Ghost full"
+  using interp_function_call_static[OF assms] by (simp add: static_parts_eq_def)
+
 lemma sim_VarDeclCall:
   assumes IH: "call_sim fuel fnName tyArgs argTms"
   shows "stmt_sim (Suc fuel) (CoreStmt_VarDeclCall g x ty castOpt fnName tyArgs argTms)"
@@ -314,6 +391,7 @@ next
   fix env env' storeTyping and full :: "'w InterpState" and res
   assume fe: "TE_Functions env = TE_Functions genv" and fs: "IS_Functions full = funs"
     and sme: "state_matches_env full env storeTyping" and wf: "tyenv_well_formed env"
+    and gm: "IS_Ghost full = NotGhost"
     and typing: "core_statement_type env NotGhost
                    (CoreStmt_VarDeclCall g x ty castOpt fnName tyArgs argTms) = Some env'"
     and gf: "core_statement_ghost_free (CoreStmt_VarDeclCall g x ty castOpt fnName tyArgs argTms)"
@@ -322,6 +400,10 @@ next
     and ev: "interp_statement d (Suc fuel) full
                (CoreStmt_VarDeclCall g x ty castOpt fnName tyArgs argTms) = Inr res"
   from gf have g: "g = NotGhost" by simp
+  \<comment> \<open>The statement is not ghost and the state is in executable mode, so the
+      statement evaluates its terms in the state as it is, in both runs.\<close>
+  from gm g have gmg: "IS_Ghost full = g" by simp
+  note [simp] = IS_Ghost_update_same gmg param_mode_same
   from typing g obtain retTy where
     c: "core_impure_call_type env NotGhost fnName tyArgs argTms = Some retTy"
     by (auto split: if_splits option.splits)
@@ -336,18 +418,23 @@ next
              fst (snd (FI_TmArgs funInfo ! i)) = Ref \<longrightarrow> is_writable_lvalue env (argTms ! i)"
     by blast
   from ok have ok': "list_all core_term_match_scrutinees_ok argTms" by simp
-  from ev obtain newFull retVal v where
-    call: "interp_function_call d fuel full fnName tyArgs argTms = Inr (newFull, retVal)" and
-    cast: "apply_cast_opt castOpt retVal = Inr v" and
+  from ev obtain newFull retVal where
+    call: "interp_function_call d fuel full fnName tyArgs argTms = Inr (newFull, retVal)"
+    by (auto split: sum.splits)
+  note nfg [simp] = call_result_mode[OF call]
+  from ev call obtain v where
+    vp: "value_position full (apply_cast_opt castOpt retVal) = Inr v" and
     res_eq: "res = Continue (bind_mutable_local x v newFull)"
     by (auto split: sum.splits)
-  from call_simD[OF IH fe fs sme wf fi args len_ty wk refs ok' call] obtain f1 where
+  note cast = value_position_InrD[OF vp]
+  note chk = vp[unfolded cast]
+  from call_simD[OF IH fe fs sme wf gm fi args len_ty wk refs ok' call] obtain f1 where
     f1: "interp_function_call d f1 (mc_state full) fnName tyArgs (map match_compile_term argTms)
            = Inr (mc_state newFull, retVal)" by auto
   have "interp_statement d (Suc f1) (mc_state full)
           (CoreStmt_VarDeclCall g x ty castOpt fnName tyArgs (map match_compile_term argTms))
         = Inr (mc_result res)"
-    using f1 cast res_eq by simp
+    using f1 cast chk res_eq by simp
   thus "\<exists>fuel'. interp_statement d (Suc fuel') (mc_state full)
                   (CoreStmt_VarDeclCall g x ty castOpt fnName tyArgs (map match_compile_term argTms))
                 = Inr (mc_result res)"
@@ -364,11 +451,16 @@ next
   fix env env' storeTyping and full :: "'w InterpState" and res
   assume fe: "TE_Functions env = TE_Functions genv" and fs: "IS_Functions full = funs"
     and sme: "state_matches_env full env storeTyping" and wf: "tyenv_well_formed env"
+    and gm: "IS_Ghost full = NotGhost"
     and typing: "core_statement_type env NotGhost (CoreStmt_Assign g ty lhs rhs) = Some env'"
     and gf: "core_statement_ghost_free (CoreStmt_Assign g ty lhs rhs)"
     and ok: "core_statement_match_scrutinees_ok (CoreStmt_Assign g ty lhs rhs)"
     and ev: "interp_statement d (Suc fuel) full (CoreStmt_Assign g ty lhs rhs) = Inr res"
   from gf have g: "g = NotGhost" by simp
+  \<comment> \<open>The statement is not ghost and the state is in executable mode, so the
+      statement evaluates its terms in the state as it is, in both runs.\<close>
+  from gm g have gmg: "IS_Ghost full = g" by simp
+  note [simp] = IS_Ghost_update_same gmg param_mode_same
   from typing g have
     tl: "core_term_type env NotGhost lhs = Some ty" and
     tr: "core_term_type env NotGhost rhs = Some ty"
@@ -377,14 +469,15 @@ next
     by simp_all
   from ev obtain addr path v newVal where
     ap: "interp_writable_lvalue d fuel full lhs = Inr (addr, path)" and
-    v: "interp_term d fuel full rhs = Inr v" and
-    cc: "copy_check g full ty v = None" and
+    vp: "value_position full (interp_term d fuel full rhs) = Inr v" and
     upd: "update_value_at_path (IS_Store full ! addr) path v = Inr newVal" and
     res_eq: "res = Continue (full \<lparr> IS_Store := (IS_Store full)[addr := newVal] \<rparr>)"
-    by (auto simp: Let_def split: sum.splits option.splits)
-  from lvalue_simD[OF IHl fe fs sme wf tl okl ap] obtain f1 where
+    by (auto simp: Let_def split: sum.splits)
+  note v = value_position_InrD[OF vp]
+  note cc = vp[unfolded v]
+  from lvalue_simD[OF IHl fe fs sme wf gm tl okl ap] obtain f1 where
     f1: "interp_writable_lvalue d f1 (mc_state full) (match_compile_term lhs) = Inr (addr, path)" by auto
-  from term_simD[OF IH fe fs sme wf tr okr v] obtain f2 where
+  from term_simD[OF IH fe fs sme wf gm tr okr v] obtain f2 where
     f2: "interp_term d f2 (mc_state full) (match_compile_term rhs) = Inr v" by auto
   let ?F = "max f1 f2"
   have f1': "interp_writable_lvalue d ?F (mc_state full) (match_compile_term lhs) = Inr (addr, path)"
@@ -411,6 +504,7 @@ next
   fix env env' storeTyping and full :: "'w InterpState" and res
   assume fe: "TE_Functions env = TE_Functions genv" and fs: "IS_Functions full = funs"
     and sme: "state_matches_env full env storeTyping" and wf: "tyenv_well_formed env"
+    and gm: "IS_Ghost full = NotGhost"
     and typing: "core_statement_type env NotGhost
                    (CoreStmt_AssignCall g lhs castOpt fnName tyArgs argTms) = Some env'"
     and gf: "core_statement_ghost_free (CoreStmt_AssignCall g lhs castOpt fnName tyArgs argTms)"
@@ -418,6 +512,10 @@ next
     and ev: "interp_statement d (Suc fuel) full
                (CoreStmt_AssignCall g lhs castOpt fnName tyArgs argTms) = Inr res"
   from gf have g: "g = NotGhost" by simp
+  \<comment> \<open>The statement is not ghost and the state is in executable mode, so the
+      statement evaluates its terms in the state as it is, in both runs.\<close>
+  from gm g have gmg: "IS_Ghost full = g" by simp
+  note [simp] = IS_Ghost_update_same gmg param_mode_same
   from typing g obtain lhsTy retTy where
     tl: "core_term_type env NotGhost lhs = Some lhsTy" and
     c: "core_impure_call_type env NotGhost fnName tyArgs argTms = Some retTy"
@@ -438,10 +536,14 @@ next
   from ev obtain newFull retVal where
     call: "interp_function_call d fuel full fnName tyArgs argTms = Inr (newFull, retVal)"
     by (auto split: sum.splits)
+  note nfg [simp] = call_result_mode[OF call]
+  have gm1: "IS_Ghost newFull = NotGhost" using gm by simp
   from ev call obtain v where
-    cast: "apply_cast_opt castOpt retVal = Inr v"
+    vp: "value_position full (apply_cast_opt castOpt retVal) = Inr v"
     by (auto split: sum.splits)
-  from ev call cast obtain addr path newVal where
+  note cast = value_position_InrD[OF vp]
+  note chk = vp[unfolded cast]
+  from ev call cast chk obtain addr path newVal where
     ap: "interp_writable_lvalue d fuel newFull lhs = Inr (addr, path)" and
     upd: "update_value_at_path (IS_Store newFull ! addr) path v = Inr newVal" and
     res_eq: "res = Continue (newFull \<lparr> IS_Store := (IS_Store newFull)[addr := newVal] \<rparr>)"
@@ -452,15 +554,17 @@ next
   have "sound_function_call_result full env storeTyping
           (apply_subst (fmap_of_list (zip (FI_TyArgs funInfo) tyArgs)) (FI_ReturnType funInfo))
           (interp_function_call d fuel full fnName tyArgs argTms)"
-    by (rule interp_function_call_sound[OF sme wf fi args refl len_ty wk refs])
+    by (rule interp_function_call_sound
+               [OF sme wf fi call_args_param_modes(1)[OF fe fi args] gm
+                   call_args_param_modes(2)[OF fe fi args] refl len_ty wk refs])
   with call obtain storeTyping1 where sme1: "state_matches_env newFull env storeTyping1"
     by auto
   have fs1: "IS_Functions newFull = funs"
     using interp_function_call_static[OF call] fs by (simp add: static_parts_eq_def)
-  from call_simD[OF IH fe fs sme wf fi args len_ty wk refs oka call] obtain f2 where
+  from call_simD[OF IH fe fs sme wf gm fi args len_ty wk refs oka call] obtain f2 where
     f2: "interp_function_call d f2 (mc_state full) fnName tyArgs (map match_compile_term argTms)
            = Inr (mc_state newFull, retVal)" by auto
-  from lvalue_simD[OF IHl fe fs1 sme1 wf tl okl ap] obtain f1 where
+  from lvalue_simD[OF IHl fe fs1 sme1 wf gm1 tl okl ap] obtain f1 where
     f1: "interp_writable_lvalue d f1 (mc_state newFull) (match_compile_term lhs) = Inr (addr, path)"
     by auto
   let ?F = "max f1 f2"
@@ -472,7 +576,7 @@ next
   have "interp_statement d (Suc ?F) (mc_state full)
           (CoreStmt_AssignCall g (match_compile_term lhs) castOpt fnName tyArgs
              (map match_compile_term argTms)) = Inr (mc_result res)"
-    using f1' f2' cast upd res_eq by (simp add: Let_def)
+    using f1' f2' cast chk upd res_eq by (simp add: Let_def)
   thus "\<exists>fuel'. interp_statement d (Suc fuel') (mc_state full)
                   (CoreStmt_AssignCall g (match_compile_term lhs) castOpt fnName tyArgs
                      (map match_compile_term argTms)) = Inr (mc_result res)"
@@ -489,11 +593,16 @@ next
   fix env env' storeTyping and full :: "'w InterpState" and res
   assume fe: "TE_Functions env = TE_Functions genv" and fs: "IS_Functions full = funs"
     and sme: "state_matches_env full env storeTyping" and wf: "tyenv_well_formed env"
+    and gm: "IS_Ghost full = NotGhost"
     and typing: "core_statement_type env NotGhost (CoreStmt_Swap g lhs rhs) = Some env'"
     and gf: "core_statement_ghost_free (CoreStmt_Swap g lhs rhs)"
     and ok: "core_statement_match_scrutinees_ok (CoreStmt_Swap g lhs rhs)"
     and ev: "interp_statement d (Suc fuel) full (CoreStmt_Swap g lhs rhs) = Inr res"
   from gf have g: "g = NotGhost" by simp
+  \<comment> \<open>The statement is not ghost and the state is in executable mode, so the
+      statement evaluates its terms in the state as it is, in both runs.\<close>
+  from gm g have gmg: "IS_Ghost full = g" by simp
+  note [simp] = IS_Ghost_update_same gmg param_mode_same
   from typing g obtain lhsTy where
     tl: "core_term_type env NotGhost lhs = Some lhsTy" and
     tr: "core_term_type env NotGhost rhs = Some lhsTy"
@@ -506,9 +615,9 @@ next
     sw: "perform_swap full l r = Inr newFull" and
     res_eq: "res = Continue newFull"
     by (auto split: sum.splits)
-  from lvalue_simD[OF IHl fe fs sme wf tl okl l] obtain f1 where
+  from lvalue_simD[OF IHl fe fs sme wf gm tl okl l] obtain f1 where
     f1: "interp_writable_lvalue d f1 (mc_state full) (match_compile_term lhs) = Inr l" by auto
-  from lvalue_simD[OF IHr fe fs sme wf tr okr r] obtain f2 where
+  from lvalue_simD[OF IHr fe fs sme wf gm tr okr r] obtain f2 where
     f2: "interp_writable_lvalue d f2 (mc_state full) (match_compile_term rhs) = Inr r" by auto
   let ?F = "max f1 f2"
   have f1': "interp_writable_lvalue d ?F (mc_state full) (match_compile_term lhs) = Inr l"
@@ -535,6 +644,7 @@ next
   fix env env' storeTyping and full :: "'w InterpState" and res
   assume fe: "TE_Functions env = TE_Functions genv" and fs: "IS_Functions full = funs"
     and sme: "state_matches_env full env storeTyping" and wf: "tyenv_well_formed env"
+    and gm: "IS_Ghost full = NotGhost"
     and typing: "core_statement_type env NotGhost (CoreStmt_Return tm) = Some env'"
     and ok: "core_statement_match_scrutinees_ok (CoreStmt_Return tm)"
     and ev: "interp_statement d (Suc fuel) full (CoreStmt_Return tm) = Inr res"
@@ -543,7 +653,7 @@ next
   from ok have ok': "core_term_match_scrutinees_ok tm" by simp
   from ev obtain v where v: "interp_term d fuel full tm = Inr v" and res_eq: "res = Return full v"
     by (auto split: sum.splits)
-  from term_simD[OF IH fe fs sme wf t ok' v] obtain f1 where
+  from term_simD[OF IH fe fs sme wf gm t ok' v] obtain f1 where
     f1: "interp_term d f1 (mc_state full) (match_compile_term tm) = Inr v" by auto
   have "interp_statement d (Suc f1) (mc_state full) (CoreStmt_Return (match_compile_term tm))
           = Inr (mc_result res)"
@@ -564,7 +674,8 @@ lemma sim_not_ghost_free:
 lemma restore_scope_matches:
   assumes sme: "state_matches_env full env storeTyping"
       and wf: "tyenv_well_formed env"
-      and ng: "TE_ProofGoal env = None"
+      and gm: "IS_Ghost full = NotGhost"
+      and ng: "TE_ProofGoal env = None" and fgh: "TE_FunctionGhost env = NotGhost"
       and typing: "core_statement_list_type (env \<lparr> TE_ProofTopLevel := False \<rparr>) NotGhost body = Some envB"
       and ev: "interp_statement_list d fuel full body = Inr (Continue s1)"
   shows "state_matches_env (restore_scope full s1) env storeTyping"
@@ -574,7 +685,9 @@ proof -
   have wf1: "tyenv_well_formed ?env1"
     using wf by (simp add: tyenv_well_formed_TE_ProofTopLevel_irrelevant)
   have ng1: "TE_ProofGoal ?env1 = None" using ng by simp
-  from interp_statement_list_sound[OF sme1 wf1, THEN mp, OF conjI[OF typing ng1], of d fuel] ev
+  have gfe: "(IS_Ghost full = NotGhost \<longrightarrow> TE_FunctionGhost ?env1 = NotGhost)" using gm fgh by simp
+  from interp_statement_list_sound
+         [OF sme1 wf1, THEN mp, OF conjI[OF typing conjI[OF ng1 gfe]], of d fuel] ev
   obtain st1 where sme_s1: "state_matches_env s1 envB st1"
     and ext: "storeTyping_extends storeTyping st1"
     by auto
@@ -601,7 +714,8 @@ next
   fix env env' storeTyping and full :: "'w InterpState" and res
   assume fe: "TE_Functions env = TE_Functions genv" and fs: "IS_Functions full = funs"
     and sme: "state_matches_env full env storeTyping" and wf: "tyenv_well_formed env"
-    and ng: "TE_ProofGoal env = None"
+    and gm: "IS_Ghost full = NotGhost"
+    and ng: "TE_ProofGoal env = None" and fgh: "TE_FunctionGhost env = NotGhost"
     and typing: "core_statement_type env NotGhost (CoreStmt_Block body) = Some env'"
     and gf: "core_statement_ghost_free (CoreStmt_Block body)"
     and ok: "core_statement_match_scrutinees_ok (CoreStmt_Block body)"
@@ -615,10 +729,11 @@ next
   have sme1: "state_matches_env full ?env1 storeTyping" using sme by simp
   have wf1: "tyenv_well_formed ?env1" using wf by (simp add: tyenv_well_formed_TE_ProofTopLevel_irrelevant)
   have ng1: "TE_ProofGoal ?env1 = None" using ng by simp
+  have fgh1: "TE_FunctionGhost ?env1 = NotGhost" using fgh by simp
   from ev obtain r0 where r0: "interp_statement_list d fuel full body = Inr r0"
     and res_eq: "res = scope_result full r0"
     by (cases "interp_statement_list d fuel full body") (auto split: ExecResult.splits)
-  from stmts_simD[OF IHs fe1 fs sme1 wf1 ng1 t gf' ok' r0] obtain f1 where
+  from stmts_simD[OF IHs fe1 fs sme1 wf1 gm ng1 fgh1 t gf' ok' r0] obtain f1 where
     f1: "interp_statement_list d f1 (mc_state full) (match_compile_statement_list body) = Inr (mc_result r0)"
     by auto
   have "interp_statement d (Suc f1) (mc_state full) (CoreStmt_Block (match_compile_statement_list body))
@@ -637,7 +752,8 @@ proof (rule stmt_simI)
   fix env env' storeTyping and full :: "'w InterpState" and res
   assume fe: "TE_Functions env = TE_Functions genv" and fs: "IS_Functions full = funs"
     and sme: "state_matches_env full env storeTyping" and wf: "tyenv_well_formed env"
-    and ng: "TE_ProofGoal env = None"
+    and gm: "IS_Ghost full = NotGhost"
+    and ng: "TE_ProofGoal env = None" and fgh: "TE_FunctionGhost env = NotGhost"
     and typing: "core_statement_type env NotGhost (CoreStmt_While g condTm invars decrTm body) = Some env'"
     and gf: "core_statement_ghost_free (CoreStmt_While g condTm invars decrTm body)"
     and ok: "core_statement_match_scrutinees_ok (CoreStmt_While g condTm invars decrTm body)"
@@ -648,6 +764,10 @@ proof (rule stmt_simI)
                (map_option match_compile_term decrTm) (match_compile_statement_list body)"
   from gf have g: "g = NotGhost" and inv: "invars = []" and decr: "decrTm = None"
     and gf_body: "core_statement_list_ghost_free body" by simp_all
+  \<comment> \<open>The statement is not ghost and the state is in executable mode, so the
+      statement evaluates its terms in the state as it is, in both runs.\<close>
+  from gm g have gmg: "IS_Ghost full = g" by simp
+  note [simp] = IS_Ghost_update_same gmg param_mode_same
   from typing g obtain envB where
     tc: "core_term_type env NotGhost condTm = Some CoreTy_Bool" and
     tb: "core_statement_list_type ?env1 NotGhost body = Some envB"
@@ -658,38 +778,42 @@ proof (rule stmt_simI)
   have sme1: "state_matches_env full ?env1 storeTyping" using sme by simp
   have wf1: "tyenv_well_formed ?env1" using wf by (simp add: tyenv_well_formed_TE_ProofTopLevel_irrelevant)
   have ng1: "TE_ProofGoal ?env1 = None" using ng by simp
+  have fgh1: "TE_FunctionGhost ?env1 = NotGhost" using fgh by simp
   have W'_eq: "match_compile_statement ?W = [?W']" by simp
   \<comment> \<open>The evaluation of the original loop: the empty invariant list and the
      absent decreases-term always pass.\<close>
   from ev inv decr obtain fuel0 where fuel_eq: "fuel = Suc fuel0" by (cases fuel) simp_all
-  from ev inv decr fuel_eq obtain cv where cv: "interp_term d fuel full condTm = Inr cv"
+  from ev inv decr fuel_eq obtain cv where
+    vp: "value_position full (interp_term d fuel full condTm) = Inr cv"
     by (auto simp: conditions_error_def split: sum.splits)
-  from term_simD[OF IH fe fs sme wf tc okc cv] obtain f1 where
+  note cv = value_position_InrD[OF vp]
+  note chk = vp[unfolded cv]
+  from term_simD[OF IH fe fs sme wf gm tc okc cv] obtain f1 where
     f1: "interp_term d f1 (mc_state full) (match_compile_term condTm) = Inr cv" by auto
   show "\<exists>fuel'. interp_statement_list d fuel' (mc_state full) (match_compile_statement ?W)
                  = Inr (mc_result res)"
   proof (cases "cv = CV_Bool False")
     case True
-    with ev inv decr fuel_eq cv have res_eq: "res = Continue full"
+    with ev inv decr fuel_eq cv chk have res_eq: "res = Continue full"
       by (simp add: conditions_error_def)
     have "interp_statement d (Suc (Suc f1)) (mc_state full) ?W' = Inr (mc_result res)"
-      using f1 True res_eq inv decr
+      using f1 True res_eq inv decr chk
       by (simp add: conditions_error_def interp_term_Inr_more_fuel[OF f1, of "Suc f1"])
     from interp_statement_list_single[OF this] show ?thesis unfolding W'_eq by blast
   next
     case False
-    with ev inv decr fuel_eq cv have cv_true: "cv = CV_Bool True"
+    with ev inv decr fuel_eq cv chk have cv_true: "cv = CV_Bool True"
       by (auto simp: conditions_error_def split: CoreValue.splits bool.splits)
-    from ev inv decr fuel_eq cv cv_true obtain r0 where
+    from ev inv decr fuel_eq cv chk cv_true obtain r0 where
       r0: "interp_statement_list d fuel full body = Inr r0"
       by (auto simp: conditions_error_def split: sum.splits)
-    from stmts_simD[OF IHs fe1 fs sme1 wf1 ng1 tb gf_body okb r0] obtain f2 where
+    from stmts_simD[OF IHs fe1 fs sme1 wf1 gm ng1 fgh1 tb gf_body okb r0] obtain f2 where
       f2: "interp_statement_list d f2 (mc_state full) (match_compile_statement_list body)
              = Inr (mc_result r0)" by auto
     show ?thesis
     proof (cases r0)
       case (Return s1 v)
-      with ev inv decr fuel_eq cv cv_true r0 have res_eq: "res = Return (restore_scope full s1) v"
+      with ev inv decr fuel_eq cv chk cv_true r0 have res_eq: "res = Return (restore_scope full s1) v"
         by (simp add: conditions_error_def)
       let ?F = "Suc (max f1 f2)"
       have f1': "interp_term d ?F (mc_state full) (match_compile_term condTm) = Inr cv"
@@ -703,14 +827,15 @@ proof (rule stmt_simI)
     next
       case (Continue s1)
       let ?full2 = "restore_scope full s1"
-      from ev inv decr fuel_eq cv cv_true r0 Continue have
+      from ev inv decr fuel_eq cv chk cv_true r0 Continue have
         rec: "interp_statement d fuel ?full2 ?W = Inr res"
         by (simp add: conditions_error_def)
       have sme2: "state_matches_env ?full2 env storeTyping"
-        using restore_scope_matches[OF sme wf ng tb] r0 Continue by simp
+        using restore_scope_matches[OF sme wf gm ng fgh tb] r0 Continue by simp
       have fs2: "IS_Functions ?full2 = funs"
         using interp_statement_list_static[OF r0] Continue fs by (simp add: static_parts_eq_def)
-      from stmt_simD[OF IHw fe fs2 sme2 wf ng typing gf ok rec] obtain f3 where
+      have gm2: "IS_Ghost ?full2 = NotGhost" using gm by simp
+      from stmt_simD[OF IHw fe fs2 sme2 wf gm2 ng fgh typing gf ok rec] obtain f3 where
         "interp_statement_list d f3 (mc_state ?full2) (match_compile_statement ?W) = Inr (mc_result res)"
         by auto
       from interp_statement_list_single_D[OF this[unfolded W'_eq]] obtain f3' where
@@ -738,7 +863,8 @@ proof (rule stmt_simI)
   fix env env' storeTyping and full :: "'w InterpState" and res
   assume fe: "TE_Functions env = TE_Functions genv" and fs: "IS_Functions full = funs"
     and sme: "state_matches_env full env storeTyping" and wf: "tyenv_well_formed env"
-    and ng: "TE_ProofGoal env = None"
+    and gm: "IS_Ghost full = NotGhost"
+    and ng: "TE_ProofGoal env = None" and fgh: "TE_FunctionGhost env = NotGhost"
     and typing: "core_statement_type env NotGhost (CoreStmt_Match g scrut arms) = Some env'"
     and gf: "core_statement_ghost_free (CoreStmt_Match g scrut arms)"
     and ok: "core_statement_match_scrutinees_ok (CoreStmt_Match g scrut arms)"
@@ -747,6 +873,10 @@ proof (rule stmt_simI)
   let ?arms' = "map (\<lambda>(p, body). (p, match_compile_statement_list body)) arms"
   from gf have g: "g = NotGhost"
     and gf_arms: "list_all (\<lambda>(_, body). core_statement_list_ghost_free body) arms" by simp_all
+  \<comment> \<open>The statement is not ghost and the state is in executable mode, so the
+      statement evaluates its terms in the state as it is, in both runs.\<close>
+  from gm g have gmg: "IS_Ghost full = g" by simp
+  note [simp] = IS_Ghost_update_same gmg param_mode_same
   from typing g obtain scrutTy where
     s_ty: "core_term_type env NotGhost scrut = Some scrutTy" and
     pats: "list_all (\<lambda>p. pattern_compatible env p scrutTy) (map fst arms)" and
@@ -759,6 +889,7 @@ proof (rule stmt_simI)
   have sme1: "state_matches_env full ?env1 storeTyping" using sme by simp
   have wf1: "tyenv_well_formed ?env1" using wf by (simp add: tyenv_well_formed_TE_ProofTopLevel_irrelevant)
   have ng1: "TE_ProofGoal ?env1 = None" using ng by simp
+  have fgh1: "TE_FunctionGhost ?env1 = NotGhost" using fgh by simp
   from ev obtain sv where sv: "interp_term d fuel full scrut = Inr sv"
     by (cases "interp_term d fuel full scrut") auto
   from ev sv obtain armStmts where arm: "find_matching_arm sv arms = Inr armStmts"
@@ -766,7 +897,7 @@ proof (rule stmt_simI)
   from ev sv arm obtain r0 where r0: "interp_statement_list d fuel full armStmts = Inr r0"
     by (cases "interp_statement_list d fuel full armStmts") auto
   have res_eq: "res = scope_result full r0"
-    using interp_Match_scope_result[OF sv arm r0] ev by simp
+    using interp_Match_scope_result_same[OF gmg sv arm r0] ev by simp
   from find_matching_arm_in_arms[OF arm] obtain p where arm_in: "(p, armStmts) \<in> set arms" by auto
   from bodies arm_in obtain envB where
     tb: "core_statement_list_type ?env1 NotGhost armStmts = Some envB"
@@ -774,16 +905,17 @@ proof (rule stmt_simI)
   from gf_arms arm_in have gfb: "core_statement_list_ghost_free armStmts" by (auto simp: list_all_iff)
   from ok_arms arm_in have okb: "core_statement_list_match_scrutinees_ok armStmts"
     by (auto simp: list_all_iff)
-  from stmts_simD[OF IHs fe1 fs sme1 wf1 ng1 tb gfb okb r0] obtain f2 where
+  from stmts_simD[OF IHs fe1 fs sme1 wf1 gm ng1 fgh1 tb gfb okb r0] obtain f2 where
     f2: "interp_statement_list d f2 (mc_state full) (match_compile_statement_list armStmts)
            = Inr (mc_result r0)" by auto
   have arm': "find_matching_arm sv ?arms' = Inr (match_compile_statement_list armStmts)"
     by (rule find_matching_arm_map[OF arm])
+  have gmc: "IS_Ghost (mc_state full) = g" using gmg by simp
   show "\<exists>fuel'. interp_statement_list d fuel' (mc_state full)
                   (match_compile_statement (CoreStmt_Match g scrut arms)) = Inr (mc_result res)"
   proof (cases "arms_flat arms")
     case True
-    from term_simD[OF IH fe fs sme wf s_ty ok_s sv] obtain f1 where
+    from term_simD[OF IH fe fs sme wf gm s_ty ok_s sv] obtain f1 where
       f1: "interp_term d f1 (mc_state full) (match_compile_term scrut) = Inr sv" by auto
     let ?F = "max f1 f2"
     have f1': "interp_term d ?F (mc_state full) (match_compile_term scrut) = Inr sv"
@@ -793,7 +925,7 @@ proof (rule stmt_simI)
       by (rule interp_statement_list_Inr_more_fuel[OF f2]) simp
     have run: "interp_statement d (Suc ?F) (mc_state full)
                  (CoreStmt_Match g (match_compile_term scrut) ?arms') = Inr (mc_result res)"
-      using interp_Match_scope_result[OF f1' arm' f2'] res_eq by simp
+      using interp_Match_scope_result_same[OF gmc f1' arm' f2'] res_eq by simp
     have compiled_eq: "match_compile_statement (CoreStmt_Match g scrut arms)
                          = [CoreStmt_Match g (match_compile_term scrut) ?arms']"
       using True by (simp add: Let_def)
@@ -834,7 +966,8 @@ proof (rule stmt_simI)
         by (rule interp_statement_list_Inr_more_fuel[OF f2]) simp
       have run2: "interp_statement d (Suc (Suc f2)) (mc_state full)
                     (CoreStmt_Match g (CoreTm_Var x) [(CorePat_Wildcard, b)]) = Inr (mc_result res)"
-        using interp_Match_scope_result[OF sv_mc _ f2s, of "[(CorePat_Wildcard, b)]" g] b_eq res_eq
+        using interp_Match_scope_result_same[OF gmc sv_mc _ f2s, of "[(CorePat_Wildcard, b)]"]
+              b_eq res_eq
         by simp
       have compiled_eq2: "match_compile_statement (CoreStmt_Match g scrut arms)
                             = [CoreStmt_Match g (CoreTm_Var x) [(CorePat_Wildcard, b)]]"
@@ -842,7 +975,7 @@ proof (rule stmt_simI)
       from interp_statement_list_single[OF run2] show ?thesis unfolding compiled_eq2 by blast
     next
       case (MT_Test s arms'')
-      from match_tree_to_statements_exec[OF tree' f2, of g] obtain f3 where
+      from match_tree_to_statements_exec[OF tree' f2 gmc] obtain f3 where
         f3: "interp_statement_list d f3 (mc_state full)
                (match_tree_to_statements g (compile_match_tree (CoreTm_Var x) ?arms'))
              = Inr (case compile_match_tree (CoreTm_Var x) ?arms' of
@@ -883,7 +1016,8 @@ proof (rule stmts_simI)
   fix env env' storeTyping and full :: "'w InterpState" and res
   assume fe: "TE_Functions env = TE_Functions genv" and fs: "IS_Functions full = funs"
     and sme: "state_matches_env full env storeTyping" and wf: "tyenv_well_formed env"
-    and ng: "TE_ProofGoal env = None"
+    and gm: "IS_Ghost full = NotGhost"
+    and ng: "TE_ProofGoal env = None" and fgh: "TE_FunctionGhost env = NotGhost"
     and typing: "core_statement_list_type env NotGhost (stmt # stmts) = Some env'"
     and gf: "core_statement_list_ghost_free (stmt # stmts)"
     and ok: "core_statement_list_match_scrutinees_ok (stmt # stmts)"
@@ -897,7 +1031,7 @@ proof (rule stmts_simI)
   from ok have ok1: "core_statement_match_scrutinees_ok stmt"
     and ok2: "core_statement_list_match_scrutinees_ok stmts" by simp_all
   from ev obtain r1 where r1: "interp_statement d fuel full stmt = Inr r1" by (auto split: sum.splits)
-  from stmt_simD[OF IH fe fs sme wf ng t1 gf1 ok1 r1] obtain f1 where
+  from stmt_simD[OF IH fe fs sme wf gm ng fgh t1 gf1 ok1 r1] obtain f1 where
     f1: "interp_statement_list d f1 (mc_state full) (match_compile_statement stmt) = Inr (mc_result r1)"
     by auto
   show "\<exists>fuel'. interp_statement_list d fuel' (mc_state full) (match_compile_statement_list (stmt # stmts))
@@ -913,7 +1047,9 @@ proof (rule stmts_simI)
     case (Continue s1)
     with ev r1 have rest: "interp_statement_list d fuel s1 stmts = Inr res" by simp
     \<comment> \<open>The state after the first statement matches the environment after it.\<close>
-    from interp_statement_sound[OF sme wf, THEN mp, OF conjI[OF t1 ng], of d fuel] r1 Continue
+    have gfe: "(IS_Ghost full = NotGhost \<longrightarrow> TE_FunctionGhost env = NotGhost)" using gm fgh by simp
+    from interp_statement_sound[OF sme wf, THEN mp, OF conjI[OF t1 conjI[OF ng gfe]], of d fuel]
+         r1 Continue
     obtain st1 where sme1: "state_matches_env s1 env1 st1" by auto
     have wf1: "tyenv_well_formed env1" by (rule core_statement_type_preserves_well_formed[OF t1 wf])
     have ng1: "TE_ProofGoal env1 = None" by (rule core_statement_type_preserves_proof_goal_none[OF t1 ng])
@@ -921,7 +1057,11 @@ proof (rule stmts_simI)
       using core_statement_type_fixed_eq[OF t1] fe unfolding tyenv_fixed_eq_def by simp
     have fs1: "IS_Functions s1 = funs"
       using interp_statement_static[OF r1] Continue fs by (simp add: static_parts_eq_def)
-    from stmts_simD[OF IHs fe1 fs1 sme1 wf1 ng1 t2 gf2 ok2 rest] obtain f2 where
+    have gm1: "IS_Ghost s1 = NotGhost"
+      using interp_statement_static[OF r1] Continue gm by (simp add: static_parts_eq_def)
+    have fgh1: "TE_FunctionGhost env1 = NotGhost"
+      using core_statement_type_fixed_eq[OF t1] fgh unfolding tyenv_fixed_eq_def by simp
+    from stmts_simD[OF IHs fe1 fs1 sme1 wf1 gm1 ng1 fgh1 t2 gf2 ok2 rest] obtain f2 where
       f2: "interp_statement_list d f2 (mc_state s1) (match_compile_statement_list stmts)
              = Inr (mc_result res)" by auto
     from interp_statement_list_append_Continue[OF f1[unfolded Continue mc_result.simps] f2]

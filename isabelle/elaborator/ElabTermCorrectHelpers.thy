@@ -427,7 +427,7 @@ next
   have m2: "next_mv1 \<le> next_mv2"
     using "7.IH"(2) elab_rhs rhs_resolved elab_body by (simp add: Let_def)
   from "7.prems" elab_rhs rhs_resolved elab_body have "next_mv' = next_mv2"
-    by (auto simp: Let_def split: sum.splits)
+    by (auto simp: Let_def split: sum.splits if_splits)
   with m1 m2 show ?case by simp
 next
   case (8 env elabEnv ghost loc quant name varTy tm next_mv)
@@ -476,12 +476,12 @@ next
   case (10 env elabEnv ghost loc tms next_mv)
   \<comment> \<open>BabTm_Tuple: forwards elab_term_list's next_mv\<close>
   from "10.prems" show ?case
-    by (auto simp: Let_def split: sum.splits dest!: "10.IH")
+    by (auto simp: Let_def split: sum.splits if_splits dest!: "10.IH")
 next
   case (11 env elabEnv ghost loc flds next_mv)
   \<comment> \<open>BabTm_Record: forwards elab_term_list's next_mv\<close>
   from "11.prems" show ?case
-    by (auto simp: Let_def split: sum.splits option.splits dest!: "11.IH")
+    by (auto simp: Let_def split: sum.splits option.splits if_splits dest!: "11.IH")
 next
   case (12 env elabEnv ghost loc tm flds next_mv)
   \<comment> \<open>BabTm_RecordUpdate: threads through parent and update list next_mv\<close>
@@ -782,7 +782,9 @@ definition callee_info_valid_function ::
 
 (* Validity predicate for a data constructor callee: the constructor exists,
    satisfies ghost constraints, type args are well-kinded/runtime/complete,
-   and expArgTypes is the singleton substituted payload type. *)
+   expArgTypes is the singleton substituted payload type, and in an executable
+   call the declared payload type is complete (the payload is a value
+   position). *)
 definition callee_info_valid_data_ctor ::
   "CoreTyEnv \<Rightarrow> GhostOrNot \<Rightarrow> string \<Rightarrow> string \<Rightarrow> CoreType list \<Rightarrow> CoreType list \<Rightarrow> bool" where
   "callee_info_valid_data_ctor env ghost ctorName dtName tyArgs expArgTypes =
@@ -793,7 +795,8 @@ definition callee_info_valid_data_ctor ::
      \<and> list_all (is_well_kinded env) tyArgs
      \<and> (ghost = NotGhost \<longrightarrow> list_all (is_runtime_type env) tyArgs)
      \<and> list_all is_complete_type tyArgs
-     \<and> expArgTypes = [apply_subst (fmap_of_list (zip tyvars tyArgs)) payloadTy])"
+     \<and> expArgTypes = [apply_subst (fmap_of_list (zip tyvars tyArgs)) payloadTy]
+     \<and> complete_if_executable ghost payloadTy)"
 
 (* Combined validity predicate: dispatches to the appropriate sub-predicate. *)
 definition callee_info_valid :: "CoreTyEnv \<Rightarrow> GhostOrNot \<Rightarrow> CalleeInfo \<Rightarrow> CoreType list \<Rightarrow> bool" where
@@ -849,6 +852,7 @@ next
     "ghost = NotGhost \<longrightarrow> list_all (is_runtime_type ?env1) tyArgs"
     "list_all is_complete_type tyArgs"
     "expArgTypes = [apply_subst (fmap_of_list (zip tyvars tyArgs)) payloadTy]"
+    "complete_if_executable ghost payloadTy"
     unfolding callee_info_valid_def callee_info_valid_data_ctor_def by auto
   have dc_eq: "fmlookup (TE_DataCtors ?env2) ctorName = Some (dtName, tyvars, payloadTy)"
     using props(1) by (simp add: extend_env_with_tyvars_def)
@@ -860,7 +864,7 @@ next
   have rt: "ghost = NotGhost \<longrightarrow> list_all (is_runtime_type ?env2) tyArgs"
     using props(5) by (auto simp: list_all_iff
             intro: is_runtime_type_extend_env_with_tyvars_mono[OF _ assms(2,3)])
-  show ?thesis using CI_DataCtor dc_eq ghost_eq props(3,6,7) wk rt
+  show ?thesis using CI_DataCtor dc_eq ghost_eq props(3,6,7,8) wk rt
     unfolding callee_info_valid_def callee_info_valid_data_ctor_def by auto
 qed
 
@@ -1026,7 +1030,8 @@ proof -
     by (auto simp: resolve_callee_data_ctor_def resolve_type_args_def Let_def
              split: option.splits if_splits sum.splits prod.splits)
   from assms(1) ctor_lookup have
-    ghost_ok: "ghost = NotGhost \<longrightarrow> dtName \<notin> ghost_datatypes env"
+    ghost_ok: "ghost = NotGhost \<longrightarrow> dtName \<notin> ghost_datatypes env" and
+    payload_cp: "complete_if_executable ghost payloadTy"
     by (auto simp: resolve_callee_data_ctor_def split: if_splits sum.splits prod.splits)
 
   from assms(1) ctor_lookup ghost_ok
@@ -1058,7 +1063,7 @@ proof -
 
   have civ: "callee_info_valid_data_ctor ?env' ghost name dtName newTyArgs expArgTypes"
     unfolding callee_info_valid_data_ctor_def
-    using ctor_lookup' ghost_ok' rta expArg_eq by auto
+    using ctor_lookup' ghost_ok' rta expArg_eq payload_cp by auto
 
   \<comment> \<open>expArgTypes well-kinded\<close>
   have wf': "tyenv_well_formed ?env'"
@@ -1413,7 +1418,8 @@ next
     tyargs_wk: "list_all (is_well_kinded env') tyArgs" and
     tyargs_rt: "ghost = NotGhost \<longrightarrow> list_all (is_runtime_type env') tyArgs" and
     tyargs_cp: "list_all is_complete_type tyArgs" and
-    expArg_eq: "expArgTypes = [apply_subst (fmap_of_list (zip tyvars tyArgs)) payloadTy]"
+    expArg_eq: "expArgTypes = [apply_subst (fmap_of_list (zip tyvars tyArgs)) payloadTy]" and
+    payload_cp: "complete_if_executable ghost payloadTy"
     unfolding callee_info_valid_def callee_info_valid_data_ctor_def by auto
 
   \<comment> \<open>Final type args well-kinded, runtime and complete\<close>
@@ -1477,9 +1483,17 @@ next
     thus ?thesis using payload_double_subst by simp
   qed
 
+  \<comment> \<open>The payload is a value position: its type is complete in executable
+      code, since the declared payload type and the type arguments are.\<close>
+  have payload_cp': "complete_if_executable ghost (apply_subst ?coreTySubst payloadTy)"
+    using payload_cp
+          apply_subst_preserves_complete
+            [OF _ fmran'_fmap_of_list_zip_complete[OF finalTyArgs_cp, of tyvars]]
+    by blast
+
   show ?thesis
     using resultTm_eq resultTy_eq ctor_lookup len_finalTyArgs finalTyArgs_wk finalTyArgs_rt
-          finalTyArgs_cp ghost_ok payload_typed
+          finalTyArgs_cp ghost_ok payload_typed payload_cp'
     by (simp add: Let_def)
 qed
 
@@ -2305,6 +2319,14 @@ proof -
   show "\<And>n. n |\<in>| TE_AbstractTypes env' \<Longrightarrow> fmlookup finalSubst n = None"
     by (rule S(10))
 qed
+
+(* The common type of coerce_to_common_int_type is a finite integer type, so it
+   is complete. *)
+lemma coerce_to_common_int_type_complete:
+  assumes "coerce_to_common_int_type tm1 ty1 tm2 ty2 = Some (newTm1, newTm2, commonTy)"
+  shows "is_complete_type commonTy"
+  using assms
+  by (cases ty1; cases ty2) (auto simp: Let_def split: prod.splits)
 
 (* Correctness of coerce_to_common_int_type:
    If coercion succeeds, both output terms have the common type. *)

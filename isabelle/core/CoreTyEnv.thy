@@ -104,6 +104,13 @@ abbreviation TE_AbstractTypes :: "CoreTyEnv \<Rightarrow> string fset" where
   "TE_AbstractTypes env \<equiv> fmdom (TE_AbstractAllocLevels env)"
 
 
+(* The mode in which the actual for a parameter is typechecked (and evaluated,
+   by the interpreter), given the ambient mode of the call and the parameter's
+   ghost flag. The actual for a ghost parameter is always ghost code; otherwise,
+   the ambient mode applies. *)
+definition param_mode :: "GhostOrNot \<Rightarrow> GhostOrNot \<Rightarrow> GhostOrNot" where
+  "param_mode ghost gh = (if gh = Ghost then Ghost else ghost)"
+
 (* This is true if a function has no ghost parameter. *)
 definition no_ghost_params :: "FunInfo \<Rightarrow> bool" where
   "no_ghost_params info = list_all (\<lambda>(_, _, gh). gh = NotGhost) (FI_TmArgs info)"

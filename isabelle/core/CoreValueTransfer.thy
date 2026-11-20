@@ -200,11 +200,12 @@ next
       by simp
   qed (use CV_Variant.prems in auto)
 next
-  case (CV_Array sizes valuesMap)
+  case (CV_Array al sizes valuesMap)
   show ?case
   proof (cases ty)
     case (CoreTy_Array elemTy dims)
     from CV_Array.prems CoreTy_Array have
+      al_eq: "al = allocatable_dims dims" and
       elem_wk: "is_well_kinded env elemTy" and
       elem_ground: "type_tyvars elemTy = {}" and
       elems_vht: "\<forall>idx val. fmlookup valuesMap idx = Some val
@@ -226,7 +227,7 @@ next
         by (auto simp: fmran'I)
     qed
     show ?thesis
-      using CoreTy_Array elem_wk' elem_ground elems_vht'
+      using CoreTy_Array al_eq elem_wk' elem_ground elems_vht'
             dims_wk matches sizes_ok
       by simp
   qed (use CV_Array.prems in auto)
@@ -393,11 +394,12 @@ next
       by simp
   qed (use CV_Variant.prems in auto)
 next
-  case (CV_Array sizes valuesMap)
+  case (CV_Array al sizes valuesMap)
   show ?case
   proof (cases ty)
     case (CoreTy_Array elemTy dims)
     from CV_Array.prems CoreTy_Array have
+      al_eq: "al = allocatable_dims dims" and
       elem_wk: "is_well_kinded env elemTy" and
       elem_ground: "type_tyvars elemTy = {}" and
       elems_vht: "\<forall>idx val. fmlookup valuesMap idx = Some val
@@ -425,7 +427,7 @@ next
     qed
     show ?thesis
       unfolding ty'_eq
-      using elem_wk' elem_ground elems_vht' dims_wk matches sizes_ok
+      using al_eq elem_wk' elem_ground elems_vht' dims_wk matches sizes_ok
       by simp
   qed (use CV_Array.prems in auto)
 next

@@ -26,44 +26,48 @@ begin
 (* ========================================================================== *)
 
 (* The function table of the state agrees with the signatures of the
-   environment about whether each parameter is Var or Ref. (Which parameters
-   are ghost is recorded in the signature only.) This is the one fact about
-   the function table that this file needs. It follows from
-   funs_exist_in_state (see funs_exist_in_state_param_flags_agree below). *)
+   environment about whether each parameter is Var or Ref, and about whether
+   it is ghost. This is the one fact about the function table that this file
+   needs. It follows from funs_exist_in_state (see
+   funs_exist_in_state_param_flags_agree below). *)
 definition fun_param_flags_agree ::
     "(string, FunInfo) fmap \<Rightarrow> (string, 'w InterpFun) fmap \<Rightarrow> bool" where
   "fun_param_flags_agree funInfos funs \<equiv>
     \<forall>fnName info f.
       fmlookup funInfos fnName = Some info \<longrightarrow> fmlookup funs fnName = Some f \<longrightarrow>
-        map snd (IF_Args f) = map (fst \<circ> snd) (FI_TmArgs info)"
+        map snd (IF_Args f) = map snd (FI_TmArgs info)"
 
 lemma fun_param_flags_agreeD:
   assumes "fun_param_flags_agree funInfos funs"
     and "fmlookup funInfos fnName = Some info"
     and "fmlookup funs fnName = Some f"
-  shows "map snd (IF_Args f) = map (fst \<circ> snd) (FI_TmArgs info)"
+  shows "map snd (IF_Args f) = map snd (FI_TmArgs info)"
   using assms unfolding fun_param_flags_agree_def by blast
+
+lemma fun_param_flags_agree_nth:
+  assumes "fun_param_flags_agree funInfos funs"
+    and "fmlookup funInfos fnName = Some info"
+    and "fmlookup funs fnName = Some f"
+    and "i < length (IF_Args f)"
+  shows "snd (IF_Args f ! i) = snd (FI_TmArgs info ! i)"
+proof -
+  have eq: "map snd (IF_Args f) = map snd (FI_TmArgs info)"
+    by (rule fun_param_flags_agreeD[OF assms(1,2,3)])
+  from eq have len: "length (IF_Args f) = length (FI_TmArgs info)"
+    by (rule map_eq_imp_length_eq)
+  from assms(4) len have i_lt: "i < length (FI_TmArgs info)" by simp
+  from eq have "map snd (IF_Args f) ! i = map snd (FI_TmArgs info) ! i" by simp
+  with assms(4) i_lt show ?thesis by simp
+qed
 
 lemma fun_param_flags_agree_Ref:
   assumes "fun_param_flags_agree funInfos funs"
     and "fmlookup funInfos fnName = Some info"
     and "fmlookup funs fnName = Some f"
     and "i < length (IF_Args f)"
-    and "snd (IF_Args f ! i) = Ref"
+    and "fst (snd (IF_Args f ! i)) = Ref"
   shows "fst (snd (FI_TmArgs info ! i)) = Ref"
-proof -
-  have eq: "map snd (IF_Args f) = map (fst \<circ> snd) (FI_TmArgs info)"
-    by (rule fun_param_flags_agreeD[OF assms(1,2,3)])
-  from eq have len: "length (IF_Args f) = length (FI_TmArgs info)"
-    by (rule map_eq_imp_length_eq)
-  from assms(4) len have i_lt: "i < length (FI_TmArgs info)" by simp
-  from eq
-  have "map snd (IF_Args f) ! i = map (fst \<circ> snd) (FI_TmArgs info) ! i"
-    by simp
-  with assms(4) i_lt
-  have "snd (IF_Args f ! i) = fst (snd (FI_TmArgs info ! i))" by simp
-  with assms(5) show ?thesis by simp
-qed
+  using fun_param_flags_agree_nth[OF assms(1,2,3,4)] assms(5) by simp
 
 lemma funs_exist_in_state_param_flags_agree:
   assumes "funs_exist_in_state state env"
@@ -79,12 +83,12 @@ proof (intro allI impI)
         | Some interpFun \<Rightarrow> fun_info_matches_interp_fun env info interpFun"
     unfolding funs_exist_in_state_def by blast
   with f have "fun_info_matches_interp_fun env info f" by simp
-  then have la: "list_all2 (\<lambda>(_, vor1, _) (_, vor2). vor1 = vor2)
+  then have la: "list_all2 (\<lambda>(_, vor1, gh1) (_, vor2, gh2). vor1 = vor2 \<and> gh1 = gh2)
                            (FI_TmArgs info) (IF_Args f)"
     by (simp add: fun_info_matches_interp_fun_def)
-  have "map (fst \<circ> snd) (FI_TmArgs info) = map snd (IF_Args f)"
-    using la by (induction rule: list_all2_induct) (auto simp: case_prod_beta)
-  then show "map snd (IF_Args f) = map (fst \<circ> snd) (FI_TmArgs info)" by simp
+  have "map snd (FI_TmArgs info) = map snd (IF_Args f)"
+    using la by (induction rule: list_all2_induct) (auto simp: case_prod_beta intro: prod_eqI)
+  then show "map snd (IF_Args f) = map snd (FI_TmArgs info)" by simp
 qed
 
 
@@ -307,6 +311,8 @@ proof -
   qed
 
   have ty': "IS_TyArgs erased = IS_TyArgs full'" using ty stD(3) by simp
+  have gm': "IS_Ghost erased = IS_Ghost full'"
+    using rel stD(7) by (simp add: state_erased_def)
 
   have loc': "locals_erased env' emb full' erased"
     unfolding locals_erased_def
@@ -327,7 +333,7 @@ proof -
   qed
 
   show ?thesis
-    unfolding state_erased_def by (intro conjI heap' ty' loc' ghost')
+    unfolding state_erased_def by (intro conjI heap' ty' gm' loc' ghost')
 qed
 
 (* What declaring a ghost variable does to the ghost-ness of names. *)
@@ -612,6 +618,7 @@ proof -
   qed
 
   have ty_rs: "IS_TyArgs erased = IS_TyArgs ?rs" using ty by simp
+  have gm_rs: "IS_Ghost erased = IS_Ghost ?rs" using rel by (simp add: state_erased_def)
 
   have loc_rs: "locals_erased env emb ?rs erased"
   proof -
@@ -628,7 +635,7 @@ proof -
   qed
 
   show ?thesis
-    unfolding state_erased_def by (intro conjI heap_rs ty_rs loc_rs gh_rs)
+    unfolding state_erased_def by (intro conjI heap_rs ty_rs gm_rs loc_rs gh_rs)
 qed
 
 
@@ -674,12 +681,26 @@ lemma ghost_call_invisible:
     and agree: "fun_param_flags_agree (TE_Functions env) (IS_Functions full)"
     and pure: "funs_respect_purity (TE_Functions env) (IS_Functions full)"
     and callT: "core_impure_call_type env Ghost fnName argTys argTms = Some retTy"
-    and call: "interp_function_call d fuel full fnName argTys argTms = Inr (newState, retVal)"
+    and call: "interp_function_call d fuel (full \<lparr>IS_Ghost := g\<rparr>) fnName argTys argTms
+                 = Inr (newState0, retVal)"
+    and ns: "newState = newState0 \<lparr>IS_Ghost := IS_Ghost full\<rparr>"
   shows "state_erased env emb newState erased"
 proof -
-  note cf = interp_function_call_frame[OF call]
+  \<comment> \<open>The call is made in the mode g that the calling statement has raised its
+      state to; the statement then puts the mode of its own state back:
+      newState is the state after that. \<close>
+  note cf0 = interp_function_call_frame[OF call]
+  have cf: "IS_Locals newState = IS_Locals full"
+           "IS_Refs newState = IS_Refs full"
+           "IS_ConstLocals newState = IS_ConstLocals full"
+           "IS_TyArgs newState = IS_TyArgs full"
+           "length (IS_Store newState) = length (IS_Store full)"
+           "\<And>a. a < length (IS_Store full) \<Longrightarrow> a \<notin> call_ref_addrs full fnName argTms
+                  \<Longrightarrow> IS_Store newState ! a = IS_Store full ! a"
+    using cf0 by (simp_all add: ns)
   have st: "static_parts_eq full newState"
-    by (rule interp_function_call_static[OF call])
+    unfolding ns
+    by (rule static_parts_eq_reset_ghost[OF interp_function_call_static[OF call]])
   \<comment> \<open>Ghost code calls no impure function, and a call of a pure function
       keeps the world. \<close>
   from pure_context_callee_pure[OF callT disjI1[OF refl]] obtain pinfo where
@@ -687,7 +708,7 @@ proof -
     np: "\<not> FI_Impure pinfo"
     by blast
   have world: "IS_World newState = IS_World full"
-    by (rule pure_function_call_keeps_world[OF pure pinfo np call])
+    using pure_function_call_keeps_world[OF _ pinfo np call] pure by (simp add: ns)
   from rel have gh: "ghost_locals_separate env emb full" by (simp add: state_erased_def)
   from rel have se: "store_erased emb full erased"
     by (simp add: state_erased_def heap_erased_def)
@@ -712,7 +733,7 @@ proof -
         f: "fmlookup (IS_Functions full) fnName = Some f" and
         i1: "i < length argTms" and
         i2: "i < length (IF_Args f)" and
-        is_ref: "snd (IF_Args f ! i) = Ref" and
+        is_ref: "fst (snd (IF_Args f ! i)) = Ref" and
         base: "lvalue_base_name (argTms ! i) = Some name" and
         va: "var_addr full name = Some a"
         unfolding call_ref_addrs_def by blast
@@ -759,6 +780,48 @@ proof -
   have len1: "length (IS_Store full) \<le> length (IS_Store state1)"
     using frame_stepD(1)[OF interp_statement_list_frame[OF body]] by simp
   show ?thesis by (rule state_erased_restore_scope[OF rel rel1 fnsB len1])
+qed
+
+(* Related states stay related when both are put in another mode. *)
+lemma state_erased_set_ghost:
+  assumes "state_erased env emb full erased"
+  shows "state_erased env emb (full \<lparr> IS_Ghost := g \<rparr>) (erased \<lparr> IS_Ghost := g \<rparr>)"
+proof -
+  let ?f = "full \<lparr> IS_Ghost := g \<rparr>" and ?e = "erased \<lparr> IS_Ghost := g \<rparr>"
+  have 1: "heap_erased env emb ?f ?e = heap_erased env emb full erased"
+    by (simp add: heap_erased_def funs_erased_def store_erased_def)
+  have 2: "locals_erased env emb ?f ?e = locals_erased env emb full erased"
+    by (simp add: locals_erased_def)
+  have 3: "ghost_locals_separate env emb ?f = ghost_locals_separate env emb full"
+    by (simp add: ghost_locals_separate_def)
+  show ?thesis using assms by (simp add: state_erased_def 1 2 3)
+qed
+
+(* Leaving a scope whose body ran in another mode (the body of a ghost loop,
+   or an arm of a ghost match, runs in Ghost mode). The erased state does not move, so the relation
+   at the end of the body is with the erased state in the mode of the body;
+   restore_scope puts the mode of the starting state back. *)
+lemma ghost_scope_exit_mode:
+  assumes rel: "state_erased env emb full erased"
+    and bodyT: "core_statement_list_type (env \<lparr> TE_ProofTopLevel := False \<rparr>) g body
+                  = Some bodyEnv"
+    and body: "interp_statement_list d fuel (full \<lparr>IS_Ghost := gm\<rparr>) body
+                 = Inr (Continue state1)"
+    and rel1: "state_erased bodyEnv emb state1 (erased \<lparr>IS_Ghost := gm\<rparr>)"
+  shows "state_erased env emb (restore_scope full state1) erased"
+proof -
+  have "tyenv_fixed_eq (env \<lparr> TE_ProofTopLevel := False \<rparr>) bodyEnv"
+    by (rule core_statement_list_type_fixed_eq[OF bodyT])
+  then have fnsB: "TE_Functions bodyEnv = TE_Functions env"
+    by (simp add: tyenv_fixed_eq_def)
+  have len1: "length (IS_Store full) \<le> length (IS_Store state1)"
+    using frame_stepD(1)[OF interp_statement_list_frame[OF body]] by simp
+  let ?s1 = "state1 \<lparr>IS_Ghost := IS_Ghost erased\<rparr>"
+  from state_erased_set_ghost[OF rel1, of "IS_Ghost erased"]
+  have rel1': "state_erased bodyEnv emb ?s1 erased" by simp
+  have "state_erased env emb (restore_scope full ?s1) erased"
+    by (rule state_erased_restore_scope[OF rel rel1' fnsB]) (simp add: len1)
+  then show ?thesis by simp
 qed
 
 (* Both statements are proved together by induction on the fuel, at a fixed
@@ -821,6 +884,9 @@ next
         by (rule interp_statement_static[OF H])
       have gh: "ghost_locals_separate env emb full"
         using rel by (simp add: state_erased_def)
+      \<comment> \<open>A statement evaluates its own terms in the state with its mode raised. \<close>
+      have ghg: "ghost_locals_separate env emb (full \<lparr>IS_Ghost := g'\<rparr>)" for g'
+        using gh by (simp add: ghost_locals_separate_def)
       have agree': "fun_param_flags_agree (TE_Functions env) (IS_Functions full)"
         using agree by (simp add: fn_eq funs_eq)
       have pure': "funs_respect_purity (TE_Functions env) (IS_Functions full)"
@@ -841,13 +907,15 @@ next
         proof (cases vr)
           case Var
           from T CoreStmt_VarDecl Var have g_eq: "g = Ghost" by (auto split: if_splits)
+          have vpg [simp]: "value_position (raise_mode full g) r = r" for r
+            using g_eq by simp
           from T CoreStmt_VarDecl Var g_eq
           have tlv: "TE_LocalVars env' = fmupd varName ty (TE_LocalVars env)"
             and tgl: "TE_GhostLocals env' = finsert varName (TE_GhostLocals env)"
             by (auto split: if_splits)
           note decl = ghost_decl_var_ghost[OF tlv tgl]
           from Var H CoreStmt_VarDecl obtain initVal where
-            iv: "interp_term d fuel full initTm = Inr initVal"
+            iv: "interp_term d fuel (raise_mode full g) initTm = Inr initVal"
             by (auto split: sum.splits)
           from Var H[symmetric] CoreStmt_VarDecl g_eq iv have
             c: "is_continue res" and
@@ -884,7 +952,7 @@ next
                            \<and> fmlookup (IS_Refs full) baseName = None)")
             case True
             with Ref H CoreStmt_VarDecl base obtain val where
-              iv: "interp_term d fuel full initTm = Inr val"
+              iv: "interp_term d fuel (raise_mode full g) initTm = Inr val"
               by (auto split: sum.splits)
             from Ref H[symmetric] CoreStmt_VarDecl base True iv have
               c: "is_continue res" and
@@ -904,13 +972,13 @@ next
           next
             case False
             with Ref H CoreStmt_VarDecl base obtain addrPath where
-              lv: "interp_writable_lvalue d fuel full initTm = Inr addrPath"
+              lv: "interp_writable_lvalue d fuel (raise_mode full g) initTm = Inr addrPath"
               by (auto split: sum.splits)
             obtain addr path where ap: "addrPath = (addr, path)" by (cases addrPath)
-            from lv ap have wl: "interp_writable_lvalue d fuel full initTm = Inr (addr, path)"
+            from lv ap have wl: "interp_writable_lvalue d fuel (raise_mode full g) initTm = Inr (addr, path)"
               by simp
             \<comment> \<open>The new ref points into the cell of a ghost variable. \<close>
-            note sep = ghost_lvalue_addr_separate[OF gh glv wl]
+            note sep = ghost_lvalue_addr_separate[OF ghg glv wl, simplified]
             from Ref H[symmetric] CoreStmt_VarDecl base False wl have
               c: "is_continue res" and
               world: "IS_World (result_state res) = IS_World full" and
@@ -930,6 +998,8 @@ next
       next
         case (CoreStmt_VarDeclCall g varName varTy castOpt fnName argTys argTms)
         from T CoreStmt_VarDeclCall have g_eq: "g = Ghost" by (auto split: if_splits)
+        have vpg [simp]: "value_position (raise_mode full g) r = r" for r
+          using g_eq by simp
         from T CoreStmt_VarDeclCall g_eq obtain retTy where
           callT: "core_impure_call_type env Ghost fnName argTys argTms = Some retTy"
           by (auto split: if_splits option.splits)
@@ -940,24 +1010,26 @@ next
         note decl = ghost_decl_var_ghost[OF tlv tgl]
         \<comment> \<open>Run the call (giving newState), apply the cast, then alloc and bind. \<close>
         from H CoreStmt_VarDeclCall obtain newState retVal where
-          call: "interp_function_call d fuel full fnName argTys argTms = Inr (newState, retVal)"
+          call: "interp_function_call d fuel (raise_mode full g) fnName argTys argTms = Inr (newState, retVal)"
           by (auto split: sum.splits prod.splits)
-        have rel1: "state_erased env emb newState erased"
-          by (rule ghost_call_invisible[OF rel agree' pure' callT call])
+        \<comment> \<open>The statement puts the mode of its own state back: call that state ns. \<close>
+        define ns where "ns = newState \<lparr>IS_Ghost := IS_Ghost full\<rparr>"
+        have rel1: "state_erased env emb ns erased"
+          by (rule ghost_call_invisible[OF rel agree' pure' callT call ns_def])
         from H CoreStmt_VarDeclCall call obtain initVal where
           cast: "apply_cast_opt castOpt retVal = Inr initVal"
           by (auto split: sum.splits)
         from H[symmetric] CoreStmt_VarDeclCall call cast have
           c: "is_continue res" and
-          st2: "static_parts_eq newState (result_state res)" and
-          world: "IS_World (result_state res) = IS_World newState" and
-          store': "IS_Store (result_state res) = IS_Store newState @ [initVal]" and
+          st2: "static_parts_eq ns (result_state res)" and
+          world: "IS_World (result_state res) = IS_World ns" and
+          store': "IS_Store (result_state res) = IS_Store ns @ [initVal]" and
           locals': "IS_Locals (result_state res)
-                      = fmupd varName (length (IS_Store newState)) (IS_Locals newState)" and
-          refs': "IS_Refs (result_state res) = fmdrop varName (IS_Refs newState)" and
+                      = fmupd varName (length (IS_Store ns)) (IS_Locals ns)" and
+          refs': "IS_Refs (result_state res) = fmdrop varName (IS_Refs ns)" and
           consts': "IS_ConstLocals (result_state res)
-                      = fminus (IS_ConstLocals newState) {|varName|}"
-          by (simp_all add: Let_def static_parts_eq_def)
+                      = fminus (IS_ConstLocals ns) {|varName|}"
+          by (simp_all add: Let_def static_parts_eq_def ns_def)
         have rel': "state_erased env' emb (result_state res) erased"
           by (rule state_erased_bind_ghost_fresh
                      [OF rel1 decl(1) decl(2) fns st2 world store' locals' refs'])
@@ -1001,15 +1073,17 @@ next
       next
         case (CoreStmt_Assign g ty lhsLv rhsTm)
         from T CoreStmt_Assign have g_eq: "g = Ghost" by (auto split: if_splits)
+        have vpg [simp]: "value_position (raise_mode full g) r = r" for r
+          using g_eq by simp
         from T CoreStmt_Assign g_eq
         have glv: "ghost_lvalue_ok env Ghost lhsLv" by (auto split: if_splits)
         from T CoreStmt_Assign have env'_eq: "env' = env"
           by (auto split: if_splits)
         from H CoreStmt_Assign obtain addr path where
-          wl: "interp_writable_lvalue d fuel full lhsLv = Inr (addr, path)"
+          wl: "interp_writable_lvalue d fuel (raise_mode full g) lhsLv = Inr (addr, path)"
           by (auto split: sum.splits)
         from H CoreStmt_Assign wl obtain rhsVal where
-          rv: "interp_term d fuel full rhsTm = Inr rhsVal"
+          rv: "interp_term d fuel (raise_mode full g) rhsTm = Inr rhsVal"
           by (auto split: sum.splits)
         from H CoreStmt_Assign g_eq wl rv obtain newVal where
           upd: "update_value_at_path (IS_Store full ! addr) path rhsVal = Inr newVal"
@@ -1026,11 +1100,13 @@ next
         have rel': "state_erased env emb (result_state res) erased"
           by (rule state_erased_ghost_write
                      [OF rel st world store' locals' refs' consts'
-                         ghost_lvalue_addr_separate(2)[OF gh glv wl]])
+                         ghost_lvalue_addr_separate(2)[OF ghg glv wl]])
         show ?thesis unfolding env'_eq by (rule conjI[OF c rel'])
       next
         case (CoreStmt_AssignCall g lhsLv castOpt fnName argTys argTms)
         from T CoreStmt_AssignCall have g_eq: "g = Ghost" by (auto split: if_splits)
+        have vpg [simp]: "value_position (raise_mode full g) r = r" for r
+          using g_eq by simp
         from T CoreStmt_AssignCall g_eq
         have glv: "ghost_lvalue_ok env Ghost lhsLv" by (auto split: if_splits)
         from T CoreStmt_AssignCall g_eq obtain retTy where
@@ -1040,12 +1116,15 @@ next
           by (auto split: if_splits option.splits)
         \<comment> \<open>Run the call (newState), apply cast, resolve lhs in newState, store. \<close>
         from H CoreStmt_AssignCall obtain newState retVal where
-          call: "interp_function_call d fuel full fnName argTys argTms = Inr (newState, retVal)"
+          call: "interp_function_call d fuel (raise_mode full g) fnName argTys argTms = Inr (newState, retVal)"
           by (auto split: sum.splits prod.splits)
-        have rel1: "state_erased env emb newState erased"
-          by (rule ghost_call_invisible[OF rel agree' pure' callT call])
+        \<comment> \<open>The statement puts the mode of its own state back at the end: call the
+            post-call state with that mode ns. \<close>
+        define ns where "ns = newState \<lparr>IS_Ghost := IS_Ghost full\<rparr>"
+        have rel1: "state_erased env emb ns erased"
+          by (rule ghost_call_invisible[OF rel agree' pure' callT call ns_def])
         from rel1 have gh1: "ghost_locals_separate env emb newState"
-          by (simp add: state_erased_def)
+          by (simp add: state_erased_def ns_def ghost_locals_separate_def)
         from H CoreStmt_AssignCall call obtain rhsVal where
           cast: "apply_cast_opt castOpt retVal = Inr rhsVal"
           by (auto split: sum.splits)
@@ -1057,13 +1136,13 @@ next
           by (auto simp: Let_def split: sum.splits)
         from H[symmetric] CoreStmt_AssignCall wl call cast upd have
           c: "is_continue res" and
-          st2: "static_parts_eq newState (result_state res)" and
-          world: "IS_World (result_state res) = IS_World newState" and
-          store': "IS_Store (result_state res) = (IS_Store newState)[addr := newVal]" and
-          locals': "IS_Locals (result_state res) = IS_Locals newState" and
-          refs': "IS_Refs (result_state res) = IS_Refs newState" and
-          consts': "IS_ConstLocals (result_state res) = IS_ConstLocals newState"
-          by (simp_all add: Let_def static_parts_eq_def)
+          st2: "static_parts_eq ns (result_state res)" and
+          world: "IS_World (result_state res) = IS_World ns" and
+          store': "IS_Store (result_state res) = (IS_Store ns)[addr := newVal]" and
+          locals': "IS_Locals (result_state res) = IS_Locals ns" and
+          refs': "IS_Refs (result_state res) = IS_Refs ns" and
+          consts': "IS_ConstLocals (result_state res) = IS_ConstLocals ns"
+          by (simp_all add: Let_def static_parts_eq_def ns_def)
         \<comment> \<open>The cell written is the cell of a ghost variable (in newState). \<close>
         have rel': "state_erased env emb (result_state res) erased"
           by (rule state_erased_ghost_write
@@ -1080,10 +1159,10 @@ next
         from T CoreStmt_Swap have env'_eq: "env' = env"
           by (auto split: if_splits option.splits)
         from H CoreStmt_Swap obtain lhsLv where
-          lhs: "interp_writable_lvalue d fuel full lhsTm = Inr lhsLv"
+          lhs: "interp_writable_lvalue d fuel (raise_mode full g) lhsTm = Inr lhsLv"
           by (auto split: sum.splits)
         with H CoreStmt_Swap obtain rhsLv where
-          rhs: "interp_writable_lvalue d fuel full rhsTm = Inr rhsLv"
+          rhs: "interp_writable_lvalue d fuel (raise_mode full g) rhsTm = Inr rhsLv"
           by (auto split: sum.splits)
         with H CoreStmt_Swap lhs obtain newState where
           sw: "perform_swap full lhsLv rhsLv = Inr newState"
@@ -1092,8 +1171,8 @@ next
         obtain addr1 path1 where l_eq: "lhsLv = (addr1, path1)" by (cases lhsLv)
         obtain addr2 path2 where r_eq: "rhsLv = (addr2, path2)" by (cases rhsLv)
         \<comment> \<open>Both cells are cells of ghost variables. \<close>
-        note n1 = ghost_lvalue_addr_separate(2)[OF gh glvL lhs[unfolded l_eq]]
-        note n2 = ghost_lvalue_addr_separate(2)[OF gh glvR rhs[unfolded r_eq]]
+        note n1 = ghost_lvalue_addr_separate(2)[OF ghg glvL lhs[unfolded l_eq]]
+        note n2 = ghost_lvalue_addr_separate(2)[OF ghg glvR rhs[unfolded r_eq]]
         note sw' = perform_swap_effect[OF sw[unfolded l_eq r_eq]]
         from st res_eq have st1: "static_parts_eq full newState" by simp
         have rel': "state_erased env emb newState erased"
@@ -1119,7 +1198,7 @@ next
         next
           case (Some condTm)
           from H CoreStmt_Assert Some obtain condVal where
-            cv: "interp_term d fuel full condTm = Inr condVal"
+            cv: "interp_term d fuel (full \<lparr>IS_Ghost := Ghost\<rparr>) condTm = Inr condVal"
             by (auto split: sum.splits)
           show ?thesis
           proof (cases condVal)
@@ -1138,18 +1217,20 @@ next
         from T CoreStmt_While have env'_eq: "env' = env"
           by (auto split: if_splits option.splits CoreType.splits)
         from T CoreStmt_While have g_eq: "g = Ghost" by (auto split: if_splits)
+        have vpg [simp]: "value_position (raise_mode full g) r = r" for r
+          using g_eq by simp
         from T CoreStmt_While g_eq obtain bodyEnv where
           bodyT: "core_statement_list_type (env \<lparr> TE_ProofTopLevel := False \<rparr>) Ghost bodyStmts
                     = Some bodyEnv"
           by (auto split: if_splits option.splits CoreType.splits)
         \<comment> \<open>The run succeeded, so the invariants were evaluated and all held. \<close>
         from H CoreStmt_While obtain invarVals where
-          iv: "interp_term_list d fuel full invars = Inr invarVals" and
+          iv: "interp_term_list d fuel (full \<lparr>IS_Ghost := Ghost\<rparr>) invars = Inr invarVals" and
           ie: "conditions_error invarVals = None"
           by (auto split: sum.splits option.splits)
         note [simp] = iv ie
         from H CoreStmt_While obtain condVal where
-          cv: "interp_term d fuel full condTm = Inr condVal"
+          cv: "interp_term d fuel (raise_mode full g) condTm = Inr condVal"
           by (auto split: sum.splits)
         show ?thesis
         proof (cases condVal)
@@ -1165,14 +1246,22 @@ next
             \<comment> \<open>The decreases-term (if any) was evaluated before the body. \<close>
             with CoreStmt_While H cv CV_Bool
             obtain decrVal where
-              dv: "eval_decreases (interp_term d fuel full) decr = Inr decrVal"
+              dv: "eval_decreases (interp_term d fuel (full \<lparr>IS_Ghost := Ghost\<rparr>)) decr = Inr decrVal"
               by (auto split: sum.splits)
             note [simp] = dv
+            \<comment> \<open>The body of a ghost loop runs in Ghost mode. The erased state
+                does not move, but is related to the full state in that mode
+                when it is put in that mode too. \<close>
+            let ?fullG = "full \<lparr>IS_Ghost := Ghost\<rparr>"
+            let ?erasedG = "erased \<lparr>IS_Ghost := Ghost\<rparr>"
             from CoreStmt_While H cv CV_Bool True
             obtain bodyRes where
-              body: "interp_statement_list d fuel full bodyStmts = Inr bodyRes"
-              by (auto split: sum.splits)
-            note bodyIH = IH_list[OF fnB funs_eq fgB relB bodyT body]
+              body: "interp_statement_list d fuel ?fullG bodyStmts = Inr bodyRes"
+              by (auto simp: g_eq split: sum.splits)
+            have funsG: "IS_Functions ?fullG = funs" using funs_eq by simp
+            have relG: "state_erased (env \<lparr> TE_ProofTopLevel := False \<rparr>) emb ?fullG ?erasedG"
+              by (rule state_erased_set_ghost[OF relB])
+            note bodyIH = IH_list[OF fnB funsG fgB relG bodyT body]
             show ?thesis
             proof (cases bodyRes)
               case (Return state1 v)
@@ -1181,10 +1270,10 @@ next
               case (Continue state1)
               let ?rs = "restore_scope full state1"
               from bodyIH Continue
-              have rel1: "state_erased bodyEnv emb state1 erased"
+              have rel1: "state_erased bodyEnv emb state1 ?erasedG"
                 by simp
               have rel_rs: "state_erased env emb ?rs erased"
-                by (rule ghost_scope_exit[OF rel bodyT body[unfolded Continue] rel1])
+                by (rule ghost_scope_exit_mode[OF rel bodyT body[unfolded Continue] rel1])
               have funs_rs: "IS_Functions ?rs = funs"
                 using static_parts_eqD(2)[OF interp_statement_list_static[OF body]]
                       Continue funs_eq
@@ -1193,14 +1282,14 @@ next
                   check passed. \<close>
               from CoreStmt_While H cv CV_Bool True body Continue
               obtain decrVal' where
-                dv': "eval_decreases (interp_term d fuel ?rs) decr = Inr decrVal'" and
+                dv': "eval_decreases (interp_term d fuel (?rs \<lparr>IS_Ghost := Ghost\<rparr>)) decr = Inr decrVal'" and
                 de: "decreases_error decrVal decrVal' = None"
-                by (auto split: sum.splits option.splits)
+                by (auto simp: g_eq split: sum.splits option.splits)
               \<comment> \<open>The loop runs again from the restored state. \<close>
               from CoreStmt_While H cv CV_Bool True body Continue dv' de
               have rec_eq: "interp_statement d fuel ?rs
                                (CoreStmt_While g condTm invars decr bodyStmts) = Inr res"
-                by simp
+                by (simp add: g_eq)
               note T' = T[unfolded CoreStmt_While]
               show ?thesis
                 by (rule IH_stmt[OF fn_eq funs_rs fg rel_rs T' rec_eq])
@@ -1214,7 +1303,7 @@ next
           by (auto split: if_splits option.splits)
         from T CoreStmt_Match have g_eq: "g = Ghost" by (auto split: if_splits)
         from H CoreStmt_Match obtain scrutVal where
-          sv: "interp_term d fuel full scrutTm = Inr scrutVal"
+          sv: "interp_term d fuel (raise_mode full g) scrutTm = Inr scrutVal"
           by (auto split: sum.splits)
         from H CoreStmt_Match sv obtain armStmts where
           arm: "find_matching_arm scrutVal arms = Inr armStmts"
@@ -1224,10 +1313,18 @@ next
           armT: "core_statement_list_type (env \<lparr> TE_ProofTopLevel := False \<rparr>) Ghost armStmts
                    = Some armEnv"
           by auto
+        \<comment> \<open>The arm of a ghost match runs in Ghost mode. The erased state does
+            not move, but is related to the full state in that mode when it
+            is put in that mode too. \<close>
+        let ?fullG = "full \<lparr>IS_Ghost := Ghost\<rparr>"
+        let ?erasedG = "erased \<lparr>IS_Ghost := Ghost\<rparr>"
         from H CoreStmt_Match sv arm obtain bodyRes where
-          body: "interp_statement_list d fuel full armStmts = Inr bodyRes"
-          by (auto split: sum.splits)
-        note bodyIH = IH_list[OF fnB funs_eq fgB relB armT body]
+          body: "interp_statement_list d fuel ?fullG armStmts = Inr bodyRes"
+          by (auto simp: g_eq split: sum.splits)
+        have funsG: "IS_Functions ?fullG = funs" using funs_eq by simp
+        have relG: "state_erased (env \<lparr> TE_ProofTopLevel := False \<rparr>) emb ?fullG ?erasedG"
+          by (rule state_erased_set_ghost[OF relB])
+        note bodyIH = IH_list[OF fnB funsG fgB relG armT body]
         show ?thesis
         proof (cases bodyRes)
           case (Return state1 v)
@@ -1235,12 +1332,12 @@ next
         next
           case (Continue state1)
           from bodyIH Continue
-          have rel1: "state_erased armEnv emb state1 erased"
+          have rel1: "state_erased armEnv emb state1 ?erasedG"
             by simp
           have rel_rs: "state_erased env emb (restore_scope full state1) erased"
-            by (rule ghost_scope_exit[OF rel armT body[unfolded Continue] rel1])
+            by (rule ghost_scope_exit_mode[OF rel armT body[unfolded Continue] rel1])
           from CoreStmt_Match H sv arm body Continue
-          have res_eq: "res = Continue (restore_scope full state1)" by simp
+          have res_eq: "res = Continue (restore_scope full state1)" by (simp add: g_eq)
           show ?thesis unfolding env'_eq by (rule ghost_resultI[OF res_eq rel_rs])
         qed
       next

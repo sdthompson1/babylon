@@ -4,15 +4,15 @@ begin
 
 (* The interpreter never changes IS_Globals, IS_Functions or the datatype
    tables (IS_DataCtors, IS_DataCtorsByType), and a statement or a function
-   call hands back the IS_TyArgs it was started with. *)
+   call hands back the IS_TyArgs and the IS_Ghost it was started with. *)
 
 
 (* ========================================================================== *)
 (* The helper functions *)
 (* ========================================================================== *)
 
-(* IS_Globals / IS_Functions / IS_TyArgs / datatype-table preservation for the
-   leaf state transformers used inside the interpreter. *)
+(* IS_Globals / IS_Functions / IS_TyArgs / IS_Ghost / datatype-table preservation
+   for the leaf state transformers used inside the interpreter. *)
 
 lemma alloc_store_preserves_globals_funs:
   "IS_Globals (fst (alloc_store state v)) = IS_Globals state"
@@ -21,6 +21,7 @@ lemma alloc_store_preserves_globals_funs:
   "IS_DataCtorsByType (fst (alloc_store state v)) = IS_DataCtorsByType state"
   "IS_DataCtors (fst (alloc_store state v)) = IS_DataCtors state"
   "IS_ExternAlloc (fst (alloc_store state v)) = IS_ExternAlloc state"
+  "IS_Ghost (fst (alloc_store state v)) = IS_Ghost state"
   by (simp_all add: Let_def)
 
 lemma process_one_arg_preserves_globals_funs:
@@ -30,9 +31,10 @@ lemma process_one_arg_preserves_globals_funs:
          IS_TyArgs state' = IS_TyArgs state \<and>
          IS_DataCtorsByType state' = IS_DataCtorsByType state \<and>
          IS_DataCtors state' = IS_DataCtors state \<and>
-         IS_ExternAlloc state' = IS_ExternAlloc state"
+         IS_ExternAlloc state' = IS_ExternAlloc state \<and>
+         IS_Ghost state' = IS_Ghost state"
 proof -
-  obtain name vr refRes valRes where arg_eq: "arg = ((name, vr), refRes, valRes)"
+  obtain name vr gh refRes valRes where arg_eq: "arg = ((name, vr, gh), refRes, valRes)"
     by (cases arg) auto
   show ?thesis
   proof (cases vr)
@@ -55,6 +57,7 @@ proof -
            "IS_DataCtorsByType (fst ?alloc) = IS_DataCtorsByType state"
            "IS_DataCtors (fst ?alloc) = IS_DataCtors state"
            "IS_ExternAlloc (fst ?alloc) = IS_ExternAlloc state"
+           "IS_Ghost (fst ?alloc) = IS_Ghost state"
         by (simp_all add: alloc_store_preserves_globals_funs)
       with state'_eq show ?thesis by simp
     qed
@@ -91,7 +94,8 @@ lemma fold_process_one_arg_preserves_globals_funs:
          IS_TyArgs state' = IS_TyArgs state \<and>
          IS_DataCtorsByType state' = IS_DataCtorsByType state \<and>
          IS_DataCtors state' = IS_DataCtors state \<and>
-         IS_ExternAlloc state' = IS_ExternAlloc state"
+         IS_ExternAlloc state' = IS_ExternAlloc state \<and>
+         IS_Ghost state' = IS_Ghost state"
   using assms
 proof (induction args arbitrary: state)
   case Nil
@@ -112,7 +116,8 @@ next
                 IS_TyArgs state1 = IS_TyArgs state \<and>
                 IS_DataCtorsByType state1 = IS_DataCtorsByType state \<and>
                 IS_DataCtors state1 = IS_DataCtors state \<and>
-                IS_ExternAlloc state1 = IS_ExternAlloc state" by simp
+                IS_ExternAlloc state1 = IS_ExternAlloc state \<and>
+                IS_Ghost state1 = IS_Ghost state" by simp
     from Inr Cons.prems have "fold process_one_arg args (Inr state1) = Inr state'"
       by simp
     from Cons.IH[OF this] step show ?thesis by simp
@@ -126,7 +131,8 @@ lemma apply_ref_updates_preserves_globals_funs:
          IS_TyArgs state' = IS_TyArgs state \<and>
          IS_DataCtorsByType state' = IS_DataCtorsByType state \<and>
          IS_DataCtors state' = IS_DataCtors state \<and>
-         IS_ExternAlloc state' = IS_ExternAlloc state"
+         IS_ExternAlloc state' = IS_ExternAlloc state \<and>
+         IS_Ghost state' = IS_Ghost state"
   using assms
 proof (induction state lvs vs arbitrary: state' rule: apply_ref_updates.induct)
   case (1 state)
@@ -153,7 +159,8 @@ lemma perform_swap_preserves_globals_funs:
          IS_TyArgs state' = IS_TyArgs state \<and>
          IS_DataCtorsByType state' = IS_DataCtorsByType state \<and>
          IS_DataCtors state' = IS_DataCtors state \<and>
-         IS_ExternAlloc state' = IS_ExternAlloc state"
+         IS_ExternAlloc state' = IS_ExternAlloc state \<and>
+         IS_Ghost state' = IS_Ghost state"
 proof -
   obtain addr1 path1 where lv1_eq: "lv1 = (addr1, path1)" by (cases lv1)
   obtain addr2 path2 where lv2_eq: "lv2 = (addr2, path2)" by (cases lv2)
@@ -166,6 +173,7 @@ lemma restore_scope_preserves_globals_funs:
   "IS_Globals (restore_scope old_state new_state) = IS_Globals new_state"
   "IS_Functions (restore_scope old_state new_state) = IS_Functions new_state"
   "IS_TyArgs (restore_scope old_state new_state) = IS_TyArgs old_state"
+  "IS_Ghost (restore_scope old_state new_state) = IS_Ghost old_state"
   by simp_all
 
 
@@ -173,8 +181,8 @@ lemma restore_scope_preserves_globals_funs:
 (* The relation between two states *)
 (* ========================================================================== *)
 
-(* state' has the same globals, functions, type arguments and datatype
-   tables as state. *)
+(* state' has the same globals, functions, type arguments, datatype tables
+   and ghost mode as state. *)
 definition static_parts_eq :: "'w InterpState \<Rightarrow> 'w InterpState \<Rightarrow> bool" where
   "static_parts_eq state state' \<equiv>
     IS_Globals state' = IS_Globals state \<and>
@@ -182,7 +190,8 @@ definition static_parts_eq :: "'w InterpState \<Rightarrow> 'w InterpState \<Rig
     IS_TyArgs state' = IS_TyArgs state \<and>
     IS_DataCtorsByType state' = IS_DataCtorsByType state \<and>
     IS_DataCtors state' = IS_DataCtors state \<and>
-    IS_ExternAlloc state' = IS_ExternAlloc state"
+    IS_ExternAlloc state' = IS_ExternAlloc state \<and>
+    IS_Ghost state' = IS_Ghost state"
 
 lemma static_parts_eqD:
   assumes "static_parts_eq state state'"
@@ -192,6 +201,7 @@ lemma static_parts_eqD:
     and "IS_DataCtorsByType state' = IS_DataCtorsByType state"
     and "IS_DataCtors state' = IS_DataCtors state"
     and "IS_ExternAlloc state' = IS_ExternAlloc state"
+    and "IS_Ghost state' = IS_Ghost state"
   using assms by (simp_all add: static_parts_eq_def)
 
 lemma static_parts_eq_refl:
@@ -203,16 +213,31 @@ lemma static_parts_eq_trans:
   shows "static_parts_eq s1 s3"
   using assms by (simp add: static_parts_eq_def)
 
-(* Leaving a scope puts the type arguments of the outer state back, and keeps
-   everything else. *)
+(* Leaving a scope puts the type arguments and the ghost mode of the outer
+   state back, and keeps everything else. *)
 lemma static_parts_eq_restore_scope:
   assumes "static_parts_eq state state'"
+  shows "static_parts_eq state (restore_scope state state')"
+  using assms by (simp add: static_parts_eq_def)
+
+(* The same, when the scope was entered in another mode (the body of a ghost
+   loop, or an arm of a ghost match, runs in Ghost mode). *)
+lemma static_parts_eq_restore_scope_mode:
+  assumes "static_parts_eq (state \<lparr> IS_Ghost := g \<rparr>) state'"
   shows "static_parts_eq state (restore_scope state state')"
   using assms by (simp add: static_parts_eq_def)
 
 lemma static_parts_eq_bind_mutable_local:
   "static_parts_eq state (bind_mutable_local varName val state)"
   by (simp add: static_parts_eq_def Let_def)
+
+(* A call statement makes its call in a state whose mode it has raised (g
+   below), and puts the mode of the original state back afterwards. Without
+   that reset the mode would not be preserved. *)
+lemma static_parts_eq_reset_ghost:
+  assumes "static_parts_eq (state \<lparr> IS_Ghost := g \<rparr>) state'"
+  shows "static_parts_eq state (state' \<lparr> IS_Ghost := IS_Ghost state \<rparr>)"
+  using assms by (simp add: static_parts_eq_def)
 
 
 (* ========================================================================== *)
@@ -264,11 +289,11 @@ next
         proof (cases vr)
           case Var
           from Var H CoreStmt_VarDecl obtain initVal where
-            iv: "interp_term d fuel state initTm = Inr initVal"
+            vp: "value_position (raise_mode state g)
+                   (interp_term d fuel (raise_mode state g) initTm) = Inr initVal"
             by (auto split: sum.splits)
-          from Var H CoreStmt_VarDecl iv have
-            cc: "copy_check g state ty initVal = None"
-            by (auto split: option.splits)
+          note iv = value_position_InrD[OF vp]
+          note cc = vp[unfolded iv]
           from Var H[symmetric] CoreStmt_VarDecl iv cc show ?thesis
             by (simp add: static_parts_eq_def Let_def)
         next
@@ -283,14 +308,14 @@ next
                            \<and> fmlookup (IS_Refs state) baseName = None)")
             case True
             with Ref H CoreStmt_VarDecl base obtain val where
-              iv: "interp_term d fuel state initTm = Inr val"
+              iv: "interp_term d fuel (raise_mode state g) initTm = Inr val"
               by (auto split: sum.splits)
             from Ref H[symmetric] CoreStmt_VarDecl base True iv show ?thesis
               by (simp add: static_parts_eq_def Let_def)
           next
             case False
             with Ref H CoreStmt_VarDecl base obtain addrPath where
-              lv: "interp_writable_lvalue d fuel state initTm = Inr addrPath"
+              lv: "interp_writable_lvalue d fuel (raise_mode state g) initTm = Inr addrPath"
               by (auto split: sum.splits)
             from Ref H[symmetric] CoreStmt_VarDecl base False lv show ?thesis
               by (simp add: static_parts_eq_def)
@@ -300,14 +325,19 @@ next
         case (CoreStmt_VarDeclCall g varName varTy castOpt fnName argTys argTms)
         \<comment> \<open>Run the call (giving newState), apply the cast, then alloc and bind. \<close>
         from H CoreStmt_VarDeclCall obtain newState retVal where
-          call: "interp_function_call d fuel state fnName argTys argTms = Inr (newState, retVal)"
+          call: "interp_function_call d fuel (raise_mode state g) fnName argTys argTms
+                   = Inr (newState, retVal)"
           by (auto split: sum.splits prod.splits)
-        from IH_call call have call_eq: "static_parts_eq state newState" by blast
+        from IH_call call have "static_parts_eq (raise_mode state g) newState" by blast
+        \<comment> \<open>The statement puts the mode of the original state back.\<close>
+        hence call_eq: "static_parts_eq state (newState \<lparr> IS_Ghost := IS_Ghost state \<rparr>)"
+          by (rule static_parts_eq_reset_ghost)
         from H CoreStmt_VarDeclCall call obtain initVal where
-          cast: "apply_cast_opt castOpt retVal = Inr initVal"
+          vp0: "value_position (raise_mode state g) (apply_cast_opt castOpt retVal) = Inr initVal"
           by (auto split: sum.splits)
+        note cast = value_position_InrD[OF vp0] vp0[unfolded value_position_InrD[OF vp0]]
         from H[symmetric] CoreStmt_VarDeclCall call cast
-        have "static_parts_eq newState (result_state res)"
+        have "static_parts_eq (newState \<lparr> IS_Ghost := IS_Ghost state \<rparr>) (result_state res)"
           by (simp add: static_parts_eq_def Let_def)
         with call_eq show ?thesis by (rule static_parts_eq_trans)
       next
@@ -331,14 +361,14 @@ next
       next
         case (CoreStmt_Assign g ty lhsLv rhsTm)
         from H CoreStmt_Assign obtain addr path where
-          lv: "interp_writable_lvalue d fuel state lhsLv = Inr (addr, path)"
+          lv: "interp_writable_lvalue d fuel (raise_mode state g) lhsLv = Inr (addr, path)"
           by (auto split: sum.splits)
         from H CoreStmt_Assign lv obtain rhsVal where
-          rv: "interp_term d fuel state rhsTm = Inr rhsVal"
+          vp: "value_position (raise_mode state g)
+                 (interp_term d fuel (raise_mode state g) rhsTm) = Inr rhsVal"
           by (auto split: sum.splits)
-        from H CoreStmt_Assign lv rv have
-          cc: "copy_check g state ty rhsVal = None"
-          by (auto split: option.splits)
+        note rv = value_position_InrD[OF vp]
+        note cc = vp[unfolded rv]
         from H CoreStmt_Assign lv rv cc obtain newVal where
           upd: "update_value_at_path (IS_Store state ! addr) path rhsVal = Inr newVal"
           by (auto simp: Let_def split: sum.splits)
@@ -348,12 +378,17 @@ next
         case (CoreStmt_AssignCall g lhsLv castOpt fnName argTys argTms)
         \<comment> \<open>Run the call (newState), apply cast, resolve lhs in newState, store. \<close>
         from H CoreStmt_AssignCall obtain newState retVal where
-          call: "interp_function_call d fuel state fnName argTys argTms = Inr (newState, retVal)"
+          call: "interp_function_call d fuel (raise_mode state g) fnName argTys argTms
+                   = Inr (newState, retVal)"
           by (auto split: sum.splits prod.splits)
-        from IH_call call have call_eq: "static_parts_eq state newState" by blast
+        from IH_call call have "static_parts_eq (raise_mode state g) newState" by blast
+        \<comment> \<open>The statement puts the mode of the original state back.\<close>
+        hence call_eq: "static_parts_eq state (newState \<lparr> IS_Ghost := IS_Ghost state \<rparr>)"
+          by (rule static_parts_eq_reset_ghost)
         from H CoreStmt_AssignCall call obtain rhsVal where
-          cast: "apply_cast_opt castOpt retVal = Inr rhsVal"
+          vp0: "value_position (raise_mode state g) (apply_cast_opt castOpt retVal) = Inr rhsVal"
           by (auto split: sum.splits)
+        note cast = value_position_InrD[OF vp0] vp0[unfolded value_position_InrD[OF vp0]]
         from H CoreStmt_AssignCall call cast obtain addr path where
           lv: "interp_writable_lvalue d fuel newState lhsLv = Inr (addr, path)"
           by (auto split: sum.splits)
@@ -361,16 +396,16 @@ next
           upd: "update_value_at_path (IS_Store newState ! addr) path rhsVal = Inr newVal"
           by (auto simp: Let_def split: sum.splits)
         from H[symmetric] CoreStmt_AssignCall lv call cast upd
-        have "static_parts_eq newState (result_state res)"
+        have "static_parts_eq (newState \<lparr> IS_Ghost := IS_Ghost state \<rparr>) (result_state res)"
           by (simp add: static_parts_eq_def Let_def)
         with call_eq show ?thesis by (rule static_parts_eq_trans)
       next
         case (CoreStmt_Swap g lhsTm rhsTm)
         from H CoreStmt_Swap obtain lhsLv where
-          lhs: "interp_writable_lvalue d fuel state lhsTm = Inr lhsLv"
+          lhs: "interp_writable_lvalue d fuel (raise_mode state g) lhsTm = Inr lhsLv"
           by (auto split: sum.splits)
         with H CoreStmt_Swap obtain rhsLv where
-          rhs: "interp_writable_lvalue d fuel state rhsTm = Inr rhsLv"
+          rhs: "interp_writable_lvalue d fuel (raise_mode state g) rhsTm = Inr rhsLv"
           by (auto split: sum.splits)
         with H CoreStmt_Swap lhs obtain newState where
           sw: "perform_swap state lhsLv rhsLv = Inr newState"
@@ -394,7 +429,7 @@ next
         next
           case (Some condTm)
           from H CoreStmt_Assert Some obtain condVal where
-            cv: "interp_term d fuel state condTm = Inr condVal"
+            cv: "interp_term d fuel (state \<lparr> IS_Ghost := Ghost \<rparr>) condTm = Inr condVal"
             by (auto split: sum.splits)
           have "res = Continue state"
           proof (cases condVal)
@@ -411,13 +446,15 @@ next
         case (CoreStmt_While g condTm invars decr bodyStmts)
         \<comment> \<open>The run succeeded, so the invariants were evaluated and all held. \<close>
         from H CoreStmt_While obtain invarVals where
-          iv: "interp_term_list d fuel state invars = Inr invarVals" and
+          iv: "interp_term_list d fuel (state \<lparr> IS_Ghost := Ghost \<rparr>) invars = Inr invarVals" and
           ie: "conditions_error invarVals = None"
           by (auto split: sum.splits option.splits)
         note [simp] = iv ie
         from H CoreStmt_While obtain condVal where
-          cv: "interp_term d fuel state condTm = Inr condVal"
+          vp: "value_position (raise_mode state g)
+                 (interp_term d fuel (raise_mode state g) condTm) = Inr condVal"
           by (auto split: sum.splits)
+        note cv = value_position_InrD[OF vp] vp[unfolded value_position_InrD[OF vp]]
         show ?thesis
         proof (cases condVal)
           case (CV_Bool b)
@@ -432,27 +469,28 @@ next
             \<comment> \<open>The decreases-term (if any) was evaluated before the body. \<close>
             with CoreStmt_While H cv CV_Bool
             obtain decrVal where
-              dv: "eval_decreases (interp_term d fuel state) decr = Inr decrVal"
+              dv: "eval_decreases (interp_term d fuel (state \<lparr> IS_Ghost := Ghost \<rparr>)) decr = Inr decrVal"
               by (auto split: sum.splits)
             note [simp] = dv
             from CoreStmt_While H cv CV_Bool True
             obtain bodyRes where
-              body: "interp_statement_list d fuel state bodyStmts = Inr bodyRes"
+              body: "interp_statement_list d fuel (raise_mode state g) bodyStmts = Inr bodyRes"
               by (auto split: sum.splits)
             from IH_stmt_list body
-            have body_eq: "static_parts_eq state (result_state bodyRes)" by blast
+            have body_eq: "static_parts_eq (raise_mode state g) (result_state bodyRes)" by blast
             show ?thesis
             proof (cases bodyRes)
               case (Continue state1)
               let ?rs = "restore_scope state state1"
-              from body_eq Continue have eq1: "static_parts_eq state state1" by simp
+              from body_eq Continue have eq1: "static_parts_eq (raise_mode state g) state1" by simp
               have eq_rs: "static_parts_eq state ?rs"
-                by (rule static_parts_eq_restore_scope[OF eq1])
+                by (rule static_parts_eq_restore_scope_mode[OF eq1])
               \<comment> \<open>The decreases-term was evaluated again after the body, and the
                   check passed. \<close>
               from CoreStmt_While H cv CV_Bool True body Continue
               obtain decrVal' where
-                dv': "eval_decreases (interp_term d fuel ?rs) decr = Inr decrVal'" and
+                dv': "eval_decreases (interp_term d fuel (?rs \<lparr> IS_Ghost := Ghost \<rparr>)) decr
+                        = Inr decrVal'" and
                 de: "decreases_error decrVal decrVal' = None"
                 by (auto split: sum.splits option.splits)
               from CoreStmt_While H cv CV_Bool True body Continue dv' de
@@ -464,12 +502,12 @@ next
               with eq_rs show ?thesis by (rule static_parts_eq_trans)
             next
               case (Return state1 v)
-              from body_eq Return have eq1: "static_parts_eq state state1" by simp
+              from body_eq Return have eq1: "static_parts_eq (raise_mode state g) state1" by simp
               from CoreStmt_While H cv CV_Bool True body Return
               have res_eq: "res = Return (restore_scope state state1) v"
                 by simp
               show ?thesis
-                by (simp only: res_eq result_state.simps static_parts_eq_restore_scope[OF eq1])
+                by (simp only: res_eq result_state.simps static_parts_eq_restore_scope_mode[OF eq1])
             qed
           qed
         \<comment> \<open>Non-bool cond value: TypeError, contradicts H. \<close>
@@ -477,31 +515,31 @@ next
       next
         case (CoreStmt_Match g scrutTm arms)
         from H CoreStmt_Match obtain scrutVal where
-          sv: "interp_term d fuel state scrutTm = Inr scrutVal"
+          sv: "interp_term d fuel (raise_mode state g) scrutTm = Inr scrutVal"
           by (auto split: sum.splits)
         from H CoreStmt_Match sv obtain armStmts where
           arm: "find_matching_arm scrutVal arms = Inr armStmts"
           by (auto split: sum.splits)
         from H CoreStmt_Match sv arm obtain bodyRes where
-          body: "interp_statement_list d fuel state armStmts = Inr bodyRes"
+          body: "interp_statement_list d fuel (raise_mode state g) armStmts = Inr bodyRes"
           by (auto split: sum.splits)
         from IH_stmt_list body
-        have body_eq: "static_parts_eq state (result_state bodyRes)" by blast
+        have body_eq: "static_parts_eq (raise_mode state g) (result_state bodyRes)" by blast
         show ?thesis
         proof (cases bodyRes)
           case (Continue state1)
-          from body_eq Continue have eq1: "static_parts_eq state state1" by simp
+          from body_eq Continue have eq1: "static_parts_eq (raise_mode state g) state1" by simp
           from CoreStmt_Match H sv arm body Continue
           have res_eq: "res = Continue (restore_scope state state1)" by simp
           show ?thesis
-            by (simp only: res_eq result_state.simps static_parts_eq_restore_scope[OF eq1])
+            by (simp only: res_eq result_state.simps static_parts_eq_restore_scope_mode[OF eq1])
         next
           case (Return state1 v)
-          from body_eq Return have eq1: "static_parts_eq state state1" by simp
+          from body_eq Return have eq1: "static_parts_eq (raise_mode state g) state1" by simp
           from CoreStmt_Match H sv arm body Return
           have res_eq: "res = Return (restore_scope state state1) v" by simp
           show ?thesis
-            by (simp only: res_eq result_state.simps static_parts_eq_restore_scope[OF eq1])
+            by (simp only: res_eq result_state.simps static_parts_eq_restore_scope_mode[OF eq1])
         qed
       next
         case (CoreStmt_ShowHide _ _) with H
@@ -571,22 +609,23 @@ next
       \<comment> \<open>Take the call apart: the function, the state with the arguments bound, and
           the body's result. The contract checks passed and did not change the state,
           so the body's result is the call's result. \<close>
-      let ?refResults = "map (interp_writable_lvalue d fuel state) argTms"
-      let ?valResults = "map (interp_term d fuel state) argTms"
+      let ?refResults = "\<lambda>f. map_args (interp_writable_lvalue d fuel) state (IF_Args f) argTms"
+      let ?valResults = "\<lambda>f. map_args (interp_term d fuel) state (IF_Args f) argTms"
       from interp_function_call_InrE[OF H0] obtain f preCallState where
         f_lookup: "fmlookup (IS_Functions state) fnName = Some f" and
         len_eq: "length argTms = length (IF_Args f)" and
         tyLen_eq: "length argTys = length (IF_TyArgs f)" and
-        fold_eq: "fold process_one_arg (zip (IF_Args f) (zip ?refResults ?valResults))
+        fold_eq: "fold process_one_arg (zip (IF_Args f) (zip (?refResults f) (?valResults f)))
                     (Inr (state \<lparr> IS_Locals := fmempty, IS_Refs := fmempty,
                                   IS_ConstLocals := {||},
                                   IS_TyArgs := fmap_of_list (zip (IF_TyArgs f)
                                                  (map (apply_subst (IS_TyArgs state)) argTys)) \<rparr>))
                   = Inr preCallState" and
-        body: "call_body (interp_statement_list d fuel) state f ?refResults ?valResults preCallState
-                 = Inr (state', retVal)" .
-      \<comment> \<open>Binding the arguments installs the callee's type arguments, so IS_TyArgs is
-          not preserved at this point; restore_scope puts the caller's back. \<close>
+        body: "call_body (interp_statement_list d fuel) state f (?refResults f) (?valResults f)
+                 preCallState = Inr (state', retVal)"
+        by blast
+      \<comment> \<open>Binding the arguments installs the callee's type arguments, so IS_TyArgs
+          is not preserved at this point; restore_scope puts the caller's back. \<close>
       from fold_process_one_arg_preserves_globals_funs[OF fold_eq]
       have pre_gf: "IS_Globals preCallState = IS_Globals state \<and>
                     IS_Functions preCallState = IS_Functions state \<and>
@@ -616,17 +655,17 @@ next
           with Return have body_eq: "static_parts_eq preCallState postCallState" by simp
           from body Inl bodyEval Return
           have state'_eq: "state' = restore_scope state postCallState"
-            by (simp add: call_body_def split: option.splits)
+            by (simp add: call_body_def split: sum.splits)
           from state'_eq static_parts_eqD[OF body_eq] pre_gf show ?thesis
             by (simp add: static_parts_eq_def)
         qed
       next
         case (Inr externFun)
         \<comment> \<open>Extern function. \<close>
-        let ?vals = "rights ?valResults"
-        let ?refs = "rights (map (\<lambda>((_, vr), refResult).
+        let ?vals = "rights (?valResults f)"
+        let ?refs = "rights (map (\<lambda>((_, vr, _), refResult).
                                       if vr = Ref then refResult else Inl TypeError)
-                                 (zip (IF_Args f) ?refResults))"
+                                 (zip (IF_Args f) (?refResults f)))"
         obtain newWorld refUpdates externRetVal where
           ext_eq: "externFun (IS_World state) ?vals = (newWorld, refUpdates, externRetVal)"
           by (cases "externFun (IS_World state) ?vals") auto
@@ -636,7 +675,7 @@ next
           "apply_ref_updates ?stateW ?refs refUpdates = Inr finalState"
           and state'_eq: "state' = finalState" and "retVal = externRetVal"
           by (cases "apply_ref_updates ?stateW ?refs refUpdates")
-             (simp_all add: call_body_def Let_def)
+             (simp_all add: call_body_def Let_def split: sum.splits)
         from apply_ref_updates_preserves_globals_funs[OF final_eq] state'_eq show ?thesis
           by (simp add: static_parts_eq_def)
       qed

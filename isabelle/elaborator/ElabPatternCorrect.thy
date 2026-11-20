@@ -1719,7 +1719,9 @@ qed auto
    projection typechecks at its binding's type (under env), no projection
    mentions any of the binding names, the names are distinct, and the body
    typechecks under env extended by all the bindings (Let-style: every
-   binding const), then the wrapped term typechecks at the body's type. *)
+   binding const), then the wrapped term typechecks at the body's type.
+   The body of each Let is a value position, so the body's type must be
+   complete in executable code. *)
 lemma foldr_let_preserves_typing:
   "(\<And>vr n vTy proj. (vr, n, vTy, proj) \<in> set projs
       \<Longrightarrow> core_term_type env ghost proj = Some vTy)
@@ -1731,6 +1733,7 @@ lemma foldr_let_preserves_typing:
                 (map (\<lambda>(vr, n, ty, _). (vr, n, ty)) projs) env)
          ghost body = Some bodyTy
    \<Longrightarrow> distinct (map (\<lambda>(_, m, _, _). m) projs)
+   \<Longrightarrow> complete_if_executable ghost bodyTy
    \<Longrightarrow> core_term_type env ghost
          (foldr (\<lambda>(_, n, _, proj). CoreTm_Let n proj) projs body) = Some bodyTy"
 proof (induction projs arbitrary: env)
@@ -1784,7 +1787,7 @@ next
   have inner_typed:
     "core_term_type ?env' ghost
        (foldr (\<lambda>(_, n, _, proj). CoreTm_Let n proj) rest body) = Some bodyTy"
-    using Cons.IH[OF rest_typed rest_fresh body_typed_env' distinct_rest] .
+    using Cons.IH[OF rest_typed rest_fresh body_typed_env' distinct_rest Cons.prems(5)] .
 
   \<comment> \<open>Assemble the CoreTm_Let: its typing rule extends env exactly like
       extend_env_one_var (\<lambda>_. True). \<close>
@@ -1799,14 +1802,15 @@ next
     using inner_typed by (simp add: extend_env_one_var_def)
 
   show ?case
-    using q_eq proj_typed inner_typed' by (simp add: Let_def)
+    using q_eq proj_typed inner_typed' Cons.prems(5) by (simp add: Let_def)
 qed
 
 (* Well-typedness of wrap_lets: if the scrutinee variable has the type the
    pattern is compatible with, the variable is not shadowed by any pattern
    variable, and the body is well-typed in env extended by all of dp's
    pattern-variable bindings (Let-style const bindings), then the wrapped
-   form is well-typed at the body type. *)
+   form is well-typed at the body type (which must be complete in executable
+   code: the body of a Let is a value position). *)
 lemma wrap_lets_preserves_typing:
   assumes compat: "dec_pattern_compatible env dp baseTy"
       and base_typed: "core_term_type env ghost (CoreTm_Var scrutVar) = Some baseTy"
@@ -1818,6 +1822,7 @@ lemma wrap_lets_preserves_typing:
            (foldr (extend_env_one_var (\<lambda>_. True) ghost) (dec_pattern_var_bindings dp) env)
            ghost body = Some bodyTy"
       and dist: "distinct (map (\<lambda>(_, x, _). x) (dec_pattern_var_bindings dp))"
+      and cp: "complete_if_executable ghost bodyTy"
   shows "core_term_type env ghost (wrap_lets scrutVar dp body) = Some bodyTy"
 proof -
   let ?projs = "dec_pattern_projections (CoreTm_Var scrutVar) dp"
@@ -1870,7 +1875,7 @@ proof -
 
   show ?thesis
     unfolding wrap_lets_def
-    using foldr_let_preserves_typing[OF projs_typed projs_fresh body_typed' dist'] .
+    using foldr_let_preserves_typing[OF projs_typed projs_fresh body_typed' dist' cp] .
 qed
 
 

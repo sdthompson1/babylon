@@ -55,6 +55,25 @@ lemma cast_ok_array:
   "array_cast_ok srcTy tgtTy \<Longrightarrow> is_well_kinded env tgtTy \<Longrightarrow> cast_ok env srcTy tgtTy"
   by (simp add: cast_ok_def)
 
+(* An admissible array cast never goes to allocatable dims from dims that are
+   not allocatable. (cast_value, CoreInterp.thy, gives TypeError for a cast that
+   does.) *)
+lemma dim_cast_ok_Allocatable: "dim_cast_ok d CoreDim_Allocatable \<Longrightarrow> d = CoreDim_Allocatable"
+  by (cases d) auto
+
+lemma dim_cast_ok_allocatable_dims:
+  assumes "list_all2 dim_cast_ok dims dims'" and "allocatable_dims dims'"
+  shows "allocatable_dims dims"
+proof -
+  from assms(2) obtain i where i: "i < length dims'" and di: "dims' ! i = CoreDim_Allocatable"
+    by (auto simp: allocatable_dims_def list_ex_iff in_set_conv_nth)
+  from assms(1) i have "dim_cast_ok (dims ! i) (dims' ! i)" and "i < length dims"
+    by (auto simp: list_all2_conv_all_nth)
+  with di have "dims ! i = CoreDim_Allocatable" and "i < length dims"
+    by (auto dest: dim_cast_ok_Allocatable)
+  thus ?thesis by (auto simp: allocatable_dims_def list_ex_iff in_set_conv_nth)
+qed
+
 lemma cast_ok_cases:
   assumes "cast_ok env srcTy tgtTy"
   obtains (Num) "is_numeric_type srcTy" "is_numeric_type tgtTy"
@@ -965,18 +984,23 @@ lemma core_term_type_TE_ProofTopLevel_irrelevant:
 (* ========================================================================== *)
 
 (* The typing of a record literal carries over from (env1, g1) to (env2, g2)
-   whenever the typing of each of its fields does. *)
+   whenever the typing of each of its fields does. The field types must be
+   complete in executable code, so the mode may only change towards Ghost. *)
 lemma core_term_type_Record_transfer:
   assumes typed: "core_term_type env1 g1 (CoreTm_Record flds) = Some ty"
       and flds: "\<And>nm tm T. (nm, tm) \<in> set flds \<Longrightarrow> core_term_type env1 g1 tm = Some T
                    \<Longrightarrow> core_term_type env2 g2 tm = Some T"
+      and mode: "g2 = NotGhost \<Longrightarrow> g1 = NotGhost"
   shows "core_term_type env2 g2 (CoreTm_Record flds) = Some ty"
 proof -
   from typed obtain tys where
     dist: "distinct (map fst flds)" and
     those1: "those (map (\<lambda>(name, tm). core_term_type env1 g1 tm) flds) = Some tys" and
+    cp1: "list_all (complete_if_executable g1) tys" and
     ty_eq: "ty = CoreTy_Record (zip (map fst flds) tys)"
     by (auto split: option.splits if_splits)
+  have cp2: "list_all (complete_if_executable g2) tys"
+    using cp1 mode by (auto simp: list_all_iff)
   have "those (map (\<lambda>(name, tm). core_term_type env2 g2 tm) flds) = Some tys"
   proof (rule those_map_mono[OF those1])
     fix x y
@@ -984,18 +1008,20 @@ proof -
     thus "(case x of (name, tm) \<Rightarrow> core_term_type env2 g2 tm) = Some y"
       by (metis case_prod_conv flds old.prod.exhaust)
   qed
-  with dist ty_eq show ?thesis by simp
+  with dist ty_eq cp2 show ?thesis by simp
 qed
 
 (* The typing of a match carries over from (env1, g1) to (env2, g2) whenever
    the typing of the scrutinee and of each arm body does, and pattern
-   compatibility carries over too. *)
+   compatibility carries over too. The type of the arms must be complete in
+   executable code, so the mode may only change towards Ghost. *)
 lemma core_term_type_Match_transfer:
   assumes typed: "core_term_type env1 g1 (CoreTm_Match scrut arms) = Some ty"
       and scrut: "\<And>T. core_term_type env1 g1 scrut = Some T \<Longrightarrow> core_term_type env2 g2 scrut = Some T"
       and pc: "\<And>p t. pattern_compatible env1 p t \<Longrightarrow> pattern_compatible env2 p t"
       and bodies: "\<And>b T. b \<in> snd ` set arms \<Longrightarrow> core_term_type env1 g1 b = Some T
                      \<Longrightarrow> core_term_type env2 g2 b = Some T"
+      and mode: "g2 = NotGhost \<Longrightarrow> g1 = NotGhost"
   shows "core_term_type env2 g2 (CoreTm_Match scrut arms) = Some ty"
 proof -
   from typed obtain scrutTy where scrut1: "core_term_type env1 g1 scrut = Some scrutTy"
@@ -1004,8 +1030,10 @@ proof -
     ne: "arms \<noteq> []" and
     pats1: "list_all (\<lambda>p. pattern_compatible env1 p scrutTy) (map fst arms)" and
     hd1: "core_term_type env1 g1 (snd (hd arms)) = Some ty" and
-    tl1: "list_all (\<lambda>body. core_term_type env1 g1 body = Some ty) (tl (map snd arms))"
+    tl1: "list_all (\<lambda>body. core_term_type env1 g1 body = Some ty) (tl (map snd arms))" and
+    cp1: "complete_if_executable g1 ty"
     by (auto simp: Let_def split: option.splits if_splits)
+  have cp2: "complete_if_executable g2 ty" using cp1 mode by blast
   have hd_in: "snd (hd arms) \<in> snd ` set arms"
     using ne by (cases arms) auto
   have tl_in: "\<And>b. b \<in> set (tl (map snd arms)) \<Longrightarrow> b \<in> snd ` set arms"
@@ -1017,7 +1045,7 @@ proof -
   have tl2: "list_all (\<lambda>body. core_term_type env2 g2 body = Some ty) (tl (map snd arms))"
     using tl1 bodies tl_in by (auto simp: list_all_iff)
   show ?thesis
-    using scrut[OF scrut1] ne pats2 hd2 tl2 by (simp add: Let_def)
+    using scrut[OF scrut1] ne pats2 hd2 tl2 cp2 by (simp add: Let_def)
 qed
 
 
@@ -1065,8 +1093,9 @@ next
              TE_GhostLocals := (if ghost = Ghost then finsert var (TE_GhostLocals env)
                                  else fminus (TE_GhostLocals env) {|var|}),
              TE_ConstLocals := finsert var (TE_ConstLocals env) \<rparr>)
-      ghost body = Some ty"
-    by (auto simp: Let_def split: option.splits)
+      ghost body = Some ty" and
+    body_cp: "complete_if_executable ghost ty"
+    by (auto simp: Let_def split: option.splits if_splits)
   (* Apply IH to rhs *)
   from CoreTm_Let.IH(1)[OF x_not_free_rhs rhs_ty CoreTm_Let.prems(3)]
   have rhs_ty': "core_term_type ?env_x ghost rhs = Some rhsTy" .
@@ -1091,7 +1120,7 @@ next
     from True have "?inner_env_x = ?inner_env"
       using gv_eq_insert gv_eq_minus by simp
     with body_ty have "core_term_type ?inner_env_x ghost body = Some ty" by simp
-    with rhs_ty' show ?thesis by (simp add: Let_def)
+    with rhs_ty' body_cp show ?thesis by (simp add: Let_def)
   next
     case False
     (* var \<noteq> x: the fmupds commute, apply IH to body *)
@@ -1131,7 +1160,7 @@ next
                                       else fminus (TE_GhostLocals ?env_x) {|var|}),
                   TE_ConstLocals := finsert var (TE_ConstLocals ?env_x) \<rparr>)
         ghost body = Some ty" by simp
-    with rhs_ty' show ?thesis by (simp add: Let_def)
+    with rhs_ty' body_cp show ?thesis by (simp add: Let_def)
   qed
 next
   case (CoreTm_Quantifier quant var varTy body)
@@ -1315,7 +1344,7 @@ next
       using CoreTm_Record.prems(1) mem by (auto simp: fmember_ffUnion_fimage_fset_of_list_iff image_iff)
     show "core_term_type ?env_x ghost tm = Some T"
       by (rule CoreTm_Record.IH[OF mem tm_in nf tm_ty CoreTm_Record.prems(3)])
-  qed
+  qed simp
 next
   case (CoreTm_RecordProj tm fldName) then show ?case
     by (auto split: option.splits CoreType.splits)
@@ -1367,7 +1396,7 @@ next
     from bodies_free b_in have nf: "x |\<notin>| core_term_free_vars b" by auto
     show "core_term_type ?env_x ghost b = Some T"
       by (rule CoreTm_Match.IH(2)[OF arm_in b_snd nf b_ty CoreTm_Match.prems(3)])
-  qed
+  qed simp
 next
   case (CoreTm_Sizeof tm) then show ?case by (auto split: option.splits)
 next
@@ -1413,7 +1442,8 @@ next
     elemTy_rt: "ghost = NotGhost \<longrightarrow> is_runtime_type env elemTy" and
     all_tms: "list_all (\<lambda>tm. core_term_type env ghost tm = Some elemTy) tms" and
     len_range: "int_in_range (int_range Unsigned IntBits_64) (int (length tms))" and
-    ty_eq: "ty = CoreTy_Array elemTy [CoreDim_Fixed (int (length tms))]"
+    ty_eq: "ty = CoreTy_Array elemTy [CoreDim_Fixed (int (length tms))]" and
+    elemTy_cp: "complete_if_executable ghost elemTy"
     by (auto split: if_splits)
   have elemTy_wk': "is_well_kinded ?env' elemTy"
     using elemTy_wk is_well_kinded_extend_tyvars by fastforce
@@ -1421,7 +1451,7 @@ next
     using elemTy_rt is_runtime_type_extend_runtime_tyvars by fastforce
   have all_tms': "list_all (\<lambda>tm. core_term_type ?env' ghost tm = Some elemTy) tms"
     using all_tms CoreTm_LitArray.IH by (induction tms) auto
-  show ?case using elemTy_wk' elemTy_rt' all_tms' len_range ty_eq by simp
+  show ?case using elemTy_wk' elemTy_rt' all_tms' len_range ty_eq elemTy_cp by simp
 next
   case (CoreTm_Cast targetTy tm)
   let ?env' = "env \<lparr> TE_TypeVars := TE_TypeVars env |\<union>| extraTV,
@@ -1450,8 +1480,9 @@ next
                TE_GhostLocals := (if ghost = Ghost then finsert var (TE_GhostLocals env)
                                    else fminus (TE_GhostLocals env) {|var|}),
                TE_ConstLocals := finsert var (TE_ConstLocals env) \<rparr>)
-        ghost body = Some ty"
-    by (auto simp: Let_def split: option.splits)
+        ghost body = Some ty" and
+    body_cp: "complete_if_executable ghost ty"
+    by (auto simp: Let_def split: option.splits if_splits)
   have rhs_ty': "core_term_type ?env' ghost rhs = Some rhsTy"
     using CoreTm_Let.IH(1) rhs_ty by blast
   let ?body_env = "env \<lparr> TE_LocalVars := fmupd var rhsTy (TE_LocalVars env),
@@ -1470,8 +1501,8 @@ next
                     TE_RuntimeTypeVars := TE_RuntimeTypeVars ?body_env |\<union>| extraRT \<rparr>)
        ghost body = Some ty"
     using CoreTm_Let.IH(2)[OF body_ty] .
-  show ?case using rhs_ty' body_ty' body_env_shape
-    by (metis core_term_type.simps(8) option.simps(5))
+  show ?case using rhs_ty' body_ty'[unfolded body_env_shape] body_cp
+    by (simp add: Let_def)
 next
   case (CoreTm_Quantifier quant var varTy body)
   let ?env' = "env \<lparr> TE_TypeVars := TE_TypeVars env |\<union>| extraTV,
@@ -1562,7 +1593,7 @@ next
     have tm_in: "tm \<in> Basic_BNFs.snds (nm, tm)" by simp
     show "core_term_type ?env' ghost tm = Some T"
       by (rule CoreTm_Record.IH[OF mem tm_in tm_ty])
-  qed
+  qed simp
 next
   case (CoreTm_Match scrut arms)
   let ?env' = "env \<lparr> TE_TypeVars := TE_TypeVars env |\<union>| extraTV,
@@ -1581,7 +1612,7 @@ next
     have b_snd: "b \<in> Basic_BNFs.snds (p, b)" by simp
     show "core_term_type ?env' ghost b = Some T"
       by (rule CoreTm_Match.IH(2)[OF arm_in b_snd b_ty])
-  qed
+  qed simp
 next
   case (CoreTm_ArrayProj tm idxTms)
   let ?env' = "env \<lparr> TE_TypeVars := TE_TypeVars env |\<union>| extraTV,
@@ -1765,7 +1796,8 @@ next
     elemTy_rt': "ghost = NotGhost \<longrightarrow> is_runtime_type ?env' elemTy" and
     all_tms': "list_all (\<lambda>tm. core_term_type ?env' ghost tm = Some elemTy) tms" and
     len_range: "int_in_range (int_range Unsigned IntBits_64) (int (length tms))" and
-    ty_eq: "ty = CoreTy_Array elemTy [CoreDim_Fixed (int (length tms))]"
+    ty_eq: "ty = CoreTy_Array elemTy [CoreDim_Fixed (int (length tms))]" and
+    elemTy_cp: "complete_if_executable ghost elemTy"
     by (auto split: if_splits)
   have elemTy_disj: "type_tyvars elemTy \<inter> fset extraTV = {}"
     using CoreTm_LitArray.prems(3) by auto
@@ -1786,7 +1818,7 @@ next
       by (rule CoreTm_LitArray.IH[OF x_in x_ty' CoreTm_LitArray.prems(2) x_disj
                                      CoreTm_LitArray.prems(4)])
   qed
-  show ?case using elemTy_wk elemTy_rt all_tms len_range ty_eq by simp
+  show ?case using elemTy_wk elemTy_rt all_tms len_range ty_eq elemTy_cp by simp
 next
   case (CoreTm_Cast targetTy tm)
   let ?env' = "env \<lparr> TE_TypeVars := TE_TypeVars env |\<union>| extraTV,
@@ -1823,8 +1855,9 @@ next
                TE_GhostLocals := (if ghost = Ghost then finsert var (TE_GhostLocals ?env')
                                    else fminus (TE_GhostLocals ?env') {|var|}),
                TE_ConstLocals := finsert var (TE_ConstLocals ?env') \<rparr>)
-        ghost body = Some ty"
-    by (auto simp: Let_def split: option.splits)
+        ghost body = Some ty" and
+    body_cp: "complete_if_executable ghost ty"
+    by (auto simp: Let_def split: option.splits if_splits)
   have rhs_disj: "core_term_free_tyvars rhs \<inter> fset extraTV = {}"
     using CoreTm_Let.prems(3) by auto
   have body_disj: "core_term_free_tyvars body \<inter> fset extraTV = {}"
@@ -1845,8 +1878,8 @@ next
   have body_ty: "core_term_type ?body_env ghost body = Some ty"
     by (rule CoreTm_Let.IH(2)[OF body_ty'[unfolded body_env_shape] CoreTm_Let.prems(2) body_disj])
        (simp add: CoreTm_Let.prems(4))
-  show ?case using rhs_ty body_ty
-    by (metis core_term_type.simps(8) option.simps(5))
+  show ?case using rhs_ty body_ty body_cp
+    by (simp add: Let_def)
 next
   case (CoreTm_Quantifier quant var varTy body)
   let ?env' = "env \<lparr> TE_TypeVars := TE_TypeVars env |\<union>| extraTV,
@@ -1955,7 +1988,7 @@ next
     show "core_term_type env ghost tm = Some T"
       by (rule CoreTm_Record.IH[OF mem tm_in tm_ty' CoreTm_Record.prems(2) tm_disj
                                    CoreTm_Record.prems(4)])
-  qed
+  qed simp
 next
   case (CoreTm_RecordProj tm fldName)
   let ?env' = "env \<lparr> TE_TypeVars := TE_TypeVars env |\<union>| extraTV,
@@ -2037,7 +2070,7 @@ next
     show "core_term_type env ghost b = Some T"
       by (rule CoreTm_Match.IH(2)[OF arm_in b_snd b_ty' CoreTm_Match.prems(2) b_disj
                                      CoreTm_Match.prems(4)])
-  qed
+  qed simp
 next
   case (CoreTm_Sizeof tm)
   let ?env' = "env \<lparr> TE_TypeVars := TE_TypeVars env |\<union>| extraTV,
@@ -2153,7 +2186,7 @@ next
                                  else fminus (TE_GhostLocals env) {|var|}),
              TE_ConstLocals := finsert var (TE_ConstLocals env) \<rparr>)
       ghost body = Some ty"
-    by (auto simp: Let_def split: option.splits)
+    by (auto simp: Let_def split: option.splits if_splits)
   from CoreTm_Let.IH(1)[OF rhs_ty CoreTm_Let.prems(2)]
   have rhs_ty': "core_term_type ?envG Ghost rhs = Some rhsTy" .
   let ?body_env = "env \<lparr> TE_LocalVars := fmupd var rhsTy (TE_LocalVars env),
@@ -2329,7 +2362,7 @@ next
     have tm_in: "tm \<in> Basic_BNFs.snds (nm, tm)" by simp
     show "core_term_type ?envG Ghost tm = Some T"
       by (rule CoreTm_Record.IH[OF mem tm_in tm_ty CoreTm_Record.prems(2)])
-  qed
+  qed simp
 next
   case (CoreTm_RecordProj tm fldName) then show ?case
     by (auto split: option.splits CoreType.splits)
@@ -2367,7 +2400,7 @@ next
     have b_snd: "b \<in> Basic_BNFs.snds (p, b)" by simp
     show "core_term_type ?envG Ghost b = Some T"
       by (rule CoreTm_Match.IH(2)[OF arm_in b_snd b_ty CoreTm_Match.prems(2)])
-  qed
+  qed simp
 next
   case (CoreTm_Sizeof tm) then show ?case
     by (auto split: option.splits CoreType.splits if_splits)
@@ -2418,6 +2451,19 @@ next
   show "core_term_type env Ghost (tmArgs ! i) = Some (expectedTys ! i)"
     by simp
 qed
+
+(* The same check, with the expected type and the mode of each argument read
+   off the parameter list directly. The interpreter evaluates each argument in
+   the mode param_mode ghost gh of its parameter, so this is the form that the
+   type soundness proof uses. *)
+lemma args_typed_param_modes:
+  assumes "list_all2 (\<lambda>tm (expectedTy, mode). core_term_type env mode tm = Some expectedTy) tmArgs
+             (zip (map (\<lambda>(ty, _). apply_subst tySubst ty) tmParams)
+                  (map (\<lambda>(_, _, gh). param_mode ghost gh) tmParams))"
+  shows "list_all2 (\<lambda>tm (ty, _, gh). core_term_type env (param_mode ghost gh) tm
+                                        = Some (apply_subst tySubst ty))
+           tmArgs tmParams"
+  using assms unfolding list_all2_conv_all_nth by (auto simp: case_prod_beta)
 
 (* Conversely, if a call's args all have their expected types, in either Ghost mode or the
    ambient mode, then the per-argument typecheck done while typing a CoreTm_FunctionCall
@@ -2472,6 +2518,37 @@ proof -
     by (rule args_typed_imp_Ghost[OF la2]) simp
   show "ty = apply_subst (fmap_of_list (zip (FI_TyArgs funInfo) tyArgs)) (FI_ReturnType funInfo)"
     using ty_eq by simp
+qed
+
+
+(* If a CoreTm_FunctionCall typechecks in mode `ghost`, each argument typechecks
+   in the mode of its parameter, the type of the term is the function's return
+   type, and the function is not ghost if the mode is NotGhost. *)
+lemma core_term_type_FunctionCall_args_modes:
+  assumes typing: "core_term_type env ghost (CoreTm_FunctionCall fnName tyArgs tmArgs) = Some ty"
+    and fn_lookup: "fmlookup (TE_Functions env) fnName = Some funInfo"
+  shows "list_all2 (\<lambda>tm (pty, _, gh). core_term_type env (param_mode ghost gh) tm
+                      = Some (apply_subst (fmap_of_list (zip (FI_TyArgs funInfo) tyArgs)) pty))
+          tmArgs (FI_TmArgs funInfo)"
+    and "ty = apply_subst (fmap_of_list (zip (FI_TyArgs funInfo) tyArgs)) (FI_ReturnType funInfo)"
+    and "ghost = NotGhost \<longrightarrow> FI_Ghost funInfo = NotGhost"
+proof -
+  from typing fn_lookup have
+    la2: "list_all2 (\<lambda>tm (expectedTy, mode). core_term_type env mode tm = Some expectedTy) tmArgs
+            (zip (map (\<lambda>(ty, _). apply_subst (fmap_of_list (zip (FI_TyArgs funInfo) tyArgs)) ty)
+                      (FI_TmArgs funInfo))
+                 (map (\<lambda>(_, _, gh). param_mode ghost gh) (FI_TmArgs funInfo)))"
+    and ty_eq: "ty = apply_subst (fmap_of_list (zip (FI_TyArgs funInfo) tyArgs)) (FI_ReturnType funInfo)"
+    and ng: "ghost = NotGhost \<longrightarrow> FI_Ghost funInfo \<noteq> Ghost"
+    by (auto simp: Let_def split: option.splits if_splits)
+  show "list_all2 (\<lambda>tm (pty, _, gh). core_term_type env (param_mode ghost gh) tm
+                      = Some (apply_subst (fmap_of_list (zip (FI_TyArgs funInfo) tyArgs)) pty))
+          tmArgs (FI_TmArgs funInfo)"
+    by (rule args_typed_param_modes[OF la2])
+  show "ty = apply_subst (fmap_of_list (zip (FI_TyArgs funInfo) tyArgs)) (FI_ReturnType funInfo)"
+    using ty_eq by simp
+  show "ghost = NotGhost \<longrightarrow> FI_Ghost funInfo = NotGhost"
+    using ng by (cases "FI_Ghost funInfo") auto
 qed
 
 

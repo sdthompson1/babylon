@@ -21,8 +21,9 @@ record 'w InterpFun =
   (* Type arguments *)
   IF_TyArgs :: "string list"
 
-  (* Term arguments (name, and whether passed by value or reference) *)
-  IF_Args :: "(string \<times> VarOrRef) list"
+  (* Term arguments (name, whether passed by value or reference, and whether
+     the parameter is ghost). *)
+  IF_Args :: "(string \<times> VarOrRef \<times> GhostOrNot) list"
 
   (* The function body: Inl for a Babylon body (list of statements), or
      Inr for an external function. *)
@@ -32,9 +33,8 @@ record 'w InterpFun =
      write to the external world). *)
   IF_Impure :: bool
 
-  (* Whether the function is ghost, and its (declared, possibly generic) return type. *)
+  (* Whether the function is ghost. *)
   IF_Ghost :: GhostOrNot
-  IF_ReturnType :: CoreType
 
   (* The function's contract, as in FI_Requires / FI_Ensures. These refer to the
      parameters by the positional names of ContractNames.thy. *)
@@ -70,6 +70,21 @@ record 'world InterpState =
   (* Runtime type-variable bindings for the current function frame.
      Maps each type parameter (by name) to a ground CoreType. *)
   IS_TyArgs :: "(string, CoreType) fmap"
+
+  (* Whether the code being run is ghost or executable.
+
+     This is used to enforce the rule that when evaluating a term in "value position",
+     the result must be non-allocated (otherwise RuntimeError). (This rule only applies
+     in NotGhost mode, so the interpreter needs to track the current mode.)
+
+     IS_Ghost does *not* affect whether the interpreter is willing to evaluate ghost-only
+     constructs (quantifier terms, MathReal computations, and so on); that is instead
+     enforced by typing. (Arguably, the interpreter *could* raise a TypeError when something
+     non-executable is attempted in NotGhost mode, but this has not been implemented.)
+
+     IS_Ghost changes from NotGhost to Ghost when the interpreter encounters a ghost
+     construct (e.g. an Assert statement), and changes back again afterwards. *)
+  IS_Ghost :: GhostOrNot
 
   (* The datatypes of the program (name to number of type parameters), their
      data constructors (constructor name to datatype name, type parameters and

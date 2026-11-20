@@ -106,6 +106,11 @@ definition resolve_callee_data_ctor ::
           Inl [TyErr_GhostVariableInNonGhost loc name]
         else if name |\<in>| EE_NullaryDataCtors elabEnv then
           Inl [TyErr_DataCtorNotCallable loc name]
+        else if ghost = NotGhost \<and> \<not> is_complete_type payloadTy then
+          \<comment> \<open>Note: this error shouldn't occur, because elab_ctor_payload only accepts
+              complete payload types. However, tyenv_well_formed doesn't record this fact,
+              so we check again here.\<close>
+          Inl [TyErr_IncompleteArrayType loc]
         else
           (case resolve_type_args env elabEnv ghost loc name tyvars tyArgs next_mv of
             Inl errs \<Rightarrow> Inl errs
@@ -964,6 +969,11 @@ where
                     \<comment> \<open>A metavariable may not be bound to an incomplete array type.\<close>
                     if \<not> typesubst_complete branchSubst
                     then Inl [TyErr_IncompleteTypeArgument loc]
+                    \<comment> \<open>The branches are value positions, so must have complete type
+                        (in NotGhost code).\<close>
+                    else if ghost = NotGhost
+                            \<and> \<not> is_complete_type (apply_subst branchSubst thenTy)
+                    then Inl [TyErr_IncompleteArrayType loc]
                     else
                     let resultTy = apply_subst branchSubst thenTy;
                         newThen' = apply_subst_to_term branchSubst newThen;
@@ -1044,7 +1054,11 @@ where
              in (case elab_term env' elabEnv ghost body next_mv1 of
                   Inl errs \<Rightarrow> Inl errs
                 | Inr (bodyTm, bodyTy, next_mv2) \<Rightarrow>
-                    Inr (CoreTm_Let varName rhsTm bodyTm, bodyTy, next_mv2)))"
+                    \<comment> \<open>The body (unlike the rhs) is a value position, so must have
+                       complete type in NotGhost code.\<close>
+                    if ghost = NotGhost \<and> \<not> is_complete_type bodyTy
+                    then Inl [TyErr_IncompleteArrayType loc]
+                    else Inr (CoreTm_Let varName rhsTm bodyTm, bodyTy, next_mv2)))"
 
   (* Quantifier: ghost-only, body must be Bool. The bound variable is a const
      local, as for Let. *)
@@ -1100,6 +1114,10 @@ where
     (case elab_term_list env elabEnv ghost tms next_mv of
       Inl errs \<Rightarrow> Inl errs
     | Inr (newTms, tys, next_mv') \<Rightarrow>
+        \<comment> \<open>Tuple fields are value positions, so must have complete type in NotGhost code\<close>
+        if ghost = NotGhost \<and> \<not> list_all is_complete_type tys
+        then Inl [TyErr_IncompleteArrayType loc]
+        else
         let names = tuple_field_names (length tms) in
         Inr (CoreTm_Record (zip names newTms),
              CoreTy_Record (zip names tys),
@@ -1113,6 +1131,10 @@ where
         (case elab_term_list env elabEnv ghost (map snd flds) next_mv of
           Inl errs \<Rightarrow> Inl errs
         | Inr (newTms, tys, next_mv') \<Rightarrow>
+            \<comment> \<open>Record fields are value positions, so must have complete type in NotGhost code\<close>
+            if ghost = NotGhost \<and> \<not> list_all is_complete_type tys
+            then Inl [TyErr_IncompleteArrayType loc]
+            else
             let names = map fst flds in
             Inr (CoreTm_Record (zip names newTms),
                  CoreTy_Record (zip names tys),
@@ -1143,7 +1165,11 @@ where
                           let coercedUpdates = zip (map fst flds) coercedTms;
                               (resultTm, resultTy) =
                                 build_updated_record finalSubst parentTm parentFields coercedUpdates
-                          in Inr (resultTm, resultTy, next_mv2))))
+                          \<comment> \<open>In NotGhost code, record fields can't have incomplete type.
+                             It suffices to check the result type.\<close>
+                          in if ghost = NotGhost \<and> \<not> is_complete_type resultTy
+                             then Inl [TyErr_IncompleteArrayType loc]
+                             else Inr (resultTm, resultTy, next_mv2))))
           | _ \<Rightarrow> Inl [TyErr_NotARecordType loc parentTy])))"
 
   (* Tuple projection: tuples are records with synthetic field names "0", "1", ... *)
@@ -1199,6 +1225,8 @@ where
 
      The type of the match is the first arm's body type. Every arm body is
      converted to it, using the same implicit conversions as function arguments.
+     The arm bodies are value positions, so in executable code the type of the match
+     must be complete.
 
      The result is handed off to finalize_match_term (which translates
      DecPatterns to CorePatterns and emits the binder-projection Lets). *)
@@ -1230,6 +1258,10 @@ where
                            (replicate (length bodyTms) (hd bodyTys)) fmempty of
                       Inl errs \<Rightarrow> Inl errs
                     | Inr (coercedBodies, finalSubst) \<Rightarrow>
+                        if ghost = NotGhost
+                           \<and> \<not> is_complete_type (apply_subst finalSubst (hd bodyTys))
+                        then Inl [TyErr_IncompleteArrayType loc]
+                        else
                         finalize_match_term loc scrutTm dps coercedBodies
                           (apply_subst finalSubst (hd bodyTys)) mv2))))"
 

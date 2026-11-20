@@ -61,11 +61,14 @@ next
 qed
 
 (* A term tree whose tests are well-typed and non-empty, and whose leaves all
-   have type ty, translates to a term of type ty. *)
+   have type ty, translates to a term of type ty. Every level of the tree is a
+   match whose arms have type ty, so ty must be complete in executable code
+   (rule R2), as it is when the leaves are the arms of a well-typed match. *)
 lemma match_tree_to_term_type:
   assumes "arm_patterns_compatible env ghost t"
       and "match_tree_tests_ok (\<lambda>_. True) t"
       and "\<And>body. body \<in> match_tree_bodies t \<Longrightarrow> core_term_type env ghost body = Some ty"
+      and "complete_if_executable ghost ty"
   shows "core_term_type env ghost (match_tree_to_term t) = Some ty"
   using assms
 proof (induction t)
@@ -90,7 +93,7 @@ next
     from tests arm_in show "match_tree_tests_ok (\<lambda>_. True) t" by (auto simp: list_all_iff)
     fix body assume "body \<in> match_tree_bodies t"
     with arm_in show "core_term_type env ghost body = Some ty" by (intro MT_Test.prems(3)) auto
-  qed
+  qed (rule MT_Test.prems(4))
   have pats: "list_all (\<lambda>p. pattern_compatible env p sTy) (map fst ?arms')"
     using arms_ok by (auto simp: list_all_iff)
   have ne': "?arms' \<noteq> []" using ne by simp
@@ -105,7 +108,7 @@ next
   have tl_ty: "list_all (\<lambda>body. core_term_type env ghost body = Some ty) (tl (map snd ?arms'))"
     using all_ty by (cases arms) auto
   show ?case
-    using s_ty pats ne' hd_ty tl_ty by (simp add: Let_def)
+    using s_ty pats ne' hd_ty tl_ty MT_Test.prems(4) by (simp add: Let_def)
 qed
 
 (* A statement tree, with the ghost flag of the original match, translates to
@@ -168,6 +171,7 @@ theorem compile_match_term_type:
       and pats: "list_all (\<lambda>(p, _). pattern_compatible env p scrutTy) arms"
       and wf: "tyenv_well_formed env"
       and bodies: "\<And>p body. (p, body) \<in> set arms \<Longrightarrow> core_term_type env ghost body = Some ty"
+      and cp: "complete_if_executable ghost ty"
   shows "core_term_type env ghost (compile_match_term scrut arms) = Some ty"
 proof -
   have bodies': "core_term_type env ghost body = Some ty"
@@ -180,7 +184,7 @@ proof -
   proof (cases "compile_match_tree scrut arms")
     case (MT_Leaf body)
     have "body \<in> match_tree_bodies (compile_match_tree scrut arms)" unfolding MT_Leaf by simp
-    from bodies'[OF this] scrut show ?thesis
+    from bodies'[OF this] scrut cp show ?thesis
       unfolding compile_match_term_def MT_Leaf by (simp add: Let_def)
   next
     case (MT_Test sc tarms)
@@ -190,7 +194,7 @@ proof -
         by (rule compile_match_tree_arm_patterns_compatible[OF scrut ne pats wf])
       show "match_tree_tests_ok (\<lambda>_. True) (compile_match_tree scrut arms)"
         by (rule compile_match_tree_tests_ok[OF _ _ ne]) simp_all
-    qed (rule bodies')
+    qed (rule bodies', assumption, rule cp)
     thus ?thesis unfolding compile_match_term_def MT_Test by simp
   qed
 qed
@@ -271,7 +275,8 @@ next
       rt: "ghost = NotGhost \<longrightarrow> is_runtime_type env elemTy" and
       all: "list_all (\<lambda>tm. core_term_type env ghost tm = Some elemTy) tms" and
       len: "int_in_range (int_range Unsigned IntBits_64) (int (length tms))" and
-      ty_eq: "ty = CoreTy_Array elemTy [CoreDim_Fixed (int (length tms))]"
+      ty_eq: "ty = CoreTy_Array elemTy [CoreDim_Fixed (int (length tms))]" and
+      elem_cp: "complete_if_executable ghost elemTy"
     by (auto split: if_splits)
   have all': "list_all (\<lambda>tm. core_term_type env ghost tm = Some elemTy) (map match_compile_term tms)"
     unfolding list_all_iff
@@ -284,7 +289,7 @@ next
       by (intro CoreTm_LitArray.IH[OF tin _ CoreTm_LitArray.prems(2)]) (auto simp: list_all_iff)
     thus "core_term_type env ghost tm' = Some elemTy" unfolding tm' .
   qed
-  show ?case using wk rt all' len ty_eq by simp
+  show ?case using wk rt all' len ty_eq elem_cp by simp
 next
   case (CoreTm_Var name)
   then show ?case by simp
@@ -326,8 +331,9 @@ next
                TE_GhostLocals := (if ghost = Ghost then finsert var (TE_GhostLocals env)
                                   else fminus (TE_GhostLocals env) {|var|}),
                TE_ConstLocals := finsert var (TE_ConstLocals env) \<rparr>)
-        ghost body = Some ty"
-    by (auto simp: Let_def split: option.splits)
+        ghost body = Some ty" and
+    body_cp: "complete_if_executable ghost ty"
+    by (auto simp: Let_def split: option.splits if_splits)
   let ?env' = "env \<lparr> TE_LocalVars := fmupd var rhsTy (TE_LocalVars env),
                      TE_GhostLocals := (if ghost = Ghost then finsert var (TE_GhostLocals env)
                                         else fminus (TE_GhostLocals env) {|var|}),
@@ -343,7 +349,7 @@ next
   have rhs': "core_term_type env ghost (match_compile_term rhs) = Some rhsTy" by simp
   from CoreTm_Let.IH(2)[OF body_ty wf'] CoreTm_Let.prems(3)
   have body': "core_term_type ?env' ghost (match_compile_term body) = Some ty" by simp
-  show ?case using rhs' body' by (simp add: Let_def)
+  show ?case using rhs' body' body_cp by (simp add: Let_def)
 next
   case (CoreTm_Quantifier q var varTy body)
   from CoreTm_Quantifier.prems(1) have g: "ghost = Ghost" by (cases ghost) simp_all
@@ -417,19 +423,22 @@ next
                                 \<or> dtName \<in> ghost_datatypes env))" and
     p_ty: "core_term_type env ghost payload
              = Some (apply_subst (fmap_of_list (zip tyvars tyArgs)) payloadTy)" and
+    p_cp: "complete_if_executable ghost
+             (apply_subst (fmap_of_list (zip tyvars tyArgs)) payloadTy)" and
     ty_eq: "ty = CoreTy_Datatype dtName tyArgs"
     by (auto simp: Let_def split: option.splits if_splits)
   from CoreTm_VariantCtor.IH[OF p_ty CoreTm_VariantCtor.prems(2)] CoreTm_VariantCtor.prems(3)
   have p': "core_term_type env ghost (match_compile_term payload)
               = Some (apply_subst (fmap_of_list (zip tyvars tyArgs)) payloadTy)" by simp
   show ?case
-    using ctor len wk cp rt p' ty_eq by (simp add: Let_def)
+    using ctor len wk cp rt p' p_cp ty_eq by (simp add: Let_def)
 next
   case (CoreTm_Record flds)
   let ?flds' = "map (\<lambda>(name, tm). (name, match_compile_term tm)) flds"
   from CoreTm_Record.prems(1) obtain tys where
     dist: "distinct (map fst flds)" and
     those1: "those (map (\<lambda>(name, tm). core_term_type env ghost tm) flds) = Some tys" and
+    flds_cp: "list_all (complete_if_executable ghost) tys" and
     ty_eq: "ty = CoreTy_Record (zip (map fst flds) tys)"
     by (auto split: option.splits if_splits)
   have "those (map (\<lambda>(name, tm). core_term_type env ghost (match_compile_term tm)) flds) = Some tys"
@@ -452,7 +461,7 @@ next
   have "core_term_type env ghost (CoreTm_Record ?flds') = Some ty"
     apply (subst core_term_type.simps)
     apply (unfold F T)
-    by (simp add: dist ty_eq)
+    by (simp add: dist ty_eq flds_cp)
   thus ?case by simp
 next
   case (CoreTm_RecordProj tm fldName)
@@ -509,7 +518,8 @@ next
     ne: "arms \<noteq> []" and
     pats: "list_all (\<lambda>p. pattern_compatible env p scrutTy) (map fst arms)" and
     hd_ty: "core_term_type env ghost (snd (hd arms)) = Some ty" and
-    tl_ty: "list_all (\<lambda>body. core_term_type env ghost body = Some ty) (tl (map snd arms))"
+    tl_ty: "list_all (\<lambda>body. core_term_type env ghost body = Some ty) (tl (map snd arms))" and
+    arms_cp: "complete_if_executable ghost ty"
     by (auto simp: Let_def split: option.splits if_splits)
   have bodies: "core_term_type env ghost b = Some ty" if arm_in: "(p, b) \<in> set arms" for p b
   proof -
@@ -552,14 +562,14 @@ next
     have pats': "list_all (\<lambda>p. pattern_compatible env p scrutTy) (map fst ?arms')"
       using pats by (simp add: case_prod_unfold comp_def)
     have ne': "?arms' \<noteq> []" using ne by simp
-    from True s' pats' ne' hd' tl' show ?thesis by (simp add: Let_def)
+    from True s' pats' ne' hd' tl' arms_cp show ?thesis by (simp add: Let_def)
   next
     case False
     have ne': "?arms' \<noteq> []" using ne by simp
     have pats': "list_all (\<lambda>(p, _). pattern_compatible env p scrutTy) ?arms'"
       using pats by (auto simp: list_all_iff)
     have "core_term_type env ghost (compile_match_term (match_compile_term scrut) ?arms') = Some ty"
-      by (rule compile_match_term_type[OF s' ne' pats' CoreTm_Match.prems(2)])
+      by (rule compile_match_term_type[OF s' ne' pats' CoreTm_Match.prems(2) _ arms_cp])
          (use bodies' in auto)
     with False show ?thesis by simp
   qed

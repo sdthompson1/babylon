@@ -206,6 +206,57 @@ proof -
   from fn_lookup len_ty wk cp len_tm ty_eq args_g refs_g show ?thesis by blast
 qed
 
+(* The same facts, with each argument typed in the mode of its parameter (the
+   mode in which the interpreter evaluates it), and the fact that executable
+   code does not call a ghost function. *)
+lemma core_impure_call_type_fn_facts_modes:
+  assumes "core_impure_call_type env ghost fnName tyArgs tmArgs = Some ty"
+  shows "\<exists>funInfo.
+            fmlookup (TE_Functions env) fnName = Some funInfo
+            \<and> length tyArgs = length (FI_TyArgs funInfo)
+            \<and> list_all (is_well_kinded env) tyArgs
+            \<and> list_all is_complete_type tyArgs
+            \<and> length tmArgs = length (FI_TmArgs funInfo)
+            \<and> ty = apply_subst (fmap_of_list (zip (FI_TyArgs funInfo) tyArgs))
+                               (FI_ReturnType funInfo)
+            \<and> list_all2 (\<lambda>tm (pty, _, gh).
+                  core_term_type env (param_mode ghost gh) tm
+                    = Some (apply_subst (fmap_of_list (zip (FI_TyArgs funInfo) tyArgs)) pty))
+                tmArgs (FI_TmArgs funInfo)
+            \<and> (ghost = NotGhost \<longrightarrow> FI_Ghost funInfo = NotGhost)
+            \<and> (\<forall>i < length tmArgs.
+                 fst (snd (FI_TmArgs funInfo ! i)) = Ref
+                   \<longrightarrow> is_writable_lvalue env (tmArgs ! i))"
+proof -
+  from core_impure_call_type_fn_facts[OF assms] obtain funInfo where
+    fn_lookup: "fmlookup (TE_Functions env) fnName = Some funInfo" and
+    len_ty: "length tyArgs = length (FI_TyArgs funInfo)" and
+    wk: "list_all (is_well_kinded env) tyArgs" and
+    cp: "list_all is_complete_type tyArgs" and
+    ng: "ghost = NotGhost \<longrightarrow> FI_Ghost funInfo \<noteq> Ghost" and
+    len_tm: "length tmArgs = length (FI_TmArgs funInfo)" and
+    ty_eq: "ty = apply_subst (fmap_of_list (zip (FI_TyArgs funInfo) tyArgs))
+                             (FI_ReturnType funInfo)" and
+    args: "list_all2 (\<lambda>tm (expectedTy, mode). core_term_type env mode tm = Some expectedTy) tmArgs
+                (zip (map (\<lambda>(ty, _). apply_subst (fmap_of_list (zip (FI_TyArgs funInfo) tyArgs)) ty)
+                          (FI_TmArgs funInfo))
+                     (map (\<lambda>(_, _, gh). param_mode ghost gh) (FI_TmArgs funInfo)))" and
+    refs: "\<forall>i < length tmArgs.
+                 fst (snd (FI_TmArgs funInfo ! i)) = Ref
+                   \<longrightarrow> is_writable_lvalue env (tmArgs ! i)
+                       \<and> ghost_lvalue_ok env (param_mode ghost (snd (snd (FI_TmArgs funInfo ! i))))
+                                          (tmArgs ! i)"
+    by blast
+  note args_m = args_typed_param_modes[OF args]
+  from ng have ng': "ghost = NotGhost \<longrightarrow> FI_Ghost funInfo = NotGhost"
+    by (cases "FI_Ghost funInfo") auto
+  from refs have refs_g: "\<forall>i < length tmArgs.
+                 fst (snd (FI_TmArgs funInfo ! i)) = Ref
+                   \<longrightarrow> is_writable_lvalue env (tmArgs ! i)"
+    by blast
+  from fn_lookup len_ty wk cp len_tm ty_eq args_m ng' refs_g show ?thesis by blast
+qed
+
 (* The return type produced by core_impure_call_type is well-kinded (and, in
    NotGhost mode, a runtime type) in a well-formed env. *)
 lemma core_impure_call_type_well_kinded_and_runtime:

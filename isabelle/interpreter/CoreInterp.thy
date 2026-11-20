@@ -261,10 +261,11 @@ qed
 (* Array helpers *)
 (* ========================================================================== *)
 
-(* Make a one-dimensional CV_Array of values *)
+(* Make a one-dimensional CV_Array of values, as a fixed-sized array (so that the
+   allocatable flag is False). *)
 fun make_1d_array :: "CoreValue list \<Rightarrow> CoreValue" where
   "make_1d_array vals = 
-    CV_Array [int (length vals)] 
+    CV_Array False [int (length vals)]
              (fmap_of_list (zip (map (\<lambda>i.[int i]) [0..<length vals]) vals))"
 
 (* Convert a list of CV_FiniteInt u64 values to a list of ints, or return a type error *)
@@ -330,12 +331,18 @@ fun get_value_at_path :: "CoreValue \<Rightarrow> LValuePath list \<Rightarrow> 
 | "get_value_at_path (CV_Variant ctorName payload) (LVPath_VariantProj expectedCtor # rest) =
     (if ctorName = expectedCtor then get_value_at_path payload rest
     else Inl RuntimeError)"   (* variant projection from wrong ctor *)
-| "get_value_at_path (CV_Array _ elementMap) (LVPath_ArrayProj indices # rest) =
+| "get_value_at_path (CV_Array _ _ elementMap) (LVPath_ArrayProj indices # rest) =
     (case fmlookup elementMap indices of
       Some val \<Rightarrow> get_value_at_path val rest
     | None \<Rightarrow> Inl RuntimeError)"    (* array index out of bounds *)
-| "get_value_at_path (CV_Array sizes elementMap) (LVPath_ArrayCast dims # rest) =
-    (if sizes_match_dims sizes dims then get_value_at_path (CV_Array sizes elementMap) rest
+| "get_value_at_path (CV_Array allocatable sizes elementMap) (LVPath_ArrayCast dims # rest) =
+    \<comment> \<open>A cast to T[*] from an array of type T[n] or T[] is a TypeError.
+        A cast to T[n] for an array whose runtime size is not n is a RuntimeError.
+        Otherwise, the CV_Array's allocatable-flag is updated (to reflect the result of
+        the cast), then get_value_at_path continues with the rest of the path.\<close>
+    (if allocatable_dims dims \<and> \<not> allocatable then Inl TypeError
+     else if sizes_match_dims sizes dims then
+       get_value_at_path (CV_Array (allocatable_dims dims) sizes elementMap) rest
      else Inl RuntimeError)"    (* array's runtime sizes don't match the cast's dims *)
 | "get_value_at_path _ _ = Inl TypeError"   (* wrong kind of projection for value *)
 
@@ -355,25 +362,36 @@ fun update_value_at_path :: "CoreValue \<Rightarrow> LValuePath list \<Rightarro
         Inr updated_val \<Rightarrow> Inr (CV_Variant ctor_name updated_val)
       | Inl err \<Rightarrow> Inl err)
     else Inl RuntimeError)"  (* ctor name didn't match *)
-| "update_value_at_path (CV_Array sizes elementMap) (LVPath_ArrayProj indices # rest) new_val =
+| "update_value_at_path (CV_Array allocatable sizes elementMap) (LVPath_ArrayProj indices # rest) new_val =
     (case fmlookup elementMap indices of
       Some old_val \<Rightarrow>
         (case update_value_at_path old_val rest new_val of
-          Inr updated_val \<Rightarrow> Inr (CV_Array sizes (fmupd indices updated_val elementMap))
+          Inr updated_val \<Rightarrow>
+            Inr (CV_Array allocatable sizes (fmupd indices updated_val elementMap))
         | Inl err \<Rightarrow> Inl err)
     | None \<Rightarrow> Inl RuntimeError)"  (* array index out of bounds *)
-| "update_value_at_path (CV_Array sizes elementMap) (LVPath_ArrayCast dims # rest) new_val =
-    \<comment> \<open>The runtime array size must match the cast's dims, as for reads.
-        In addition, writing through an LVPath_ArrayCast is not allowed to change the
-        runtime size of the array (e.g., if you have a `T[]` ref to a size-3 array, you
-        are not allowed to overwrite it with a size-5 array, because the original array
-        might not have been resizable).\<close>
-    (if sizes_match_dims sizes dims then
-      (case update_value_at_path (CV_Array sizes elementMap) rest new_val of
+| "update_value_at_path (CV_Array allocatable sizes elementMap) (LVPath_ArrayCast dims # rest) new_val =
+    \<comment> \<open>A cast to T[*] from an array of type T[n] or T[] is a TypeError.
+        A cast to T[n] for an array whose runtime size is not n is a RuntimeError.
+
+        Otherwise, the cast is performed (by updating the allocatable-flag), the casted
+        array value is updated (by a recursive call to update_value_at_path with the rest
+        of the path), and then the cast is 'undone' (by resetting the flag back how it
+        was originally).
+
+        If the update changed the size of the array, this is a RuntimeError. This prevents
+        a program from e.g. casting a T[3] array to T[], and then assigning a T[5] array to
+        it (which would break type soundness). This can happen in Ghost code. (In NotGhost
+        code, assignments at incomplete type are not allowed, so that assignment would not
+        typecheck.)\<close>
+    (if allocatable_dims dims \<and> \<not> allocatable then Inl TypeError
+     else if sizes_match_dims sizes dims then
+      (case update_value_at_path (CV_Array (allocatable_dims dims) sizes elementMap) rest new_val of
         Inr updated_val \<Rightarrow>
           (case updated_val of
-            CV_Array sizes' elementMap' \<Rightarrow>
-              if sizes' = sizes then Inr (CV_Array sizes' elementMap') else Inl RuntimeError
+            CV_Array _ sizes' elementMap' \<Rightarrow>
+              if sizes' = sizes then Inr (CV_Array allocatable sizes' elementMap')
+              else Inl RuntimeError
           | _ \<Rightarrow> Inl TypeError)   \<comment> \<open>non-array written through an array cast\<close>
       | Inl err \<Rightarrow> Inl err)
      else Inl RuntimeError)"
@@ -397,12 +415,12 @@ fun type_at_path :: "CoreTyEnv \<Rightarrow> CoreType \<Rightarrow> LValuePath l
     | None \<Rightarrow> None)"
 | "type_at_path env (CoreTy_Array elemTy dims) (LVPath_ArrayProj _ # rest) =
     type_at_path env elemTy rest"
-  \<comment> \<open>An array cast step retypes the array at the cast's dims (same element
-      type). The dims must be well-kinded so that the value is well-typed at
-      the new type. (Whether the cast direction is admissible, dim_cast_ok, isn't
-      checked here; we rely on the typechecker for that.)\<close>
+  \<comment> \<open>An array cast step changes the dimensions (e.g. from T[*] to T[]) while keeping
+      the element type the same. The new dims must be well-kinded, and the cast must not
+      convert non-allocatable dimensions to allocatable (get_value_at_path and
+      update_value_at_path give TypeError for that cast).\<close>
 | "type_at_path env (CoreTy_Array elemTy dims) (LVPath_ArrayCast dims' # rest) =
-    (if array_dims_well_kinded dims'
+    (if array_dims_well_kinded dims' \<and> (allocatable_dims dims' \<longrightarrow> allocatable_dims dims)
      then type_at_path env (CoreTy_Array elemTy dims') rest
      else None)"
 | "type_at_path _ _ (_ # _) = None"
@@ -415,7 +433,7 @@ proof (induction p arbitrary: ty)
 next
   case (Cons step rest)
   show ?case
-    by (cases ty; cases step) (simp_all add: Cons.IH split: option.splits)
+    by (cases ty; cases step) (auto simp: Cons.IH split: option.splits)
 qed
 
 (* Lemma: type_at_path does not depend on TE_ProofTopLevel. *)
@@ -426,7 +444,7 @@ proof (induction p arbitrary: ty)
 next
   case (Cons step rest)
   show ?case
-    by (cases ty; cases step) (simp_all add: Cons.IH split: option.splits)
+    by (cases ty; cases step) (auto simp: Cons.IH split: option.splits)
 qed
 
 
@@ -481,13 +499,15 @@ fun bind_ref :: "string \<Rightarrow> (nat \<times> LValuePath list) \<Rightarro
 (* Restore scope after exiting a block:
    - old_state: the state before entering the scope
    - new_state: the state after executing the inner scope
-   Returns: new_state with locals/refs restored and store truncated *)
+   Returns: new_state with locals/refs restored and store truncated. The
+   type arguments and the ghost mode of the old state are put back too. *)
 fun restore_scope :: "'w InterpState \<Rightarrow> 'w InterpState \<Rightarrow> 'w InterpState" where
   "restore_scope old_state new_state =
     new_state \<lparr> IS_Locals := IS_Locals old_state,
                 IS_Refs := IS_Refs old_state,
                 IS_ConstLocals := IS_ConstLocals old_state,
                 IS_TyArgs := IS_TyArgs old_state,
+                IS_Ghost := IS_Ghost old_state,
                 IS_Store := take (length (IS_Store old_state)) (IS_Store new_state) \<rparr>"
 
 (* Exchange values at two lvalue locations *)
@@ -526,26 +546,27 @@ fun is_pure_fun :: "'w InterpState \<Rightarrow> string \<Rightarrow> bool" wher
   "is_pure_fun state fnName =
     (case fmlookup (IS_Functions state) fnName of
       Some funInfo \<Rightarrow> 
-        (\<not> list_ex (\<lambda>(_, vr). vr = Ref) (IF_Args funInfo))
+        (\<not> list_ex (\<lambda>(_, vr, _). vr = Ref) (IF_Args funInfo))
         \<and> (\<not> IF_Impure funInfo)
     | None \<Rightarrow> False)"
 
 (* Add a single function argument to the state. *)
 (* Takes: (parameter info, lvalue result, rvalue result) and current state
-   Returns: updated state, or error *)
-fun process_one_arg :: "((string \<times> VarOrRef)
+   Returns: updated state, or error
+   The parameter's ghost flag is not used here. *)
+fun process_one_arg :: "((string \<times> VarOrRef \<times> GhostOrNot)
                         \<times> (InterpError + (nat \<times> LValuePath list))
                         \<times> (InterpError + CoreValue))
                 \<Rightarrow> InterpError + 'w InterpState
                 \<Rightarrow> InterpError + 'w InterpState" where
   "process_one_arg _ (Inl err) = Inl err"
-| "process_one_arg ((name, Var), _, Inr val) (Inr state) =
+| "process_one_arg ((name, Var, _), _, Inr val) (Inr state) =
     Inr (bind_const_local name val state)"
-| "process_one_arg ((name, Var), _, Inl err) _ = Inl err"
-| "process_one_arg ((name, Ref), Inr (addr, path), Inr _) (Inr state) =
+| "process_one_arg ((name, Var, _), _, Inl err) _ = Inl err"
+| "process_one_arg ((name, Ref, _), Inr (addr, path), Inr _) (Inr state) =
     Inr (bind_ref name (addr, path) state)"
-| "process_one_arg ((name, Ref), Inl err, _) _ = Inl err"
-| "process_one_arg ((name, Ref), _, Inl err) _ = Inl err"
+| "process_one_arg ((name, Ref, _), Inl err, _) _ = Inl err"
+| "process_one_arg ((name, Ref, _), _, Inl err) _ = Inl err"
 
 (* Once an error has occurred, folding further arguments keeps it. *)
 lemma fold_process_one_arg_error:
@@ -613,9 +634,10 @@ where
        (case default_value fuel state elemTy of
          Inl err \<Rightarrow> Inl err
        | Inr ev \<Rightarrow>
-           Inr (CV_Array sizes (fmap_of_list (map (\<lambda>idx. (idx, ev)) (all_indices sizes)))))
+           Inr (CV_Array (allocatable_dims dims) sizes
+                  (fmap_of_list (map (\<lambda>idx. (idx, ev)) (all_indices sizes)))))
      else
-       Inr (CV_Array (replicate (length dims) 0) fmempty))"
+       Inr (CV_Array (allocatable_dims dims) (replicate (length dims) 0) fmempty))"
 | "default_value (Suc _) _ CoreTy_MathInt = Inr (CV_Int 0)"
 | "default_value (Suc _) _ CoreTy_MathReal = Inr (CV_Real 0)"
 | "default_value (Suc _) _ (CoreTy_Var _) = Inl TypeError"
@@ -643,185 +665,315 @@ termination by lexicographic_order
 (* Allocated *)
 (* ========================================================================== *)
 
-(* Combine the results of checking each component: an error if any component
-   errored, otherwise true iff any component was true. *)
-fun any_allocated :: "(InterpError + bool) list \<Rightarrow> InterpError + bool" where
-  "any_allocated [] = Inr False"
-| "any_allocated (Inl err # _) = Inl err"
-| "any_allocated (Inr b # rest) =
-    (case any_allocated rest of
-      Inl err \<Rightarrow> Inl err
-    | Inr b' \<Rightarrow> Inr (b \<or> b'))"
-
-(* Does a value of the given (ground) type currently hold allocated storage?
-   The type is needed because a CoreValue does not record whether an array is
-   allocatable or fixed-size: an allocatable array and a fixed-size array of
-   the same size are the same CoreValue.
-     - An allocatable array is allocated iff all of its sizes are non-zero.
-     - Any other array, a record or a variant is allocated iff some component
-       (element, field or payload) is.
-        - Note: technically this is incorrect for incomplete-typed ("T[]") arrays,
-          as "allocated" is undefined on these. But a well-typed program will never
-          evaluate "allocated" at an incomplete type, so this does not matter.
-     - Scalars are never allocated.
-     - A value CV_Extern n l k of an extern type is decided by the allocation
-       oracle, except in cases where the type already implies that the value
-       is unallocated (l = CoreAlloc_Never, or l = CoreAlloc_IfNotDefault and k = 0);
-       in such cases the oracle is "overruled" and we directly return False.
-   Recursion is on the value, so no fuel is needed. TypeError arises only for
-   a type variable or an unknown data constructor, neither of which can happen
-   for a well-typed value of a ground type. *)
-function is_allocated :: "(string, string \<times> string list \<times> CoreType) fmap
-    \<Rightarrow> (string \<Rightarrow> CoreAllocLevel \<Rightarrow> nat \<Rightarrow> bool)
-    \<Rightarrow> CoreValue \<Rightarrow> CoreType \<Rightarrow> InterpError + bool" where
-  "is_allocated ctors extAlloc (CV_Bool _) _ = Inr False"
-| "is_allocated ctors extAlloc (CV_FiniteInt _ _ _) _ = Inr False"
-| "is_allocated ctors extAlloc (CV_Int _) _ = Inr False"
-| "is_allocated ctors extAlloc (CV_Real _) _ = Inr False"
-| "is_allocated ctors extAlloc (CV_Record fieldValues) ty =
-    (case ty of
-      CoreTy_Record fieldTypes \<Rightarrow>
-        any_allocated
-          (map (\<lambda>p. is_allocated ctors extAlloc (snd (fst p)) (snd (snd p)))
-               (zip fieldValues fieldTypes))
-    | _ \<Rightarrow> Inl TypeError)"
-| "is_allocated ctors extAlloc (CV_Variant ctor payload) ty =
-    (case ty of
-      CoreTy_Datatype _ argTypes \<Rightarrow>
-        (case fmlookup ctors ctor of
-          Some (_, tyvars, payloadTy) \<Rightarrow>
-            if length tyvars = length argTypes then
-              is_allocated ctors extAlloc payload
-                (apply_subst (fmap_of_list (zip tyvars argTypes)) payloadTy)
-            else Inl TypeError
-        | None \<Rightarrow> Inl TypeError)
-    | _ \<Rightarrow> Inl TypeError)"
-| "is_allocated ctors extAlloc (CV_Array sizes valuesMap) ty =
-    (case ty of
-      CoreTy_Array elemTy dims \<Rightarrow>
-        if list_ex (\<lambda>d. d = CoreDim_Allocatable) dims
-        then Inr (list_all (\<lambda>s. s \<noteq> 0) sizes)
-        else any_allocated
-               (map (\<lambda>idx. case fmlookup valuesMap idx of
-                              Some v \<Rightarrow> is_allocated ctors extAlloc v elemTy
-                            | None \<Rightarrow> Inl TypeError)
-                    (all_indices sizes))
-    | _ \<Rightarrow> Inl TypeError)"
-| "is_allocated ctors extAlloc (CV_Extern n l k) _ =
-    Inr (case l of
-           CoreAlloc_Never \<Rightarrow> False
-         | CoreAlloc_IfNotDefault \<Rightarrow> k \<noteq> 0 \<and> extAlloc n l k
-         | CoreAlloc_Unknown \<Rightarrow> extAlloc n l k)"
+(* Does a value currently hold allocated storage?
+    - An array of type T[*] is allocated iff all of its sizes are non-zero.
+    - Any other array, a record or a variant is allocated iff some component (element,
+      field or payload) is.
+    - Scalars are never allocated.
+    - A value CV_Extern n l k of an extern type is decided by the allocation oracle, except
+      in cases where the type already implies that the value is unallocated
+      (l = CoreAlloc_Never, or l = CoreAlloc_IfNotDefault and k = 0); in such cases the
+      oracle is "overruled" and we directly return False.
+   Notes:
+    - Recursion is on the value, so no fuel is needed.
+    - We don't need to be told the value's type; in particular, we can tell whether an array
+      has type T[*] by looking at its allocatable-flag.
+    - Technically speaking, it is incorrect for us to give a definition of "allocated" on a
+      T[]-array, because "allocated" is not even well-typed for such arrays. But a well-typed
+      program will never evaluate "allocated" at an incomplete type, so this does not matter
+      in practice. *)
+function is_allocated :: "(string \<Rightarrow> CoreAllocLevel \<Rightarrow> nat \<Rightarrow> bool) \<Rightarrow> CoreValue \<Rightarrow> bool" where
+  "is_allocated extAlloc (CV_Bool _) = False"
+| "is_allocated extAlloc (CV_FiniteInt _ _ _) = False"
+| "is_allocated extAlloc (CV_Int _) = False"
+| "is_allocated extAlloc (CV_Real _) = False"
+| "is_allocated extAlloc (CV_Record fieldValues) =
+    list_ex (\<lambda>fld. is_allocated extAlloc (snd fld)) fieldValues"
+| "is_allocated extAlloc (CV_Variant ctor payload) = is_allocated extAlloc payload"
+| "is_allocated extAlloc (CV_Array allocatable sizes valuesMap) =
+    (if allocatable
+     then list_all (\<lambda>s. s \<noteq> 0) sizes
+     else list_ex (\<lambda>idx. case fmlookup valuesMap idx of
+                            Some v \<Rightarrow> is_allocated extAlloc v
+                          | None \<Rightarrow> False)
+                  (all_indices sizes))"
+| "is_allocated extAlloc (CV_Extern n l k) =
+    (case l of
+       CoreAlloc_Never \<Rightarrow> False
+     | CoreAlloc_IfNotDefault \<Rightarrow> k \<noteq> 0 \<and> extAlloc n l k
+     | CoreAlloc_Unknown \<Rightarrow> extAlloc n l k)"
   by pat_completeness auto
 
 termination is_allocated
-proof (relation "measure (\<lambda>(ctors, extAlloc, val, ty). size val)")
-  show "wf (measure (\<lambda>(ctors, extAlloc, val, ty). size val))" by simp
+proof (relation "measure (\<lambda>(extAlloc, val). size val)")
+  show "wf (measure (\<lambda>(extAlloc, val). size val))" by simp
 next
-  \<comment> \<open>Record case: p is a (value, type) pair from the zip, so fst p is a field.\<close>
-  fix ctors :: "(string, string \<times> string list \<times> CoreType) fmap"
+  \<comment> \<open>Record case: fld is a (name, value) pair of the record.\<close>
   fix extAlloc :: "string \<Rightarrow> CoreAllocLevel \<Rightarrow> nat \<Rightarrow> bool"
   fix fieldValues :: "(string \<times> CoreValue) list"
-  fix ty :: CoreType
-  fix fieldTypes :: "(string \<times> CoreType) list"
-  fix p :: "(string \<times> CoreValue) \<times> (string \<times> CoreType)"
-  assume "p \<in> set (zip fieldValues fieldTypes)"
-  hence "fst p \<in> set fieldValues" by (metis set_zip_leftD prod.collapse)
-  hence "(fst (fst p), snd (fst p)) \<in> set fieldValues" by simp
-  hence "size (snd (fst p)) < size (CV_Record fieldValues)"
+  fix fld :: "string \<times> CoreValue"
+  assume "fld \<in> set fieldValues"
+  hence "(fst fld, snd fld) \<in> set fieldValues" by simp
+  hence "size (snd fld) < size (CV_Record fieldValues)"
     by (rule size_record_field)
-  thus "((ctors, extAlloc, snd (fst p), snd (snd p)), ctors, extAlloc, CV_Record fieldValues, ty)
-        \<in> measure (\<lambda>(ctors, extAlloc, val, ty). size val)"
+  thus "((extAlloc, snd fld), extAlloc, CV_Record fieldValues)
+        \<in> measure (\<lambda>(extAlloc, val). size val)"
     by simp
 next
   \<comment> \<open>Variant case: payload is a direct subterm.\<close>
-  fix ctors :: "(string, string \<times> string list \<times> CoreType) fmap"
   fix extAlloc :: "string \<Rightarrow> CoreAllocLevel \<Rightarrow> nat \<Rightarrow> bool"
   fix ctor :: string
   fix payload :: CoreValue
-  fix ty :: CoreType
-  fix x11 :: string
-  fix x12 :: "CoreType list"
-  fix x2 x y xa ya
-  show "((ctors, extAlloc, payload, apply_subst (fmap_of_list (zip xa x12)) ya),
-         ctors, extAlloc, CV_Variant ctor payload, ty)
-        \<in> measure (\<lambda>(ctors, extAlloc, val, ty). size val)"
+  show "((extAlloc, payload), extAlloc, CV_Variant ctor payload)
+        \<in> measure (\<lambda>(extAlloc, val). size val)"
     by simp
 next
   \<comment> \<open>Array case: element found by lookup.\<close>
-  fix ctors :: "(string, string \<times> string list \<times> CoreType) fmap"
   fix extAlloc :: "string \<Rightarrow> CoreAllocLevel \<Rightarrow> nat \<Rightarrow> bool"
+  fix allocatable :: bool
   fix sizes :: "int list"
   fix valuesMap :: "(int list, CoreValue) fmap"
-  fix ty :: CoreType
-  fix x71 :: CoreType
-  fix x72 :: "CoreDimension list"
   fix x :: "int list"
   fix x2 :: CoreValue
   assume "fmlookup valuesMap x = Some x2"
-  hence "size x2 < size (CV_Array sizes valuesMap)"
+  hence "size x2 < size (CV_Array allocatable sizes valuesMap)"
     by (rule size_array_lookup)
-  thus "((ctors, extAlloc, x2, x71), ctors, extAlloc, CV_Array sizes valuesMap, ty)
-        \<in> measure (\<lambda>(ctors, extAlloc, val, ty). size val)"
+  thus "((extAlloc, x2), extAlloc, CV_Array allocatable sizes valuesMap)
+        \<in> measure (\<lambda>(extAlloc, val). size val)"
     by simp
 qed
 
+(* A record is allocated iff one of its field values is. *)
+lemma is_allocated_Record:
+  "is_allocated extAlloc (CV_Record flds) \<longleftrightarrow> (\<exists>v \<in> snd ` set flds. is_allocated extAlloc v)"
+  by (auto simp: list_ex_iff)
+
+
 (* ========================================================================== *)
-(* Improper copies of allocated values *)
+(* Allocated values may not appear in value positions *)
 (* ========================================================================== *)
 
-(* The Core language imposes some rules on copying of allocated values:
-    1. The initializer in a Var variable declaration (CoreStmt_VarDecl) must not
-       be allocated.
-    2. The rhs value in an assigment (CoreStmt_Assign) must not be allocated.
-    3. Returned values (CoreStmt_Assign) must not be allocated.
+(* Every subterm of a term or statement sits in a "place position" or in a "value
+   position". In a place position, the enclosing construct only needs to know where
+   the thing is; in a value position, it needs the contents, to store them somewhere
+   else or to compute with them.
 
-   These rules only apply to NotGhost code; Ghost code may copy allocated values freely.
+   Core has the following rules about value positions - note that these apply in NotGhost
+   mode only (Ghost code can freely copy allocated values):
 
-   The rationale for the rules is that in the generated C code, an allocated value
-   is a descriptor holding a pointer to a heap block; copying such values would result
-   in two descriptors "owning" the same piece of heap memory, which would lead to
-   trouble later on.
+    R1. A value in a value position must not be allocated.
+    R2. A term in a value position must not have incomplete type (this is what allows R1
+        to be well-defined, since "allocated" is not defined at incomplete types; it is
+        enforced by the typechecker, not the interpreter).
+    R3. CoreTm_Default must not produce an allocated value, whatever position
+        it is in.
+    R4. A function called by executable code must not return an allocated value.
+        This holds for an extern function as well as for one with a Core body.
+
+   The rationale is that in compiled code, an "allocated" value contains an "owned" pointer
+   to a heap block (like a unique_ptr in C++). A value position (might) copy its term, and
+   copying an allocated value would lead to two pointers owning the same heap block, which
+   would lead to memory bugs (e.g. double-free, use-after-free) later on.
 
    Violation of the rules results in a RuntimeError, signalling undefined behaviour.
-   A (future) Core verifier will ensure that RuntimeErrors do not occur, provided that
-   all verification conditions are discharged.
+
+   Value positions are marked in the interpreter below by a call to the function
+   "value_position", which returns either the same value that was passed to it, or a
+   RuntimeError if the rule R1 was violated.
+
+   In executable code the operands of operators, index terms and conditions are
+   scalars, so the check cannot fail there; it is applied all the same, so that
+   every value position is visible in the text of the interpreter.
+
+   CoreStmt_Return makes no check of its own: the returned value is checked when
+   the call returns (R4, in call_body).
 
    There are not (yet) any rules to prevent memory leaks; for example, an assignment
    is currently allowed to "clobber" an allocated lhs, thus losing the pointer to it.
    This will be addressed as future work.
 *)
+definition value_position ::
+    "'w InterpState \<Rightarrow> InterpError + CoreValue \<Rightarrow> InterpError + CoreValue" where
+  "value_position state r =
+    (case r of
+       Inr v \<Rightarrow> if IS_Ghost state = NotGhost
+                   \<and> is_allocated (IS_ExternAlloc state) v
+                then Inl RuntimeError else Inr v
+     | Inl err \<Rightarrow> Inl err)"
 
-(* copy_check returns None if the given value (of the given type) may be copied, or
-   Some RuntimeError if it is an allocated value (and we are in NotGhost mode).
+(* The same check for a list of values, each of them in a value position. *)
+definition value_position_list ::
+    "'w InterpState \<Rightarrow> InterpError + CoreValue list \<Rightarrow> InterpError + CoreValue list" where
+  "value_position_list state r =
+    (case r of
+       Inr vs \<Rightarrow> if IS_Ghost state = NotGhost
+                    \<and> list_ex (is_allocated (IS_ExternAlloc state)) vs
+                 then Inl RuntimeError else Inr vs
+     | Inl err \<Rightarrow> Inl err)"
 
-   `ty` is the static type of the given value, possibly mentioning the current
-   function's type variables (which are resolved using IS_TyArgs state).
+lemma value_position_Inl [simp]: "value_position state (Inl err) = Inl err"
+  by (simp add: value_position_def)
 
-   In non-well-typed programs, is_allocated might fail with a TypeError - if so,
-   the error is passed back to the caller.
-*)
-fun copy_check :: "GhostOrNot \<Rightarrow> 'w InterpState \<Rightarrow> CoreType \<Rightarrow> CoreValue
-                   \<Rightarrow> InterpError option" where
-  "copy_check Ghost state ty val = None"
-| "copy_check NotGhost state ty val =
-    (case is_allocated (IS_DataCtors state) (IS_ExternAlloc state) val
-                       (apply_subst (IS_TyArgs state) ty) of
-       Inr True \<Rightarrow> Some RuntimeError
-     | Inr False \<Rightarrow> None
-     | Inl err \<Rightarrow> Some err)"
+lemma value_position_list_Inl [simp]: "value_position_list state (Inl err) = Inl err"
+  by (simp add: value_position_list_def)
 
-(* copy_check only looks at the datatype table, the allocation oracle and the
-   type arguments of the state. *)
-lemma copy_check_cong_state:
-  assumes "IS_DataCtors state' = IS_DataCtors state"
-      and "IS_ExternAlloc state' = IS_ExternAlloc state"
-      and "IS_TyArgs state' = IS_TyArgs state"
-  shows "copy_check ghost state' ty val = copy_check ghost state ty val"
-  using assms by (cases ghost) simp_all
+(* The check does nothing in ghost code. *)
+lemma value_position_Ghost [simp]:
+  "IS_Ghost state = Ghost \<Longrightarrow> value_position state r = r"
+  by (simp add: value_position_def split: sum.splits)
 
-lemma copy_check_Ghost [simp]: "copy_check Ghost state ty val = None"
-  by simp
+lemma value_position_list_Ghost [simp]:
+  "IS_Ghost state = Ghost \<Longrightarrow> value_position_list state r = r"
+  by (simp add: value_position_list_def split: sum.splits)
+
+(* A result that passes the check is the result that went in, and (in executable
+   code) it is not allocated. *)
+lemma value_position_Inr_iff:
+  "value_position state r = Inr v
+   \<longleftrightarrow> r = Inr v \<and> (IS_Ghost state = NotGhost \<longrightarrow> \<not> is_allocated (IS_ExternAlloc state) v)"
+  by (auto simp: value_position_def split: sum.splits)
+
+lemma value_position_list_Inr_iff:
+  "value_position_list state r = Inr vs
+   \<longleftrightarrow> r = Inr vs \<and> (IS_Ghost state = NotGhost
+                      \<longrightarrow> (\<forall>v \<in> set vs. \<not> is_allocated (IS_ExternAlloc state) v))"
+  by (auto simp: value_position_list_def list_ex_iff split: sum.splits)
+
+lemma value_position_InrD: "value_position state r = Inr v \<Longrightarrow> r = Inr v"
+  by (simp add: value_position_Inr_iff)
+
+lemma value_position_list_InrD: "value_position_list state r = Inr vs \<Longrightarrow> r = Inr vs"
+  by (simp add: value_position_list_Inr_iff)
+
+(* The check either passes its argument through, or replaces a successful result
+   by RuntimeError: that is the only error it adds. *)
+lemma value_position_cases:
+  obtains (same) "value_position state r = r"
+  | (error) v where "r = Inr v" and "value_position state r = Inl RuntimeError"
+proof (cases r)
+  case (Inl err)
+  then show ?thesis using same by simp
+next
+  case (Inr v)
+  show ?thesis
+  proof (cases "IS_Ghost state = NotGhost \<and> is_allocated (IS_ExternAlloc state) v")
+    case True
+    with Inr show ?thesis using error by (simp add: value_position_def)
+  next
+    case False
+    with Inr show ?thesis using same by (simp add: value_position_def)
+  qed
+qed
+
+lemma value_position_list_cases:
+  obtains (same) "value_position_list state r = r"
+  | (error) vs where "r = Inr vs" and "value_position_list state r = Inl RuntimeError"
+proof (cases r)
+  case (Inl err)
+  then show ?thesis using same by simp
+next
+  case (Inr vs)
+  show ?thesis
+  proof (cases "IS_Ghost state = NotGhost \<and> list_ex (is_allocated (IS_ExternAlloc state)) vs")
+    case True
+    with Inr show ?thesis using error by (simp add: value_position_list_def)
+  next
+    case False
+    with Inr show ?thesis using same by (simp add: value_position_list_def)
+  qed
+qed
+
+lemma value_position_Inl_iff:
+  "value_position state r = Inl err
+   \<longleftrightarrow> r = Inl err \<or> (err = RuntimeError \<and> (\<exists>v. r = Inr v \<and> IS_Ghost state = NotGhost
+                                               \<and> is_allocated (IS_ExternAlloc state) v))"
+  by (auto simp: value_position_def split: sum.splits)
+
+lemma value_position_list_Inl_iff:
+  "value_position_list state r = Inl err
+   \<longleftrightarrow> r = Inl err \<or> (err = RuntimeError \<and> (\<exists>vs. r = Inr vs \<and> IS_Ghost state = NotGhost
+                            \<and> (\<exists>v \<in> set vs. is_allocated (IS_ExternAlloc state) v)))"
+  by (auto simp: value_position_list_def list_ex_iff split: sum.splits)
+
+(* In particular the check neither adds nor hides a TypeError or an
+   InsufficientFuel. *)
+lemma value_position_eq_InsufficientFuel [simp]:
+  "value_position state r = Inl InsufficientFuel \<longleftrightarrow> r = Inl InsufficientFuel"
+  by (auto simp: value_position_Inl_iff)
+
+lemma value_position_eq_TypeError [simp]:
+  "value_position state r = Inl TypeError \<longleftrightarrow> r = Inl TypeError"
+  by (auto simp: value_position_Inl_iff)
+
+lemma value_position_list_eq_InsufficientFuel [simp]:
+  "value_position_list state r = Inl InsufficientFuel \<longleftrightarrow> r = Inl InsufficientFuel"
+  by (auto simp: value_position_list_Inl_iff)
+
+lemma value_position_list_eq_TypeError [simp]:
+  "value_position_list state r = Inl TypeError \<longleftrightarrow> r = Inl TypeError"
+  by (auto simp: value_position_list_Inl_iff)
+
+(* A value that is checked is the result of the check or is replaced by
+   RuntimeError. *)
+lemma value_position_Inr_cases:
+  obtains (ok) "value_position state (Inr v) = Inr v"
+  | (error) "value_position state (Inr v) = Inl RuntimeError"
+  by (rule value_position_cases[of state "Inr v"]) auto
+
+lemma value_position_list_Inr_cases:
+  obtains (ok) "value_position_list state (Inr vs) = Inr vs"
+  | (error) "value_position_list state (Inr vs) = Inl RuntimeError"
+  by (rule value_position_list_cases[of state "Inr vs"]) auto
+
+(* The check only looks at the mode and the allocation oracle of the state. *)
+lemma value_position_cong_state:
+  assumes "IS_Ghost state' = IS_Ghost state" and "IS_ExternAlloc state' = IS_ExternAlloc state"
+  shows "value_position state' r = value_position state r"
+  using assms by (cases r) (simp_all add: value_position_def)
+
+lemma value_position_list_cong_state:
+  assumes "IS_Ghost state' = IS_Ghost state" and "IS_ExternAlloc state' = IS_ExternAlloc state"
+  shows "value_position_list state' r = value_position_list state r"
+  using assms by (cases r) (simp_all add: value_position_list_def)
+
+(* So the check is the same after a change to any other part of the state, and
+   in particular in a state with a new local variable. *)
+lemma value_position_update_irrelevant [simp]:
+  "value_position (state \<lparr> IS_Globals := gl \<rparr>) = value_position state"
+  "value_position (state \<lparr> IS_Locals := lo \<rparr>) = value_position state"
+  "value_position (state \<lparr> IS_Refs := rf \<rparr>) = value_position state"
+  "value_position (state \<lparr> IS_Store := sto \<rparr>) = value_position state"
+  "value_position (state \<lparr> IS_ConstLocals := cl \<rparr>) = value_position state"
+  "value_position (state \<lparr> IS_TyArgs := ta \<rparr>) = value_position state"
+  "value_position (state \<lparr> IS_Functions := fs \<rparr>) = value_position state"
+  "value_position (state \<lparr> IS_World := w \<rparr>) = value_position state"
+  by (rule ext, rule value_position_cong_state; simp)+
+
+lemma value_position_list_update_irrelevant [simp]:
+  "value_position_list (state \<lparr> IS_Globals := gl \<rparr>) = value_position_list state"
+  "value_position_list (state \<lparr> IS_Locals := lo \<rparr>) = value_position_list state"
+  "value_position_list (state \<lparr> IS_Refs := rf \<rparr>) = value_position_list state"
+  "value_position_list (state \<lparr> IS_Store := sto \<rparr>) = value_position_list state"
+  "value_position_list (state \<lparr> IS_ConstLocals := cl \<rparr>) = value_position_list state"
+  "value_position_list (state \<lparr> IS_TyArgs := ta \<rparr>) = value_position_list state"
+  "value_position_list (state \<lparr> IS_Functions := fs \<rparr>) = value_position_list state"
+  "value_position_list (state \<lparr> IS_World := w \<rparr>) = value_position_list state"
+  by (rule ext, rule value_position_list_cong_state; simp)+
+
+lemma value_position_bind_const_local [simp]:
+  "value_position (bind_const_local varName val state) = value_position state"
+  by (rule ext, rule value_position_cong_state; simp add: Let_def)
+
+lemma value_position_bind_mutable_local [simp]:
+  "value_position (bind_mutable_local varName val state) = value_position state"
+  by (rule ext, rule value_position_cong_state; simp add: Let_def)
+
+(* A scalar is never allocated, so it passes the check. *)
+lemma value_position_Bool [simp]: "value_position state (Inr (CV_Bool b)) = Inr (CV_Bool b)"
+  by (simp add: value_position_def)
+
+lemma value_position_list_Nil [simp]: "value_position_list state (Inr []) = Inr []"
+  by (simp add: value_position_list_def)
 
 
 (* ========================================================================== *)
@@ -831,11 +983,14 @@ lemma copy_check_Ghost [simp]: "copy_check Ghost state ty val = None"
 (* Apply a cast to a value.
     - RuntimeError if the cast fails (overflow for casts to a finite integer type;
       array's runtime size doesn't match for array casts to CoreDim_Fixed).
-    - TypeError if the cast itself is invalid (only array or numeric targets are allowed).
+    - TypeError if the cast itself is invalid (only array or numeric targets are allowed,
+      and for array casts, T[]/T[n] to T[*] is illegal).
     - Otherwise: successful cast, returns the new value.
    A real cast to an integer type (finite or int) rounds downwards (towards minus
    infinity), i.e. takes the floor, before any range check. All other numeric
-   casts leave the numerical value unchanged. *)
+   casts leave the numerical value unchanged.
+   An array cast simply sets the array's allocatable flag appropriately for the new
+   type. *)
 fun cast_value :: "CoreType \<Rightarrow> CoreValue \<Rightarrow> InterpError + CoreValue" where
   "cast_value (CoreTy_FiniteInt sign bits) (CV_FiniteInt _ _ i) =
      (if int_fits sign bits i then Inr (CV_FiniteInt sign bits i)
@@ -855,8 +1010,9 @@ fun cast_value :: "CoreType \<Rightarrow> CoreValue \<Rightarrow> InterpError + 
 | "cast_value CoreTy_MathReal (CV_Int i) = Inr (CV_Real (of_int i))"
 | "cast_value CoreTy_MathReal (CV_Real r) = Inr (CV_Real r)"
 | "cast_value CoreTy_MathReal _ = Inl TypeError"
-| "cast_value (CoreTy_Array _ dims) (CV_Array sizes elems) =
-     (if sizes_match_dims sizes dims then Inr (CV_Array sizes elems)
+| "cast_value (CoreTy_Array _ dims) (CV_Array allocatable sizes elems) =
+     (if allocatable_dims dims \<and> \<not> allocatable then Inl TypeError
+      else if sizes_match_dims sizes dims then Inr (CV_Array (allocatable_dims dims) sizes elems)
       else Inl RuntimeError)"
 | "cast_value (CoreTy_Array _ _) _ = Inl TypeError"
 | "cast_value _ _ = Inl TypeError"
@@ -993,7 +1149,7 @@ and decreases_fields_error :: "(string \<times> CoreValue) list \<Rightarrow> In
 | "decreases_value_error (CV_Int i) = (if i < 0 then Some RuntimeError else None)"
 | "decreases_value_error (CV_Record flds) = decreases_fields_error flds"
 | "decreases_value_error (CV_Variant _ _) = Some TypeError"
-| "decreases_value_error (CV_Array _ _) = Some TypeError"
+| "decreases_value_error (CV_Array _ _ _) = Some TypeError"
 | "decreases_value_error (CV_Real _) = Some TypeError"
 
 | "decreases_fields_error [] = None"
@@ -1091,9 +1247,9 @@ lemma eval_decreases_Inl:
    that were used to generate the pre-call state; we just need to install them under different
    names (arg@@i, instead of the actual names from IF_Args). *)
 definition contract_pre_args ::
-    "(string \<times> VarOrRef) list \<Rightarrow> (InterpError + (nat \<times> LValuePath list)) list
+    "(string \<times> VarOrRef \<times> GhostOrNot) list \<Rightarrow> (InterpError + (nat \<times> LValuePath list)) list
      \<Rightarrow> (InterpError + CoreValue) list
-     \<Rightarrow> ((string \<times> VarOrRef) \<times> (InterpError + (nat \<times> LValuePath list))
+     \<Rightarrow> ((string \<times> VarOrRef \<times> GhostOrNot) \<times> (InterpError + (nat \<times> LValuePath list))
           \<times> (InterpError + CoreValue)) list" where
   "contract_pre_args args refResults valResults =
      zip (zip (contract_arg_names (length args)) (map snd args))
@@ -1103,17 +1259,18 @@ definition contract_pre_args ::
    for arg@@i (which now represents the value 'after' the call), but old@@i (the values before the
    call) and return (the function return value) as well. *)
 definition contract_post_args ::
-    "(string \<times> VarOrRef) list \<Rightarrow> (InterpError + (nat \<times> LValuePath list)) list
+    "(string \<times> VarOrRef \<times> GhostOrNot) list \<Rightarrow> (InterpError + (nat \<times> LValuePath list)) list
      \<Rightarrow> (InterpError + CoreValue) list \<Rightarrow> CoreValue
-     \<Rightarrow> ((string \<times> VarOrRef) \<times> (InterpError + (nat \<times> LValuePath list))
+     \<Rightarrow> ((string \<times> VarOrRef \<times> GhostOrNot) \<times> (InterpError + (nat \<times> LValuePath list))
           \<times> (InterpError + CoreValue)) list" where
   "contract_post_args args refResults valResults retVal =
      \<comment> \<open>First, we need the argument names (arg@@i, old@@i, return), which come from
         contract_post_names.\<close>
      zip (zip (contract_post_names (length args))
               \<comment> \<open>Next, we need the VarOrRef flag for each argument. arg@@i retains its flag
-                 from the original declaration; old@@i and return are always Var.\<close>
-              (map snd args @ replicate (Suc (length args)) Var))
+                 from the original declaration; old@@i and return are always Var. (Each
+                 comes with a ghost flag, which process_one_arg does not use.)\<close>
+              (map snd args @ replicate (Suc (length args)) (Var, Ghost)))
          \<comment> \<open>Now we pass the 'address and lvalue path' for each argument. This is only relevant for
             Ref arguments (process_one_arg ignores it for Var arguments), and it can be taken
             directly from refResults (this was computed before the call, but that's OK, because
@@ -1137,7 +1294,7 @@ definition contract_post_args ::
    if all conditions hold, or the error otherwise. *)
 definition check_conditions ::
     "('w InterpState \<Rightarrow> CoreTerm list \<Rightarrow> InterpError + CoreValue list) \<Rightarrow> CoreTerm list
-     \<Rightarrow> ((string \<times> VarOrRef) \<times> (InterpError + (nat \<times> LValuePath list))
+     \<Rightarrow> ((string \<times> VarOrRef \<times> GhostOrNot) \<times> (InterpError + (nat \<times> LValuePath list))
           \<times> (InterpError + CoreValue)) list
      \<Rightarrow> 'w InterpState \<Rightarrow> InterpError option" where
   "check_conditions ev tms args st =
@@ -1178,6 +1335,9 @@ lemma check_conditions_Nil [simp]: "check_conditions ev [] args st = None"
         calling frame's local variables removed)
     - bodyResult: the result of running the function body
 
+   Contracts are ghost code, so both checks below evaluate their terms in a state
+   with IS_Ghost := Ghost.
+
    We first check all the preconditions of f, in the cleared state. If any fail, the error is
    returned as the result, and bodyResult is not used.
 
@@ -1193,7 +1353,8 @@ definition checked_call ::
      \<Rightarrow> InterpError + ('w InterpState \<times> CoreValue)" where
   "checked_call ev f refResults valResults calleeTyArgs clearedState bodyResult =
     (case check_conditions ev (IF_Requires f)
-            (contract_pre_args (IF_Args f) refResults valResults) clearedState of
+            (contract_pre_args (IF_Args f) refResults valResults)
+            (clearedState \<lparr> IS_Ghost := Ghost \<rparr>) of
        Some err \<Rightarrow> Inl err
      | None \<Rightarrow>
          (case bodyResult of
@@ -1204,7 +1365,8 @@ definition checked_call ::
                       (newState \<lparr> IS_Locals := fmempty,
                                   IS_Refs := fmempty,
                                   IS_ConstLocals := {||},
-                                  IS_TyArgs := calleeTyArgs \<rparr>) of
+                                  IS_TyArgs := calleeTyArgs,
+                                  IS_Ghost := Ghost \<rparr>) of
                  Some err \<Rightarrow> Inl err
                | None \<Rightarrow> Inr (newState, retVal))))"
 
@@ -1245,8 +1407,10 @@ lemma checked_call_no_contract:
 (* This is the last step of a function call. It runs the body statement list, or calls the
    external function, and returns the resulting post-call interpreter state, and the return value.
 
-   For a Core body, when the function is not ghost, the returned value must not be
-   allocated (copy_check): see the comment on copy_check.
+   When the call is made by executable code, the returned value must not be
+   allocated (rule R4 above). This applies to a Core body and to an external function
+   alike. The check is value_position, applied in the caller's state, i.e. in the mode
+   of the call.
 
    Inputs:
     - run: statement-list evaluator (interp_statement_list, partially applied to depth and fuel)
@@ -1271,13 +1435,11 @@ definition call_body ::
            producing postCallState and a return value.\<close>
         (case run preCallState bodyStmts of
           Inr (Return postCallState retVal) \<Rightarrow>
-            \<comment> \<open>A non-ghost function must not return an allocated value (rule 3 of
-               copy_check). The return type is instantiated at the callee's type
-               arguments, which are IS_TyArgs preCallState (and also of
-               postCallState: the body cannot change them).\<close>
-            (case copy_check (IF_Ghost f) preCallState (IF_ReturnType f) retVal of
-               Some err \<Rightarrow> Inl err
-             | None \<Rightarrow>
+            \<comment> \<open>A function called by executable code must not return an allocated
+               value (R4).\<close>
+            (case value_position state (Inr retVal) of
+               Inl err \<Rightarrow> Inl err
+             | Inr _ \<Rightarrow>
                  \<comment> \<open>Restore the state how it was before the call (keeping ref updates)
                     and pass the return value back to the caller.\<close>
                  Inr (restore_scope state postCallState, retVal))
@@ -1289,13 +1451,17 @@ definition call_body ::
         \<comment> \<open>For an external function, we need to call the externFun and apply any ref updates
            that it gives us. The external 'world' might change as well.\<close>
         (let vals = rights valResults;
-             refs = rights (map (\<lambda>((_, vr), refResult).
+             refs = rights (map (\<lambda>((_, vr, _), refResult).
                                     if vr = Ref then refResult else Inl TypeError)
                                 (zip (IF_Args f) refResults));
              (newWorld, refUpdates, retVal) = externFun (IS_World state) vals;
              state' = state \<lparr> IS_World := newWorld \<rparr>
         in case apply_ref_updates state' refs refUpdates of
-          Inr finalState \<Rightarrow> Inr (finalState, retVal)
+          Inr finalState \<Rightarrow>
+            \<comment> \<open>Nor must an external function called by executable code (R4).\<close>
+            (case value_position state (Inr retVal) of
+               Inl err \<Rightarrow> Inl err
+             | Inr _ \<Rightarrow> Inr (finalState, retVal))
         | Inl err \<Rightarrow> Inl err))"
 
 (* The evaluator is only ever applied to the body statements, in preCallState.
@@ -1369,19 +1535,20 @@ lemma res_alias_iff:
    argument, and a pair (i,j), returns true if args i and j violate the aliasing rules.
    (In other words: i and j are different, at least one is a Ref arg, and both alias
    according to res_alias.) *)
-definition pair_alias :: "(string \<times> VarOrRef) list \<Rightarrow> (InterpError + nat \<times> LValuePath list) list
+definition pair_alias :: "(string \<times> VarOrRef \<times> GhostOrNot) list \<Rightarrow> (InterpError + nat \<times> LValuePath list) list
                             \<Rightarrow> nat \<Rightarrow> nat \<Rightarrow> bool" where
   "pair_alias args lvs i j =
-    (i \<noteq> j \<and> (snd (args ! i) = Ref \<or> snd (args ! j) = Ref) \<and> res_alias (lvs ! i) (lvs ! j))"
+    (i \<noteq> j \<and> (fst (snd (args ! i)) = Ref \<or> fst (snd (args ! j)) = Ref)
+     \<and> res_alias (lvs ! i) (lvs ! j))"
 
 lemma pair_alias_iff:
   "pair_alias args lvs i j \<longleftrightarrow>
-   (i \<noteq> j \<and> (snd (args ! i) = Ref \<or> snd (args ! j) = Ref)
+   (i \<noteq> j \<and> (fst (snd (args ! i)) = Ref \<or> fst (snd (args ! j)) = Ref)
     \<and> (\<exists>l1 l2. lvs ! i = Inr l1 \<and> lvs ! j = Inr l2 \<and> lvalues_alias l1 l2))"
   unfolding pair_alias_def res_alias_iff ..
 
 (* True if any pair of args (i,j) alias (according to pair_alias). *)
-definition args_alias :: "(string \<times> VarOrRef) list \<Rightarrow> (InterpError + nat \<times> LValuePath list) list \<Rightarrow> bool" where
+definition args_alias :: "(string \<times> VarOrRef \<times> GhostOrNot) list \<Rightarrow> (InterpError + nat \<times> LValuePath list) list \<Rightarrow> bool" where
   "args_alias args lvs = list_ex (\<lambda>i. list_ex (pair_alias args lvs i) [0..<length args]) [0..<length args]"
 
 lemma args_alias_iff:
@@ -1395,7 +1562,7 @@ lemma args_alias_iff:
     - None, otherwise.
    This is the main aliasing check invoked by interp_function_call.
 *)
-definition call_args_alias :: "(string \<times> VarOrRef) list \<Rightarrow> (InterpError + nat \<times> LValuePath list) list
+definition call_args_alias :: "(string \<times> VarOrRef \<times> GhostOrNot) list \<Rightarrow> (InterpError + nat \<times> LValuePath list) list
                                \<Rightarrow> InterpError option" where
   "call_args_alias args lvs =
     (if list_ex (\<lambda>r. r = Inl InsufficientFuel) lvs then Some InsufficientFuel
@@ -1436,7 +1603,7 @@ lemma args_alias_sublist_rel:
   assumes sel_lt: "\<And>k. k < length sel \<Longrightarrow> sel ! k < length args"
     and dist: "distinct sel"
     and len1: "length args' = length sel"
-    and flags: "\<And>k. k < length sel \<Longrightarrow> snd (args' ! k) = snd (args ! (sel ! k))"
+    and flags: "\<And>k. k < length sel \<Longrightarrow> fst (snd (args' ! k)) = fst (snd (args ! (sel ! k)))"
     and rel: "\<And>k k'. k < length sel \<Longrightarrow> k' < length sel \<Longrightarrow> res_alias (lvs' ! k) (lvs' ! k')
                \<Longrightarrow> res_alias (lvs ! (sel ! k)) (lvs ! (sel ! k'))"
     and no: "\<not> args_alias args lvs"
@@ -1445,7 +1612,7 @@ proof
   assume "args_alias args' lvs'"
   then obtain i j where ij: "i < length args'" "j < length args'" and pa: "pair_alias args' lvs' i j"
     unfolding args_alias_iff by blast
-  from pa have ne: "i \<noteq> j" and ref: "snd (args' ! i) = Ref \<or> snd (args' ! j) = Ref"
+  from pa have ne: "i \<noteq> j" and ref: "fst (snd (args' ! i)) = Ref \<or> fst (snd (args' ! j)) = Ref"
     and ra: "res_alias (lvs' ! i) (lvs' ! j)"
     unfolding pair_alias_def by simp_all
   have ne': "sel ! i \<noteq> sel ! j" using dist ne ij len1 by (simp add: distinct_conv_nth)
@@ -1460,7 +1627,7 @@ lemma call_args_alias_None_rel:
     and sel_lt: "\<And>k. k < length sel \<Longrightarrow> sel ! k < length args"
     and dist: "distinct sel"
     and len1: "length args' = length sel" and len2: "length lvs' = length sel"
-    and flags: "\<And>k. k < length sel \<Longrightarrow> snd (args' ! k) = snd (args ! (sel ! k))"
+    and flags: "\<And>k. k < length sel \<Longrightarrow> fst (snd (args' ! k)) = fst (snd (args ! (sel ! k)))"
     and nf: "\<And>k. k < length sel \<Longrightarrow> lvs' ! k \<noteq> Inl InsufficientFuel"
     and rel: "\<And>k k'. k < length sel \<Longrightarrow> k' < length sel \<Longrightarrow> res_alias (lvs' ! k) (lvs' ! k')
                \<Longrightarrow> res_alias (lvs ! (sel ! k)) (lvs ! (sel ! k'))"
@@ -1491,7 +1658,7 @@ next
   show "length lvs' = length [0..<length args]" using len2 by simp
 next
   fix k assume "k < length [0..<length args]"
-  thus "snd (args ! k) = snd (args ! ([0..<length args] ! k))" by simp
+  thus "fst (snd (args ! k)) = fst (snd (args ! ([0..<length args] ! k)))" by simp
 next
   fix k assume "k < length [0..<length args]"
   thus "lvs' ! k \<noteq> Inl InsufficientFuel" using nf by simp
@@ -1501,6 +1668,109 @@ next
   thus "res_alias (lvs ! ([0..<length args] ! k)) (lvs ! ([0..<length args] ! k'))"
     using rel by simp
 qed
+
+(* ========================================================================== *)
+(* Ghost mode handling *)
+(* ========================================================================== *)
+
+(* If g = Ghost, set the state to Ghost mode; otherwise leave it unchanged. *)
+abbreviation raise_mode :: "'w InterpState \<Rightarrow> GhostOrNot \<Rightarrow> 'w InterpState" where
+  "raise_mode state g \<equiv> state \<lparr> IS_Ghost := param_mode (IS_Ghost state) g \<rparr>"
+
+(* The state in which the actual for the parameter `arg` is evaluated. *)
+abbreviation arg_state :: "'w InterpState \<Rightarrow> string \<times> VarOrRef \<times> GhostOrNot \<Rightarrow> 'w InterpState" where
+  "arg_state state arg \<equiv> raise_mode state (snd (snd arg))"
+
+(* When the mode of a state is already g, setting it to g changes nothing. *)
+lemma IS_Ghost_update_same:
+  "IS_Ghost state = g \<Longrightarrow> state \<lparr> IS_Ghost := g \<rparr> = state"
+  by auto
+
+(* Raising the mode by a NotGhost flag changes nothing, and nor does raising
+   the mode of a state that is in Ghost mode already. Raising by a Ghost flag
+   gives Ghost mode. *)
+lemma raise_mode_NotGhost [simp]:
+  "raise_mode state NotGhost = state"
+  by (simp add: param_mode_def)
+
+lemma raise_mode_Ghost [simp]:
+  "raise_mode state Ghost = state \<lparr> IS_Ghost := Ghost \<rparr>"
+  by (simp add: param_mode_def)
+
+lemma raise_mode_in_Ghost:
+  "IS_Ghost state = Ghost \<Longrightarrow> raise_mode state g = state"
+  by (simp add: param_mode_def)
+
+(* Raising the mode by the mode the state is in already changes nothing. *)
+lemma param_mode_same:
+  "param_mode g g = g"
+  by (simp add: param_mode_def)
+
+lemma raise_mode_same:
+  "IS_Ghost state = g \<Longrightarrow> raise_mode state g = state"
+  by (cases g) (simp_all add: param_mode_def IS_Ghost_update_same)
+
+lemma arg_state_NotGhost_param [simp]:
+  "arg_state state (n, vr, NotGhost) = state"
+  by (simp add: param_mode_def)
+
+(* Evaluate the arguments of a call with the evaluator `ev`, each in the state
+   for its parameter (arg_state). `args` are the parameters (IF_Args) and `tms`
+   the actuals. *)
+definition map_args ::
+    "('w InterpState \<Rightarrow> CoreTerm \<Rightarrow> 'a) \<Rightarrow> 'w InterpState
+     \<Rightarrow> (string \<times> VarOrRef \<times> GhostOrNot) list \<Rightarrow> CoreTerm list \<Rightarrow> 'a list" where
+  "map_args ev state args tms = map (\<lambda>(arg, tm). ev (arg_state state arg) tm) (zip args tms)"
+
+(* The evaluator is only ever applied to the actuals, each in the state for its
+   parameter. This congruence rule lets the interpreter below pass itself,
+   partially applied, to map_args. *)
+lemma map_args_cong [fundef_cong]:
+  assumes "state = state'" and "args = args'" and "tms = tms'"
+    and "\<And>arg tm. (arg, tm) \<in> set (zip args' tms')
+                   \<Longrightarrow> ev (arg_state state' arg) tm = ev' (arg_state state' arg) tm"
+  shows "map_args ev state args tms = map_args ev' state' args' tms'"
+  using assms unfolding map_args_def by (auto intro: map_cong)
+
+lemma length_map_args [simp]:
+  "length (map_args ev state args tms) = min (length args) (length tms)"
+  by (simp add: map_args_def)
+
+lemma nth_map_args [simp]:
+  "i < length args \<Longrightarrow> i < length tms
+   \<Longrightarrow> map_args ev state args tms ! i = ev (arg_state state (args ! i)) (tms ! i)"
+  by (simp add: map_args_def)
+
+lemma map_args_Nil [simp]:
+  "map_args ev state [] tms = []"
+  "map_args ev state args [] = []"
+  by (simp_all add: map_args_def)
+
+lemma map_args_Cons [simp]:
+  "map_args ev state (arg # args) (tm # tms)
+   = ev (arg_state state arg) tm # map_args ev state args tms"
+  by (simp add: map_args_def)
+
+(* Two evaluations of the arguments agree if they agree on each argument. *)
+lemma map_args_eqI:
+  assumes "length args = length tms"
+    and "\<And>i. i < length tms
+              \<Longrightarrow> ev (arg_state state (args ! i)) (tms ! i) = ev' (arg_state state' (args ! i)) (tms ! i)"
+  shows "map_args ev state args tms = map_args ev' state' args tms"
+  using assms by (intro nth_equalityI) simp_all
+
+(* When no parameter is ghost, every argument is evaluated in the state itself. *)
+lemma map_args_no_ghost:
+  assumes "length args = length tms"
+    and "\<And>arg. arg \<in> set args \<Longrightarrow> snd (snd arg) = NotGhost"
+  shows "map_args ev state args tms = map (ev state) tms"
+  using assms by (intro nth_equalityI) (simp_all add: param_mode_def)
+
+(* In ghost code, every argument is evaluated in the state itself. *)
+lemma map_args_Ghost:
+  assumes "length args = length tms" and "IS_Ghost state = Ghost"
+  shows "map_args ev state args tms = map (ev state) tms"
+  using assms by (intro nth_equalityI) (simp_all add: param_mode_def IS_Ghost_update_same)
 
 
 (* ========================================================================== *)
@@ -1538,7 +1808,7 @@ where
       Some (sign, bits) \<Rightarrow> Inr (CV_FiniteInt sign bits i)
     | None \<Rightarrow> Inl TypeError)"
 | "interp_term d (Suc fuel) state (CoreTm_LitArray _ tms) =
-    (case interp_term_list d fuel state tms of
+    (case value_position_list state (interp_term_list d fuel state tms) of
       Inl err \<Rightarrow> Inl err
     | Inr vals \<Rightarrow> Inr (make_1d_array vals))"
 
@@ -1554,37 +1824,43 @@ where
           Some val \<Rightarrow> Inr val
         | None \<Rightarrow> Inl TypeError)))"  \<comment> \<open>name not in scope\<close>
 
-  (* Cast (delegates to cast_value) *)
+  (* Cast (delegates to cast_value). The operand of an array cast is in a place
+     position (the cast makes a view of the array and reads nothing); the operand
+     of any other cast is in a value position. *)
 | "interp_term d (Suc fuel) state (CoreTm_Cast targetTy tm) =
-    (case interp_term d fuel state tm of
+    (let operand = interp_term d fuel state tm in
+     case (if is_array_type targetTy then operand else value_position state operand) of
       Inl err \<Rightarrow> Inl err
     | Inr v \<Rightarrow> cast_value targetTy v)"
 
   (* Unary operator *)
 | "interp_term d (Suc fuel) state (CoreTm_Unop op tm) =
-    (case interp_term d fuel state tm of
+    (case value_position state (interp_term d fuel state tm) of
       Inl err \<Rightarrow> Inl err
     | Inr val \<Rightarrow> eval_unop op val)"
 
   (* Binary operator *)
 | "interp_term d (Suc fuel) state (CoreTm_Binop op lhsTm rhsTm) =
-    (case interp_term d fuel state lhsTm of
+    (case value_position state (interp_term d fuel state lhsTm) of
       Inl err \<Rightarrow> Inl err
     | Inr lhsVal \<Rightarrow>
         (case short_circuit op lhsVal of
           Some result \<Rightarrow> Inr result
         | None \<Rightarrow>
-            (case interp_term d fuel state rhsTm of
+            (case value_position state (interp_term d fuel state rhsTm) of
               Inl err \<Rightarrow> Inl err
             | Inr rhsVal \<Rightarrow> eval_binop op lhsVal rhsVal)))"
 
-  (* Let *)
+  (* Let. The right-hand side is in a place position: its value is bound with no
+     check. The result of the body is in a value position. *)
 | "interp_term d (Suc fuel) state (CoreTm_Let varName rhsTm bodyTm) =
     (case interp_term d fuel state rhsTm of
       Inl err \<Rightarrow> Inl err
-    | Inr rhsVal \<Rightarrow> interp_term d fuel (bind_const_local varName rhsVal state) bodyTm)"
+    | Inr rhsVal \<Rightarrow>
+        value_position (bind_const_local varName rhsVal state)
+          (interp_term d fuel (bind_const_local varName rhsVal state) bodyTm))"
 
-  (* Function call *)
+  (* Function call. The arguments are in place positions. *)
 | "interp_term d (Suc fuel) state (CoreTm_FunctionCall fnName argTypes argTms) =
     (if is_pure_fun state fnName then
       (case interp_function_call d fuel state fnName argTypes argTms of
@@ -1595,17 +1871,17 @@ where
 
   (* Variant construction *)
 | "interp_term d (Suc fuel) state (CoreTm_VariantCtor ctorName _ payloadTm) =
-    (case interp_term d fuel state payloadTm of
+    (case value_position state (interp_term d fuel state payloadTm) of
       Inl err \<Rightarrow> Inl err
     | Inr payloadValue \<Rightarrow> Inr (CV_Variant ctorName payloadValue))"
 
   (* Record construction *)
 | "interp_term d (Suc fuel) state (CoreTm_Record nameTermPairs) =
-    (case interp_term_list d fuel state (map snd nameTermPairs) of
+    (case value_position_list state (interp_term_list d fuel state (map snd nameTermPairs)) of
       Inl err \<Rightarrow> Inl err
     | Inr vals \<Rightarrow> Inr (CV_Record (zip (map fst nameTermPairs) vals)))"
 
-  (* Record projection *)
+  (* Record projection. The base of a projection is in a place position. *)
 | "interp_term d (Suc fuel) state (CoreTm_RecordProj tm fldName) =
     (case interp_term d fuel state tm of
       Inr (CV_Record nameTmPairs) \<Rightarrow>
@@ -1624,11 +1900,12 @@ where
     | Inr _ \<Rightarrow> Inl TypeError  \<comment> \<open>not a variant value\<close>
     | Inl err \<Rightarrow> Inl err)"
 
-  (* Array projection (indexing) *)
+  (* Array projection (indexing). The base is in a place position; the index
+     terms are in value positions. *)
 | "interp_term d (Suc fuel) state (CoreTm_ArrayProj arrayTm idxTms) =
     (case interp_term d fuel state arrayTm of
-      Inr (CV_Array _ elementMap) \<Rightarrow>
-        (case interp_term_list d fuel state idxTms of
+      Inr (CV_Array _ _ elementMap) \<Rightarrow>
+        (case value_position_list state (interp_term_list d fuel state idxTms) of
           Inr indexVals \<Rightarrow>
             (case interpret_index_vals indexVals of
               Inr indices \<Rightarrow>
@@ -1640,19 +1917,20 @@ where
     | Inr _ \<Rightarrow> Inl TypeError  \<comment> \<open>not an array value\<close>
     | Inl err \<Rightarrow> Inl err)"  \<comment> \<open>error evaluating array term\<close>
 
-  (* Pattern match *)
+  (* Pattern match. The scrutinee is in a place position; the result of the
+     chosen arm is in a value position. *)
 | "interp_term d (Suc fuel) state (CoreTm_Match scrutTm arms) =
     (case interp_term d fuel state scrutTm of
       Inr scrutVal \<Rightarrow>
         (case find_matching_arm scrutVal arms of
-          Inr armTm \<Rightarrow> interp_term d fuel state armTm
+          Inr armTm \<Rightarrow> value_position state (interp_term d fuel state armTm)
         | Inl err \<Rightarrow> Inl err)
     | Inl err \<Rightarrow> Inl err)"
 
-  (* Sizeof *)
+  (* Sizeof. The operand is in a place position. *)
 | "interp_term d (Suc fuel) state (CoreTm_Sizeof tm) =
     (case interp_term d fuel state tm of
-      Inr (CV_Array sizes _) \<Rightarrow> Inr (array_size_to_value sizes)
+      Inr (CV_Array _ sizes _) \<Rightarrow> Inr (array_size_to_value sizes)
     | Inr _ \<Rightarrow> Inl TypeError
     | Inl err \<Rightarrow> Inl err)"
 
@@ -1665,21 +1943,18 @@ where
       (values_of_type state (apply_subst (IS_TyArgs state) varTy))
       (\<lambda>v. converged (\<lambda>m. interp_term d m (bind_const_local varName v state) bodyTm))"
 
-  (* Allocated: evaluate the operand, apply the current type subst (IS_TyArgs state)
-     to the type annotation, then delegate to is_allocated. *)
-| "interp_term d (Suc fuel) state (CoreTm_Allocated ty tm) =
+  (* Allocated: evaluate the operand, then delegate to is_allocated. The operand is
+     in a place position. *)
+| "interp_term d (Suc fuel) state (CoreTm_Allocated _ tm) =
     (case interp_term d fuel state tm of
       Inl err \<Rightarrow> Inl err
-    | Inr v \<Rightarrow>
-        (case is_allocated (IS_DataCtors state) (IS_ExternAlloc state) v
-                           (apply_subst (IS_TyArgs state) ty) of
-          Inl err \<Rightarrow> Inl err
-        | Inr b \<Rightarrow> Inr (CV_Bool b)))"
+    | Inr v \<Rightarrow> Inr (CV_Bool (is_allocated (IS_ExternAlloc state) v)))"
 
   (* Default value: resolve any current-frame tyvars via IS_TyArgs, then
-     delegate to the recursive default_value helper. *)
+     delegate to the recursive default_value helper. In executable code the
+     default value must not be allocated (R3). *)
 | "interp_term _ (Suc fuel) state (CoreTm_Default ty) =
-    default_value fuel state (apply_subst (IS_TyArgs state) ty)"
+    value_position state (default_value fuel state (apply_subst (IS_TyArgs state) ty))"
 
   (* Evaluate an lvalue to an (addr, path) pair.
 
@@ -1695,7 +1970,8 @@ where
      This function also doesn't check for "bad paths" (e.g. an incorrect field name, or an
      array index out of range); that happens later, when the path is used. It does, however,
      check whether the base variable name exists (in IS_Locals or IS_Refs) and whether any
-     array indices can be successfully evaluated. *)
+     array indices can be successfully evaluated. The index terms are in value
+     positions. *)
 | "interp_lvalue _ 0 _ _ _ = Inl InsufficientFuel"
 | "interp_lvalue d (Suc fuel) writable state tm =
     (case tm of
@@ -1719,7 +1995,7 @@ where
     | CoreTm_ArrayProj tm indexTms \<Rightarrow>
         (case interp_lvalue d fuel writable state tm of
           Inr (addr, path) \<Rightarrow>
-            (case interp_term_list d fuel state indexTms of
+            (case value_position_list state (interp_term_list d fuel state indexTms) of
               Inr indexVals \<Rightarrow>
                 (case interpret_index_vals indexVals of
                   Inr indices \<Rightarrow> Inr (addr, path @ [LVPath_ArrayProj indices])
@@ -1755,25 +2031,32 @@ where
 | "interp_statement d (Suc fuel) state (CoreStmt_VarDecl declGhost varName Var varTy initialTm) =
     \<comment> \<open>The initializer is an ordinary (pure) term; impure-call initializers use
         CoreStmt_VarDeclCall. The state is unchanged by evaluating it.
-        A non-ghost declaration must not copy an allocated value (rule 1 of
-        copy_check).\<close>
-    (case interp_term d fuel state initialTm of
-       Inr initialVal \<Rightarrow>
-         (case copy_check declGhost state varTy initialVal of
-            Some err \<Rightarrow> Inl err
-          | None \<Rightarrow> Inr (Continue (bind_mutable_local varName initialVal state)))
+        The initializer is evaluated in the mode raised by the declaration's flag,
+        and is in a value position.\<close>
+    (case value_position (raise_mode state declGhost)
+            (interp_term d fuel (raise_mode state declGhost) initialTm) of
+       Inr initialVal \<Rightarrow> Inr (Continue (bind_mutable_local varName initialVal state))
      | Inl err \<Rightarrow> Inl err)"
 
-| "interp_statement d (Suc fuel) state (CoreStmt_VarDeclCall _ varName _ castOpt fnName argTys argTms) =
+| "interp_statement d (Suc fuel) state (CoreStmt_VarDeclCall declGhost varName _ castOpt fnName argTys argTms) =
     \<comment> \<open>Run the (possibly impure) call, observing its state effect, then apply the
-        optional cast to the returned value before binding it.\<close>
-    (case interp_function_call d fuel state fnName argTys argTms of
+        optional cast to the returned value before binding it. If declGhost = Ghost, the
+        call is made in ghost mode, otherwise the ambient mode of the state. The original
+        mode is put back again afterwards. The call's result, after the cast, is in a
+        value position (in the mode of the call).\<close>
+    (case interp_function_call d fuel (raise_mode state declGhost) fnName argTys argTms of
        Inr (newState, retVal) \<Rightarrow>
-         (case apply_cast_opt castOpt retVal of
-            Inr initialVal \<Rightarrow> Inr (Continue (bind_mutable_local varName initialVal newState))
+         (case value_position (raise_mode state declGhost)
+                 (apply_cast_opt castOpt retVal) of
+            Inr initialVal \<Rightarrow>
+              Inr (Continue (bind_mutable_local varName initialVal
+                               (newState \<lparr> IS_Ghost := IS_Ghost state \<rparr>)))
           | Inl err \<Rightarrow> Inl err)
      | Inl err \<Rightarrow> Inl err)"
-| "interp_statement d (Suc fuel) state (CoreStmt_VarDecl _ varName Ref _ lvalueTm) =
+| "interp_statement d (Suc fuel) state (CoreStmt_VarDecl declGhost varName Ref _ lvalueTm) =
+    \<comment> \<open>The lvalue term is evaluated in the mode raised by the declaration's flag.
+        It is in a place position (even when its value is copied, in the read-only
+        case below).\<close>
     (case lvalue_base_name lvalueTm of
       Some baseName \<Rightarrow>
         \<comment> \<open>Determine whether the base is read-only. The base is read-only iff:
@@ -1787,71 +2070,77 @@ where
           \<comment> \<open>Base variable is read-only: copy the value instead of aliasing.
              A compiler would likely use a read-only pointer, but copying is
              semantically equivalent since the source is immutable.\<close>
-          (case interp_term d fuel state lvalueTm of
+          (case interp_term d fuel (raise_mode state declGhost) lvalueTm of
             Inl err \<Rightarrow> Inl err
           | Inr val \<Rightarrow> Inr (Continue (bind_const_local varName val state)))
         else
           \<comment> \<open>Base variable is writable: use interp_lvalue (in writable mode) to
              get the address and path, and store those in IS_Refs. \<close>
-          (case interp_lvalue d fuel True state lvalueTm of
+          (case interp_lvalue d fuel True (raise_mode state declGhost) lvalueTm of
             Inr addrAndPath \<Rightarrow> Inr (Continue (bind_ref varName addrAndPath state))
           | Inl err \<Rightarrow> Inl err)
     | None \<Rightarrow> Inl TypeError)"
 
   (* Assignment *)
-| "interp_statement d (Suc fuel) state (CoreStmt_Assign assignGhost ty lhsLvalue rhsTm) =
+| "interp_statement d (Suc fuel) state (CoreStmt_Assign assignGhost _ lhsLvalue rhsTm) =
     \<comment> \<open>Resolve the lhs to an address and path; the rhs is an ordinary (pure)
         term (impure-call rhs's use CoreStmt_AssignCall). State is unchanged by
-        evaluating it. A non-ghost assignment must not copy an allocated value
-        (rule 2 of copy_check).\<close>
-    (case interp_lvalue d fuel True state lhsLvalue of
+        evaluating it. Both sides are evaluated in the mode raised by the assignment's
+        flag. The lhs is in a place position and the rhs in a value position.\<close>
+    (case interp_lvalue d fuel True (raise_mode state assignGhost) lhsLvalue of
       Inr (addr, path) \<Rightarrow>
-        (case interp_term d fuel state rhsTm of
+        (case value_position (raise_mode state assignGhost)
+                (interp_term d fuel (raise_mode state assignGhost) rhsTm) of
           Inr rhsVal \<Rightarrow>
-            (case copy_check assignGhost state ty rhsVal of
-               Some err \<Rightarrow> Inl err
-             | None \<Rightarrow>
-                 (let oldVal = IS_Store state ! addr in
-                 case update_value_at_path oldVal path rhsVal of
-                   Inr newVal \<Rightarrow>
-                     Inr (Continue (state \<lparr> IS_Store := (IS_Store state)[addr := newVal] \<rparr>))
-                 | Inl err \<Rightarrow> Inl err))
+            (let oldVal = IS_Store state ! addr in
+            case update_value_at_path oldVal path rhsVal of
+              Inr newVal \<Rightarrow>
+                Inr (Continue (state \<lparr> IS_Store := (IS_Store state)[addr := newVal] \<rparr>))
+            | Inl err \<Rightarrow> Inl err)
         | Inl err \<Rightarrow> Inl err)
     | Inl err \<Rightarrow> Inl err)"
 
   (* Assignment from an impure call *)
-| "interp_statement d (Suc fuel) state (CoreStmt_AssignCall _ lhsLvalue castOpt fnName argTys argTms) =
+| "interp_statement d (Suc fuel) state (CoreStmt_AssignCall assignGhost lhsLvalue castOpt fnName argTys argTms) =
     \<comment> \<open>Note the order of operations: evaluate the rhs first, then resolve the lhs to
         an address and path (in the new state). So in a[i] = f(i), where f modifies i,
-        the element written is determined by the new value of i, not the old.\<close>
-    (case interp_function_call d fuel state fnName argTys argTms of
+        the element written is determined by the new value of i, not the old.
+
+        If assignGhost = Ghost, the call is made in Ghost mode, otherwise the ambient mode
+        of the state; the mode is put back afterwards. The call's result, after the cast,
+        is in a value position (in the mode of the call).\<close>
+    (case interp_function_call d fuel (raise_mode state assignGhost) fnName argTys argTms of
       Inr (newState, retVal) \<Rightarrow>
-        (case apply_cast_opt castOpt retVal of
+        (case value_position (raise_mode state assignGhost)
+                (apply_cast_opt castOpt retVal) of
           Inr rhsVal \<Rightarrow>
             (case interp_lvalue d fuel True newState lhsLvalue of
               Inr (addr, path) \<Rightarrow>
                 (let oldVal = IS_Store newState ! addr in
                 case update_value_at_path oldVal path rhsVal of
                   Inr newVal \<Rightarrow>
-                    Inr (Continue (newState \<lparr> IS_Store := (IS_Store newState)[addr := newVal] \<rparr>))
+                    Inr (Continue (newState \<lparr> IS_Store := (IS_Store newState)[addr := newVal],
+                                              IS_Ghost := IS_Ghost state \<rparr>))
                 | Inl err \<Rightarrow> Inl err)
             | Inl err \<Rightarrow> Inl err)
         | Inl err \<Rightarrow> Inl err)
     | Inl err \<Rightarrow> Inl err)"
 
   (* Swap *)
-| "interp_statement d (Suc fuel) state (CoreStmt_Swap _ lhsTm rhsTm) =
-    (case interp_lvalue d fuel True state lhsTm of
+| "interp_statement d (Suc fuel) state (CoreStmt_Swap swapGhost lhsTm rhsTm) =
+    \<comment> \<open>Both lvalues are resolved in the mode raised by the swap's flag. Both are in place positions.\<close>
+    (case interp_lvalue d fuel True (raise_mode state swapGhost) lhsTm of
       Inl err \<Rightarrow> Inl err
     | Inr lhsLvalue \<Rightarrow>
-        (case interp_lvalue d fuel True state rhsTm of
+        (case interp_lvalue d fuel True (raise_mode state swapGhost) rhsTm of
           Inl err \<Rightarrow> Inl err
         | Inr rhsLvalue \<Rightarrow>
             (case perform_swap state lhsLvalue rhsLvalue of
               Inl err \<Rightarrow> Inl err
             | Inr newState \<Rightarrow> Inr (Continue newState))))"
 
-  (* Return *)
+  (* Return. No value_position check is made here: the returned value is checked
+     when the call returns (call_body). *)
 | "interp_statement d (Suc fuel) state (CoreStmt_Return tm) =
     (case interp_term d fuel state tm of
       Inr val \<Rightarrow> Inr (Return state val)
@@ -1864,22 +2153,30 @@ where
       - Each time the body is about to run, the decreases-term (if any) is evaluated
         and checked (see eval_decreases); after the body it is evaluated and checked
         again, in the state the next iteration will start from, and it is a RuntimeError
-        if its value has not strictly decreased (see decreases_error). *)
+        if its value has not strictly decreased (see decreases_error).
+      - The invariants and the decreases-term are ghost code. The condition is
+        evaluated in the mode raised by the loop's flag, and is in a value position.
+        The body runs in the mode raised by the loop's flag too: the whole body
+        of a ghost loop is ghost code. The mode is put back afterwards (by
+        restore_scope). *)
 | "interp_statement d (Suc fuel) state (CoreStmt_While whileGhost condTm invars decr bodyStmts) =
-    (case interp_term_list d fuel state invars of
+    (case interp_term_list d fuel (state \<lparr> IS_Ghost := Ghost \<rparr>) invars of
       Inl err \<Rightarrow> Inl err
     | Inr invarVals \<Rightarrow>
         (case conditions_error invarVals of
           Some err \<Rightarrow> Inl err
         | None \<Rightarrow>
-            (case interp_term d fuel state condTm of
+            (case value_position (raise_mode state whileGhost)
+                    (interp_term d fuel (raise_mode state whileGhost) condTm) of
               Inr (CV_Bool True) \<Rightarrow>
-                (case eval_decreases (interp_term d fuel state) decr of
+                (case eval_decreases (interp_term d fuel (state \<lparr> IS_Ghost := Ghost \<rparr>)) decr of
                   Inl err \<Rightarrow> Inl err
                 | Inr decrVal \<Rightarrow>
-                    (case interp_statement_list d fuel state bodyStmts of
+                    (case interp_statement_list d fuel (raise_mode state whileGhost) bodyStmts of
                       Inr (Continue state') \<Rightarrow>
-                        (case eval_decreases (interp_term d fuel (restore_scope state state')) decr of
+                        (case eval_decreases
+                                (interp_term d fuel ((restore_scope state state') \<lparr> IS_Ghost := Ghost \<rparr>))
+                                decr of
                           Inl err \<Rightarrow> Inl err
                         | Inr decrVal' \<Rightarrow>
                             (case decreases_error decrVal decrVal' of
@@ -1893,25 +2190,28 @@ where
             | Inr _ \<Rightarrow> Inl TypeError
             | Inl err \<Rightarrow> Inl err)))"
 
-  (* Pattern match *)
-| "interp_statement d (Suc fuel) state (CoreStmt_Match _ scrutTm arms) =
-    (case interp_term d fuel state scrutTm of
+  (* Pattern match. The scrutinee is evaluated in the mode raised by the match's
+     flag, and is in a place position. The chosen arm runs in the mode raised by
+     the match's flag too: every arm of a ghost match is ghost code. The mode is
+     put back afterwards (by restore_scope). *)
+| "interp_statement d (Suc fuel) state (CoreStmt_Match matchGhost scrutTm arms) =
+    (case interp_term d fuel (raise_mode state matchGhost) scrutTm of
       Inr scrutVal \<Rightarrow>
         (case find_matching_arm scrutVal arms of
           Inr armStmts \<Rightarrow>
-            (case interp_statement_list d fuel state armStmts of
+            (case interp_statement_list d fuel (raise_mode state matchGhost) armStmts of
               Inr (Continue state') \<Rightarrow> Inr (Continue (restore_scope state state'))
             | Inr (Return state' retVal) \<Rightarrow> Inr (Return (restore_scope state state') retVal)
             | Inl err \<Rightarrow> Inl err)
         | Inl err \<Rightarrow> Inl err)
     | Inl err \<Rightarrow> Inl err)"
 
-  (* Assert: the condition is evaluated, and it is a RuntimeError if it is
-     false. The proof body is not run.
+  (* Assert: the condition is evaluated (as ghost code), and it is a RuntimeError
+     if it is false. The proof body is not run.
      "assert *" (no condition) only occurs inside a proof body, so it should
      never be executed. *)
 | "interp_statement d (Suc fuel) state (CoreStmt_Assert (Some condTm) _) =
-    (case interp_term d fuel state condTm of
+    (case interp_term d fuel (state \<lparr> IS_Ghost := Ghost \<rparr>) condTm of
       Inr (CV_Bool True) \<Rightarrow> Inr (Continue state)
     | Inr (CV_Bool False) \<Rightarrow> Inl RuntimeError  \<comment> \<open>assertion failed\<close>
     | Inr _ \<Rightarrow> Inl TypeError
@@ -1927,12 +2227,15 @@ where
   (* Obtain: brings a new variable into scope, bound to a value of its type
      that satisfies the condition. It is a RuntimeError if there is no such
      value. Like a Quantifier, this spends one unit of depth, and evaluates the
-     condition at every value of the type, each at its own converged fuel. *)
+     condition at every value of the type, each at its own converged fuel. The
+     condition is ghost code. *)
 | "interp_statement 0 (Suc _) _ (CoreStmt_Obtain _ _ _) = Inl InsufficientFuel"
 | "interp_statement (Suc d) (Suc _) state (CoreStmt_Obtain varName varTy condTm) =
     (case choose_witness
             (values_of_type state (apply_subst (IS_TyArgs state) varTy))
-            (\<lambda>v. converged (\<lambda>m. interp_term d m (bind_mutable_local varName v state) condTm)) of
+            (\<lambda>v. converged (\<lambda>m. interp_term d m
+                                    ((bind_mutable_local varName v state) \<lparr> IS_Ghost := Ghost \<rparr>)
+                                    condTm)) of
       Inr witness \<Rightarrow> Inr (Continue (bind_mutable_local varName witness state))
     | Inl err \<Rightarrow> Inl err)"
 
@@ -1962,14 +2265,18 @@ where
     \<comment> \<open>Look up the function and check we have the correct number of arguments.\<close>
     (case fmlookup (IS_Functions state) fnName of
       Some f \<Rightarrow>
-        (if length argTms \<noteq> length (IF_Args f) then Inl TypeError  \<comment> \<open>wrong number of term args\<close>
+        (if IS_Ghost state = NotGhost \<and> IF_Ghost f = Ghost then Inl TypeError  \<comment> \<open>executable code calls a ghost function\<close>
+        else if length argTms \<noteq> length (IF_Args f) then Inl TypeError  \<comment> \<open>wrong number of term args\<close>
         else if length argTys \<noteq> length (IF_TyArgs f) then Inl TypeError  \<comment> \<open>wrong number of type args\<close>
         else
             \<comment> \<open>Evaluate each argument, both as an lvalue and as an rvalue.\<close>
             \<comment> \<open>(Both are needed, because, e.g., `a[10]` might evaluate successfully as an
                 lvalue, but fail as an rvalue, if 10 was out of bounds for the array.)\<close>
-            let refResults = map (interp_lvalue d fuel True state) argTms;
-                valResults = map (interp_term d fuel state) argTms;
+            \<comment> \<open>Each argument is evaluated in the mode raised by the flag of its
+                parameter (map_args, arg_state): the actual for a ghost parameter is
+                ghost code.\<close>
+            let refResults = map_args (interp_lvalue d fuel True) state (IF_Args f) argTms;
+                valResults = map_args (interp_term d fuel) state (IF_Args f) argTms;
                 argTuples = zip (IF_Args f) (zip refResults valResults);
                 \<comment> \<open>Resolve each argTy against the caller's IS_TyArgs (which is
                     ground by the well-formedness invariant) before binding it.
@@ -1977,7 +2284,8 @@ where
                 calleeTyArgs = fmap_of_list
                   (zip (IF_TyArgs f)
                        (map (apply_subst (IS_TyArgs state)) argTys));
-                \<comment> \<open>Create a 'cleared state' for running the function body.\<close>
+                \<comment> \<open>Create a 'cleared state' for running the function body. The mode
+                    (IS_Ghost) is kept: the body runs in the mode of the call.\<close>
                 clearedState = state \<lparr> IS_Locals := fmempty,
                                        IS_Refs := fmempty,
                                        IS_ConstLocals := {||},
@@ -1993,7 +2301,8 @@ where
                       returning RuntimeError if a violation is found. (This check requires
                       another call to interp_lvalue, this time with writable = False, for each
                       argument.)\<close>
-                  (case call_args_alias (IF_Args f) (map (interp_lvalue d fuel False state) argTms) of
+                  (case call_args_alias (IF_Args f)
+                          (map_args (interp_lvalue d fuel False) state (IF_Args f) argTms) of
                     Some err \<Rightarrow> Inl err
                   | None \<Rightarrow>
                   \<comment> \<open>Now delegate to 'checked_call' to run the pre- and post-condition checks,
@@ -2055,30 +2364,36 @@ lemma interp_function_call_InrE:
     and "length argTms = length (IF_Args f)"
     and "length argTys = length (IF_TyArgs f)"
     and "fold process_one_arg
-           (zip (IF_Args f) (zip (map (interp_writable_lvalue d fuel state) argTms)
-                                 (map (interp_term d fuel state) argTms)))
+           (zip (IF_Args f)
+                (zip (map_args (interp_writable_lvalue d fuel) state (IF_Args f) argTms)
+                     (map_args (interp_term d fuel) state (IF_Args f) argTms)))
            (Inr (state \<lparr> IS_Locals := fmempty, IS_Refs := fmempty, IS_ConstLocals := {||},
                          IS_TyArgs := fmap_of_list (zip (IF_TyArgs f)
                                         (map (apply_subst (IS_TyArgs state)) argTys)) \<rparr>))
          = Inr preCallState"
     and "call_body (interp_statement_list d fuel) state f
-           (map (interp_writable_lvalue d fuel state) argTms)
-           (map (interp_term d fuel state) argTms) preCallState = Inr r"
+           (map_args (interp_writable_lvalue d fuel) state (IF_Args f) argTms)
+           (map_args (interp_term d fuel) state (IF_Args f) argTms) preCallState = Inr r"
+    and "IS_Ghost state = NotGhost \<Longrightarrow> IF_Ghost f = NotGhost"
 proof (cases "fmlookup (IS_Functions state) fnName")
   case None
   with H show ?thesis by simp
 next
   case lk: (Some f)
   show ?thesis
-  proof (cases "length argTms \<noteq> length (IF_Args f) \<or> length argTys \<noteq> length (IF_TyArgs f)")
+  proof (cases "(IS_Ghost state = NotGhost \<and> IF_Ghost f = Ghost)
+                \<or> length argTms \<noteq> length (IF_Args f) \<or> length argTys \<noteq> length (IF_TyArgs f)")
     case True
     with H lk show ?thesis by (auto split: if_split_asm)
   next
     case len: False
     hence len_args: "length argTms = length (IF_Args f)"
-      and len_tys: "length argTys = length (IF_TyArgs f)" by auto
-    let ?refResults = "map (interp_writable_lvalue d fuel state) argTms"
-    let ?valResults = "map (interp_term d fuel state) argTms"
+      and len_tys: "length argTys = length (IF_TyArgs f)"
+      and ngh: "\<not> (IS_Ghost state = NotGhost \<and> IF_Ghost f = Ghost)" by auto
+    from ngh have gh: "IS_Ghost state = NotGhost \<Longrightarrow> IF_Ghost f = NotGhost"
+      by (cases "IF_Ghost f") auto
+    let ?refResults = "map_args (interp_writable_lvalue d fuel) state (IF_Args f) argTms"
+    let ?valResults = "map_args (interp_term d fuel) state (IF_Args f) argTms"
     let ?calleeTyArgs = "fmap_of_list (zip (IF_TyArgs f) (map (apply_subst (IS_TyArgs state)) argTys))"
     let ?clearedState = "state \<lparr> IS_Locals := fmempty, IS_Refs := fmempty,
                                   IS_ConstLocals := {||},
@@ -2087,11 +2402,12 @@ next
     proof (cases "fold process_one_arg (zip (IF_Args f) (zip ?refResults ?valResults))
                     (Inr ?clearedState)")
       case (Inl err)
-      with H lk len show ?thesis by (simp add: Let_def)
+      with H lk len_args len_tys ngh show ?thesis by (simp add: Let_def)
     next
       case fold: (Inr preCallState)
-      from H lk len fold
-      have "(case call_args_alias (IF_Args f) (map (interp_lvalue d fuel False state) argTms) of
+      from H lk len_args len_tys ngh fold
+      have "(case call_args_alias (IF_Args f)
+                    (map_args (interp_lvalue d fuel False) state (IF_Args f) argTms) of
                Some err \<Rightarrow> Inl err
              | None \<Rightarrow> checked_call (interp_term_list d fuel) f ?refResults ?valResults
                          ?calleeTyArgs ?clearedState
@@ -2106,7 +2422,7 @@ next
       from checked_call_Inr[OF this]
       have body: "call_body (interp_statement_list d fuel) state f ?refResults ?valResults
                     preCallState = Inr r" .
-      show ?thesis by (rule that[OF lk len_args len_tys fold body])
+      show ?thesis by (rule that[OF lk len_args len_tys fold body gh])
     qed
   qed
 qed
@@ -2115,8 +2431,16 @@ qed
 lemma interp_function_call_Inr_no_alias:
   assumes H: "interp_function_call d (Suc fuel) state fnName argTys argTms = Inr r"
     and lk: "fmlookup (IS_Functions state) fnName = Some f"
-  shows "call_args_alias (IF_Args f) (map (interp_lvalue d fuel False state) argTms) = None"
+  shows "call_args_alias (IF_Args f)
+           (map_args (interp_lvalue d fuel False) state (IF_Args f) argTms) = None"
   using H lk by (auto simp: Let_def split: if_split_asm sum.splits option.splits)
+
+(* A call of a ghost function from executable code is a TypeError. *)
+lemma interp_function_call_ghost_from_exec:
+  assumes "fmlookup (IS_Functions state) fnName = Some f"
+    and "IS_Ghost state = NotGhost" and "IF_Ghost f = Ghost"
+  shows "interp_function_call d (Suc fuel) state fnName argTys argTms = Inl TypeError"
+  using assms by simp
 
 
 end
