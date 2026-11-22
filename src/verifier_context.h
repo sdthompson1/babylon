@@ -106,6 +106,10 @@ struct VContext {
     int num_facts;  // Cached length of the facts list
 
 
+    // True we are currently verifying executable code, or false for
+    // ghost code.
+    bool executable;
+
     // True if we are supposed to actually run the solver (as opposed
     // to just populating the environment with the translated
     // expressions/decls)

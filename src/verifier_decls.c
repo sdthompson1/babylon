@@ -118,7 +118,7 @@ static void verify_function_attributes(struct VContext *context,
         case ATTR_REQUIRES:
         case ATTR_ENSURES:
             {
-                struct Sexpr *cond = verify_term(context, attr->term);
+                struct Sexpr *cond = verify_ghost_term(context, attr->term);
 
                 // We can assume the condition while validating
                 // the rest of the attributes
@@ -777,6 +777,10 @@ static void compute_decl_fingerprint(struct StackedHashTable *global_env,
 
 static void verify_decl(struct VContext *context, struct Decl *decl)
 {
+    // Set context->executable based on the decl's ghost flag.
+    bool old_exec = context->executable;
+    context->executable = !decl->ghost;
+
     // Compute fingerprint.
     uint8_t fingerprint[SHA256_HASH_LENGTH];
     compute_decl_fingerprint(context->stack, decl, fingerprint);
@@ -849,6 +853,9 @@ static void verify_decl(struct VContext *context, struct Decl *decl)
     if (skipped) {
         context->run_solver = true;
     }
+
+    // Restore old value of context->executable
+    context->executable = old_exec;
 }
 
 void verify_decl_group(struct VContext *context, struct Decl *decl_group)

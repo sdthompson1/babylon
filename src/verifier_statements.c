@@ -705,7 +705,7 @@ static void check_invariants(struct VContext *context,
     struct Attribute *attr = stmt->while_data.attributes;
     while (attr) {
         if (attr->tag == ATTR_INVARIANT) {
-            struct Sexpr *expr = verify_term(context, attr->term);
+            struct Sexpr *expr = verify_ghost_term(context, attr->term);
             verify_condition(context, attr->term->location, expr,
                              on_exit ? "invariant at exit" : "invariant at entry",
                              on_exit ? err_msg_invariant_violated_on_exit(attr)
@@ -757,7 +757,7 @@ static void havoc_variables(struct VContext *context,
     struct Attribute *attr = stmt->while_data.attributes;
     while (attr) {
         if (attr->tag == ATTR_INVARIANT) {
-            struct Sexpr *expr = verify_term(context, attr->term);
+            struct Sexpr *expr = verify_ghost_term(context, attr->term);
             add_fact(context, expr);
         }
         attr = attr->next;
@@ -1045,7 +1045,7 @@ void verify_while_stmt(struct VContext *context,
     struct Attribute *variant_attr = find_variant(stmt);
 
     // Get variant at start of loop
-    struct Sexpr *initial_variant = variant_attr ? verify_term(context, variant_attr->term) : NULL;
+    struct Sexpr *initial_variant = variant_attr ? verify_ghost_term(context, variant_attr->term) : NULL;
 
     // Verify that the initial variant is bounded
     if (variant_attr) check_variant_is_bounded(context, variant_attr, initial_variant);
@@ -1061,7 +1061,7 @@ void verify_while_stmt(struct VContext *context,
 
     // Verify that the variant has decreased
     if (variant_attr) {
-        struct Sexpr *new_variant = verify_term(context, variant_attr->term);
+        struct Sexpr *new_variant = verify_ghost_term(context, variant_attr->term);
         check_variant_has_decreased(context, stmt, variant_attr, initial_variant, new_variant);
         free_sexpr(new_variant);
     }
@@ -1117,10 +1117,15 @@ void verify_statements(struct VContext *context,
             return;
         }
 
+        // Set context->executable according to whether this statement is 'ghost'
+        bool old_exec = context->executable;
+        context->executable = !stmt->ghost;
+
         switch (stmt->tag) {
         case ST_VAR_DECL:
             // verify_var_decl_stmt will itself do the rest of the list
             verify_var_decl_stmt(context, stmt, ret_val_ptr);
+            context->executable = old_exec;  // restore executable flag before returning
             return;
 
         case ST_FIX:
@@ -1179,6 +1184,9 @@ void verify_statements(struct VContext *context,
             verify_show_hide_stmt(context, stmt);
             break;
         }
+
+        // Restore context->executable before moving on to next statement
+        context->executable = old_exec;
 
         stmt = stmt->next;
     }

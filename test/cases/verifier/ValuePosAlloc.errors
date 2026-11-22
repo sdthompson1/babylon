@@ -1,0 +1,24 @@
+src/ValuePosAlloc.b:66:23: Can't copy, value might be allocated
+src/ValuePosAlloc.b:83:13: Can't copy, value might be allocated
+src/ValuePosAlloc.b:88:28: Can't copy, value might be allocated
+src/ValuePosAlloc.b:94:21: Can't copy, value might be allocated
+src/ValuePosAlloc.b:105:21: Can't copy, value might be allocated
+src/ValuePosAlloc.b:121:28: Can't copy, value might be allocated
+src/ValuePosAlloc.b:133:28: Can't copy, value might be allocated
+src/ValuePosAlloc.b:148:24: Can't copy, value might be allocated
+src/ValuePosAlloc.b:148:27: Can't copy, value might be allocated
+src/ValuePosAlloc.b:148:24: Can't copy, value might be allocated  // Repeated error, harmless (we could fix, but would add code complexity for no real reason)
+src/ValuePosAlloc.b:148:27: Can't copy, value might be allocated
+src/ValuePosAlloc.b:154:27: Can't copy, value might be allocated
+src/ValuePosAlloc.b:154:27: Can't copy, value might be allocated
+src/ValuePosAlloc.b:170:36: Can't copy, value might be allocated
+src/ValuePosAlloc.b:175:36: Can't copy, value might be allocated
+src/ValuePosAlloc.b:190:33: Can't copy, value might be allocated
+src/ValuePosAlloc.b:190:40: Can't copy, value might be allocated
+src/ValuePosAlloc.b:196:40: Can't copy, value might be allocated
+src/ValuePosAlloc.b:209:43: Can't copy, value might be allocated
+src/ValuePosAlloc.b:209:56: Can't copy, value might be allocated
+src/ValuePosAlloc.b:216:33: Can't copy, value might be allocated
+src/ValuePosAlloc.b:216:46: Can't copy, value might be allocated
+src/ValuePosAlloc.b:231:49: Can't copy, value might be allocated
+src/ValuePosAlloc.b:248:13: Can't copy, value might be allocated

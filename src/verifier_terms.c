@@ -934,9 +934,90 @@ static void* verify_string_literal(void *context, struct Term *term, void *type_
     return make_string_sexpr_handover(name);
 }
 
+// This returns true if a term could possibly be allocated, in executable
+// code, without an error having been reported previously.
+// This is used by the "Can't copy, value might be allocated" check to
+// determine whether it needs to run on this particular term.
+// (This is both an optimization, to avoid running the SMT solver when it
+// would be redundant to do so, and a way of preventing duplicate reports
+// for the same error.)
+static bool needs_alloc_check(const struct Term *term)
+{
+    // Reasoning:
+    //  - A variable term clearly could be allocated (e.g. it might be an
+    //    i32[*] of nonzero size).
+    //  - A field or array projection, or array cast, can only be allocated
+    //    if its "base" is.
+    //  - Default terms only appear as initializers of a "var" statement,
+    //    and those are checked in the statement verifier.
+    //  - For if-then-else, match, let, record or variant construction, or
+    //    array literals, the term is allocated iff any of its sub-terms (in
+    //    value positions) are; but those positions have already been
+    //    checked, so if they were allocated (in executable code), we would
+    //    have seen an error already, so there is no need to check again.
+    //  - Record updates could potentially be allocated, but those are
+    //    checked directly (see verify_value_position)
+    //  - The only other possibilities are scalars, string literals or
+    //    function return values, none of which can be allocated.
+    switch (term->tag) {
+    case TM_VAR:
+        return true;
+
+    case TM_FIELD_PROJ:
+        return needs_alloc_check(term->field_proj.lhs);
+
+    case TM_ARRAY_PROJ:
+        return needs_alloc_check(term->array_proj.lhs);
+
+    case TM_CAST:
+        return term->type->tag == TY_ARRAY
+            && needs_alloc_check(term->cast.operand);
+
+    default:
+        return false;
+    }
+}
+
+// In executable code, this verifies that 'fol_value' (the translation
+// of 'term') is not allocated.
+// In ghost code, it does nothing.
+// This function is used at "value positions" of various terms, to ensure
+// that we are not making copies of allocated values (which would lead to
+// unsound code generation).
+static void check_value_position(struct VContext *cxt,
+                                 struct Term *term,
+                                 struct Sexpr *fol_value)   // shared
+{
+    // Copying allocated values in ghost code isn't a problem
+    if (!cxt->executable) {
+        return;
+    }
+
+    // Skip the check when it isn't needed
+    if (!needs_alloc_check(term)) {
+        return;
+    }
+
+    // Perform the check
+    struct Sexpr *cond = non_allocated_condition(cxt, term->type, fol_value);
+    if (cond) {
+        verify_condition(cxt, term->location, cond, "value not allocated",
+                         err_msg_copy_allocated(term->location));
+        free_sexpr(cond);
+    }
+}
+
 static void* verify_array_literal(void *context, struct Term *term, void *type_result, void *list_result)
 {
     struct Sexpr *sub_exprs = list_result;
+
+    // The array elements will be copied, so they mustn't be allocated (in
+    // executable code)
+    struct Sexpr *fol_elt = sub_exprs;
+    for (struct OpTermList *elt = term->array_literal.terms; elt; elt = elt->next) {
+        check_value_position(context, elt->rhs, fol_elt->left);
+        fol_elt = fol_elt->right;
+    }
 
     // Get element and index types
     if (term->type->tag != TY_ARRAY || term->type->array_data.sizes == NULL) {
@@ -1099,23 +1180,37 @@ static void* nr_verify_if(struct TermTransform *tr, void *context, struct Term *
 {
     struct VContext *cxt = context;
 
+    // Verify the condition
     struct Sexpr *cond = transform_term(tr, context, term->if_data.cond);
 
-    // assume cond is true on the "then" branch
+    // Assume cond is true on the "then" branch
     struct Sexpr *old_pc = copy_sexpr(cxt->path_condition);
     cxt->path_condition = and_sexpr(cxt->path_condition, copy_sexpr(cond));
 
+    // Verify the "then" term
     struct Sexpr * then_expr = transform_term(tr, context, term->if_data.then_branch);
 
-    // assume cond is false on the "else" branch
+    // The "then" term will be copied (if it is executed), so it shouldn't
+    // be allocated in that case.
+    check_value_position(cxt, term->if_data.then_branch, then_expr);
+
+    // Now assume cond false on the "else" branch.
     free_sexpr(cxt->path_condition);
     cxt->path_condition = and_not_sexpr(copy_sexpr(old_pc), copy_sexpr(cond));
 
+    // Verify the "else" term
     struct Sexpr * else_expr = transform_term(tr, context, term->if_data.else_branch);
 
+    // The "else" term will be copied (if it is executed), so it shouldn't
+    // be allocated in that case.
+    check_value_position(cxt, term->if_data.else_branch, else_expr);
+
+    // After the "if/then/else" has been evaluated, the path condition
+    // returns to what it was before.
     free_sexpr(cxt->path_condition);
     cxt->path_condition = old_pc;
 
+    // Make the "ite" expression for the result.
     return make_list4_sexpr(make_string_sexpr("ite"), cond, then_expr, else_expr);
 }
 
@@ -1408,6 +1503,10 @@ static void* nr_verify_let(struct TermTransform *tr, void *context, struct Term 
     // Transform/verify body
     struct Sexpr *body = transform_term(tr, context, term->let.body);
 
+    // Confirm that the body isn't allocated (in executable code), as it
+    // will be copied.
+    check_value_position(cxt, term->let.body, body);
+
     const char *fol_name = NULL;
 
     // Remove the temporary definition, as we will be changing it into a "let", so
@@ -1504,6 +1603,21 @@ struct Sexpr * add_funarg_lets(struct Item *item, struct Sexpr *cond,
     }
 }
 
+// Wrapper around ref_chain_for_term, which treats the term as ghost code,
+// if the formal parameter is marked "ghost".
+static struct RefChain * ref_chain_for_arg(struct VContext *cxt,
+                                           struct FunArg *formal,
+                                           struct Term *actual)
+{
+    bool old_exec = cxt->executable;
+    if (formal->ghost) {
+        cxt->executable = false;
+    }
+    struct RefChain *ref = ref_chain_for_term(cxt, actual);
+    cxt->executable = old_exec;
+    return ref;
+}
+
 // helper for handle_ref_args
 static struct Sexpr * expanded_fol_ret_type(struct TypeData_Function *func_data)
 {
@@ -1555,7 +1669,7 @@ static struct Sexpr * handle_ref_args(struct VContext *cxt,
             }
 
             // assign that term to the reference
-            struct RefChain *ref = ref_chain_for_term(cxt, actual->rhs);
+            struct RefChain *ref = ref_chain_for_arg(cxt, formal, actual->rhs);
             update_reference(cxt, ref, projection);
             projection = NULL;
             free_ref_chain(ref);
@@ -1627,7 +1741,7 @@ static struct RefArgInfo * get_ref_arg_info(struct VContext *cxt,
     info->ref = formal->ref;
     info->location = &actual->rhs->location;
     if (ref_chain_is_lvalue(actual->rhs)) {
-        info->ref_chain = reverse_ref_chain_and_remove_casts(ref_chain_for_term(cxt, actual->rhs));
+        info->ref_chain = reverse_ref_chain_and_remove_casts(ref_chain_for_arg(cxt, formal, actual->rhs));
     } else {
         info->ref_chain = NULL;
     }
@@ -1814,13 +1928,20 @@ struct Sexpr * verify_call_term(struct VContext *cxt,
 
     const char *func_fol_name = copy_string_2("%", func_src_code_name);
 
+    if (term->call.func->type->tag != TY_FUNCTION) {
+        fatal_error("call not in expected form");
+    }
+
     // Translate the arguments
     struct Sexpr *args = NULL;
     struct Sexpr **arg_tail = &args;
+    struct FunArg *formal = term->call.func->type->function_data.args;
     for (struct OpTermList *arg = term->call.args; arg; arg = arg->next) {
-        struct Sexpr *sexpr = verify_term(cxt, arg->rhs);
+        struct Sexpr *sexpr =
+            formal->ghost ? verify_ghost_term(cxt, arg->rhs) : verify_term(cxt, arg->rhs);
         *arg_tail = make_list1_sexpr(sexpr);
         arg_tail = &(*arg_tail)->right;
+        formal = formal->next;
     }
 
     // Look up preconditions
@@ -1922,6 +2043,14 @@ static void * nr_verify_call(struct TermTransform *tr, void *context, struct Ter
 
 static void * verify_record(void *context, struct Term *term, void *type_result, void *fields_result)
 {
+    // The individual field values will be copied (in executable code), so
+    // they shouldn't be allocated.
+    struct Sexpr *fol_field = fields_result;
+    for (struct NameTermList *field = term->record.fields; field; field = field->next) {
+        check_value_position(context, field->term, fol_field->left);
+        fol_field = fol_field->right;
+    }
+
     struct Sexpr * types = verify_name_type_list(term->type->record_data.fields);
 
     struct Sexpr * ctor = make_string_sexpr("$PROD");
@@ -1987,6 +2116,20 @@ static void * verify_record_update(void *context, struct Term *term, void *type_
 
     free_sexpr(fields_result);
 
+    // In executable contexts, we need to confirm that no allocated value
+    // was copied. This covers not only the explicitly updated fields, but
+    // also the fields carried over from the "base" record. The simplest
+    // way to check this is to check the final result of the expression
+    // as a whole.
+    if (cxt->executable) {
+        struct Sexpr *cond = non_allocated_condition(cxt, term->type, new_lhs);
+        if (cond) {
+            verify_condition(cxt, term->location, cond, "record update result not allocated",
+                             err_msg_copy_allocated(term->location));
+            free_sexpr(cond);
+        }
+    }
+
     return new_lhs;
 }
 
@@ -2013,6 +2156,10 @@ static void * verify_field_proj(void *context, struct Term *term, void *type_res
 
 static void * verify_variant(void *context, struct Term *term, void *type_result, void *payload_result)
 {
+    // In executable code, this will make a copy of the given payload term,
+    // so it shouldn't be allocated.
+    check_value_position(context, term->variant.payload, payload_result);
+
     // find which variant we are looking at
     int num = 0;
     for (struct NameTypeList *variant = term->type->variant_data.variants; variant; variant = variant->next) {
@@ -2097,6 +2244,10 @@ static void * nr_verify_match(struct TermTransform *tr, void *context, struct Te
             // Verify the rhs
             struct Sexpr *rhs_expr = transform_term(tr, context, arm->rhs);
 
+            // The match result will be copied (if this arm is chosen), so
+            // it shouldn't be allocated (in executable code).
+            check_value_position(cxt, arm->rhs, rhs_expr);
+
             // Undo the change to the path condition
             free_sexpr(cxt->path_condition);
             cxt->path_condition = NULL;
@@ -2157,6 +2308,10 @@ static void * nr_verify_match(struct TermTransform *tr, void *context, struct Te
 
             // Verify the rhs
             struct Sexpr *rhs_expr = transform_term(tr, context, arm->rhs);
+
+            // The match result will be copied (if this arm is chosen), so
+            // it shouldn't be allocated (in executable code).
+            check_value_position(cxt, arm->rhs, rhs_expr);
 
             // Undo the change to the path condition
             free_sexpr(cxt->path_condition);
@@ -2316,5 +2471,14 @@ struct Sexpr * verify_term(struct VContext *context, struct Term *term)
 
     struct Sexpr *result = transform_term(&tr, context, term);
 
+    return result;
+}
+
+struct Sexpr * verify_ghost_term(struct VContext *context, struct Term *term)
+{
+    bool old_exec = context->executable;
+    context->executable = false;
+    struct Sexpr *result = verify_term(context, term);
+    context->executable = old_exec;
     return result;
 }

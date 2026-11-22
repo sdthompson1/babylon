@@ -131,7 +131,7 @@ ghost function match_infer_ghost(c: bool, ref s: i32[]): u64
 // ---------------------------------------------------------------------
 // Still legal
 
-function legal(c: bool, a: i32[], ref b: i32[10], ref r: i32[], ref s: i32[]): u64
+function legal(c: bool, a: i32[], ref b: i32[10], ref r: i32[], ref s: i32[])
     requires sizeof(r) > u64(0);
     requires sizeof(s) > u64(0);
 {
@@ -147,14 +147,6 @@ function legal(c: bool, a: i32[], ref b: i32[10], ref r: i32[], ref s: i32[]): u
     over_incomplete(r, a);
     over_incomplete<i32>(s, a);
 
-    // if and match expressions of incomplete type
-    var n1 = sizeof(if c then r else s);
-    var n2 = sizeof(match c { case true => r case false => s });
-    var x1 = (if c then r else s)[0];
-    var x2 = (match c { case true => r case false => s })[0];
-
     // a ghost var of incomplete type is allowed
     ghost var saved = a;
-
-    return n1 + n2;
 }

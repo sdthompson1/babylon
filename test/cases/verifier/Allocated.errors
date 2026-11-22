@@ -10,6 +10,7 @@ src/Allocated.b:68:21: Operator precondition might not be met
 src/Allocated.b:68:5: Assert might not hold
 src/Allocated.b:80:5: Assert might not hold
 src/Allocated.b:88:5: Can't assign, right-hand-side might be allocated
+src/Allocated.b:90:29: Can't copy, value might be allocated
 src/Allocated.b:90:24: Can't assign, right-hand-side might be allocated
 src/Allocated.b:90:5: 'v3' might still be allocated when it goes out of scope
 src/Allocated.b:88:5: 'v1' might still be allocated when it goes out of scope

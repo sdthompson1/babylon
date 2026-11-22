@@ -41,18 +41,6 @@ function to_signed(c: ABC, x: i64, y: u32): i64
 
 // Array conversions
 
-function size_incomplete(c: ABC, ref r: i32[], ref s: i32[3], ref t: i32[*]): u64
-{
-    return sizeof(match c { case A => r  case B => s  case C => t });
-}
-
-function first_incomplete(c: ABC, ref r: i32[], ref s: i32[3], ref t: i32[*]): i32
-    requires sizeof(r) > u64(0);
-    requires sizeof(t) > u64(0);
-{
-    return (match c { case A => r  case B => s  case C => t })[0];
-}
-
 function last_fixed(c: ABC, ref r: i32[3], ref s: i32[], ref t: i32[*]): i32
     requires sizeof(s) == u64(3);
     requires sizeof(t) == u64(3);
@@ -99,8 +87,8 @@ function main()
     print_u8(match C { case A => u8(1)  case B => 2  case C => 255 });
 
     // Arrays
-    var a: i32[5];
-    a[0] = 10;
+    var e: i32[3];
+    e[2] = 42;
     var b: i32[3];
     b[0] = 20;
     b[2] = 22;
@@ -108,23 +96,6 @@ function main()
     alloc_array<i32>(d, 3);
     d[0] = 30;
     d[2] = 32;
-
-    var z1 = size_incomplete(A, a, b, d);
-    print_u64(z1);
-    var z2 = size_incomplete(B, a, b, d);
-    print_u64(z2);
-    var z3 = size_incomplete(C, a, b, d);
-    print_u64(z3);
-
-    var f1 = first_incomplete(A, a, b, d);
-    print_i32(f1);
-    var f2 = first_incomplete(B, a, b, d);
-    print_i32(f2);
-    var f3 = first_incomplete(C, a, b, d);
-    print_i32(f3);
-
-    var e: i32[3];
-    e[2] = 42;
     var l1 = last_fixed(A, e, b, d);
     print_i32(l1);
     var l2 = last_fixed(B, e, b, d);

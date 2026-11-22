@@ -895,6 +895,11 @@ char * err_msg_assign_from_allocated(struct Location loc)
     return err_msg(loc, "Can't assign, right-hand-side might be allocated\n");
 }
 
+char * err_msg_copy_allocated(struct Location loc)
+{
+    return err_msg(loc, "Can't copy, value might be allocated\n");
+}
+
 char * err_msg_return_allocated(struct Location loc)
 {
     return err_msg(loc, "Return value might be allocated\n");

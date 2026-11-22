@@ -98,6 +98,7 @@ bool verify_module(struct VerifierEnv *verifier_env,
     cxt.path_condition = NULL;
     cxt.facts = NULL;
     cxt.num_facts = 0;
+    cxt.executable = true;  // Assume code is executable unless something says otherwise
     cxt.run_solver = false;  // set properly below
     cxt.function_args = NULL;
     cxt.arglist_sexpr = cxt.funapp_sexpr = NULL;

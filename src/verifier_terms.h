@@ -21,6 +21,10 @@ struct Sexpr * add_funarg_lets(struct Item *item, struct Sexpr *cond,
 // Returns a converted Sexpr, or NULL if verification fails.
 struct Sexpr * verify_term(struct VContext *context, struct Term *term);
 
+// Wrapper around verify_term that temporarily sets context->executable
+// to false while verifying the term.
+struct Sexpr * verify_ghost_term(struct VContext *context, struct Term *term);
+
 struct Sexpr * verify_call_term(struct VContext *cxt,
                                 struct Term *term);
 

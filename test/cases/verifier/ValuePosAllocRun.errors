@@ -1,0 +1,3 @@
+src/ValuePosAllocRun.b:48:41: Can't copy, value might be allocated
+src/ValuePosAllocRun.b:54:35: Can't copy, value might be allocated
+src/ValuePosAllocRun.b:60:39: Can't copy, value might be allocated

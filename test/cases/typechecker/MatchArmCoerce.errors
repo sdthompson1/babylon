@@ -1,4 +1,5 @@
 src/MatchArmCoerce.b:39:14: Can't take reference (expression is not an lvalue)
+src/MatchArmCoerce.b:58:39: Can't use an incomplete array type here
 src/MatchArmCoerce.b:75:59: Type mismatch
 src/MatchArmCoerce.b:80:59: Type mismatch
 src/MatchArmCoerce.b:85:59: Type mismatch

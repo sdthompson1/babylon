@@ -630,6 +630,19 @@ static bool ensure_type_meets_flags(struct TypecheckContext *tc_context,
     fatal_error("unrecognised type tag");
 }
 
+// Check that the given type is complete, OR we are in ghost code.
+// Used in so-called "value positions".
+static bool check_executable_complete(struct TypecheckContext *tc_context,
+                                      struct Type *type,
+                                      const struct Location *loc)
+{
+    if (!tc_context->executable) {
+        return true;
+    }
+    struct TypeFlags flags = { .must_be_complete = true };
+    return ensure_type_meets_flags(tc_context, &flags, type, loc);
+}
+
 // Check that a type is fully inferred, i.e. contains no unresolved TY_UNIVARs.
 //  - If any are found, report a "Cannot infer type" error and return false.
 //  - Otherwise, return true.
@@ -1631,7 +1644,16 @@ static void* typecheck_if(void *context, struct Term *term, void *type_result, v
                            term->if_data.then_branch->type,
                            &term->if_data.else_branch);
 
-    if (cond_ok && branches_ok) {
+    // In executable code, 'then' and 'else' terms must have a complete
+    // type. (Both branches have the same type at this point, so only
+    // one check is needed.)
+    bool complete_ok =
+        branches_ok
+        && check_executable_complete(tc_context,
+                                     term->if_data.then_branch->type,
+                                     &term->if_data.then_branch->location);
+
+    if (cond_ok && branches_ok && complete_ok) {
         term->type = copy_type(term->if_data.then_branch->type);
     }
 
@@ -2118,6 +2140,14 @@ static void* nr_typecheck_let(struct TermTransform *tr, void *context, struct Te
     entry->read_only = true;
 
     transform_term(tr, context, term->let.body);
+    if (!term->let.body->type) {
+        return NULL;
+    }
+
+    // The body (but not the rhs) must have complete type in executable code.
+    if (!check_executable_complete(tc_context, term->let.body->type, &term->let.body->location)) {
+        return NULL;
+    }
 
     term->type = copy_type(term->let.body->type);
 
@@ -2436,7 +2466,14 @@ static void* typecheck_record(void *context, struct Term *term, void *type_resul
     if (ok) {
         struct Type *type = make_type(term->location, TY_RECORD);
         type->record_data.fields = field_types;
-        term->type = type;
+
+        // The newly constructed record must have complete type (in
+        // executable code).
+        if (check_executable_complete(tc_context, type, &term->location)) {
+            term->type = type;
+        } else {
+            free_type(type);
+        }
     } else {
         free_name_type_list(field_types);
     }
@@ -2498,6 +2535,12 @@ static void* typecheck_record_update(void *context, struct Term *term, void *typ
                 ok = false;
             }
         }
+    }
+
+    // In executable code, all the record fields will be copied, so the
+    // record must have a complete type.
+    if (ok && !check_executable_complete(tc_context, lhs_ty, &term->location)) {
+        ok = false;
     }
 
     if (ok) {
@@ -2846,7 +2889,15 @@ static void* nr_typecheck_match(struct TermTransform *tr, void *context, struct 
         }
     }
 
-    if (scrutinee_ok && patterns_ok && result_type && consistent_type) {
+    // In executable code, the result type of the match must be complete.
+    // (All arms have the same type, so we could report the error at any
+    // of them; we choose the first.)
+    bool complete_ok =
+        result_type
+        && consistent_type
+        && check_executable_complete(tc_context, result_type, &((struct Term*)term->match.arms->rhs)->location);
+
+    if (scrutinee_ok && patterns_ok && result_type && consistent_type && complete_ok) {
         term->type = copy_type(result_type);
     }
 

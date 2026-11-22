@@ -81,10 +81,20 @@ function test4()
     print_i8(y[3]);
 }
 
+function fn5(r: i8[,]): u64
+    requires sizeof(r).0 < 10000;
+    requires sizeof(r).1 < 10000;
+{
+    return sizeof(r).0 + 10 * sizeof(r).1;
+}
+
 function main()
 {
     test1();
     test2();
     test3();
     test4();
+
+    var a: i8[3, 6];
+    print_u64(fn5(a));
 }

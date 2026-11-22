@@ -55,7 +55,7 @@ function signed_unsigned(c: ABC, x: u8, y: i32): u8
 
 function array_to_incomplete(c: ABC, ref r: i32[], ref s: i32[10], ref t: i32[*]): u64
 {
-    return sizeof(match c { case A => r  case B => s  case C => t });   // OK, arms are i32[]
+    return sizeof(match c { case A => r  case B => s  case C => t });   // Error, can't use incomplete type as arm of a match expression
 }
 
 function array_same_type(c: bool, ref r: i32[10], ref s: i32[10]): u64

@@ -155,6 +155,7 @@ char * err_msg_aliasing_violation(struct Location location, int n1, int n2);
 char * err_msg_possible_aliasing_violation(struct Location location, int n1, int n2);
 char * err_msg_assign_to_allocated(struct Location loc);
 char * err_msg_assign_from_allocated(struct Location loc);
+char * err_msg_copy_allocated(struct Location loc);
 char * err_msg_return_allocated(struct Location loc);
 char * err_msg_var_still_allocated(const char *name, struct Location loc);
 char * err_msg_var_still_allocated_at_return(const char *name, struct Location loc);

@@ -64,11 +64,6 @@ function first_arm_decides(c: ABC, x: i32, y: i64): i64
 
 // Array conversions
 
-function to_incomplete(c: ABC, ref r: i32[], ref s: i32[10], ref t: i32[*]): u64
-{
-    return sizeof(match c { case A => r  case B => s  case C => t });   // OK, cannot fail
-}
-
 function to_fixed_unknown(c: bool, ref r: i32[10], ref s: i32[]): u64
 {
     return sizeof(match c { case true => r  case false => s });   // Error, s might have the wrong size
