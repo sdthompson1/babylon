@@ -97,7 +97,7 @@ datatype CoreTerm =
   | CoreTm_ArrayProj CoreTerm "CoreTerm list"
   | CoreTm_Match CoreTerm "(CorePattern \<times> CoreTerm) list"
   | CoreTm_Sizeof CoreTerm
-  | CoreTm_Allocated CoreType CoreTerm  (* the type is the operand's type *)
+  | CoreTm_Allocated CoreTerm
   | CoreTm_Default CoreType  (* default value of the given (well-kinded) type *)
 
 (* Is this an array type? *)
@@ -138,7 +138,7 @@ lemma is_lvalue_simps [simp]:
   "is_lvalue (CoreTm_Match scrut arms) = False"
   "is_lvalue (CoreTm_Cast ty tm) = (is_array_type ty \<and> is_lvalue tm)"
   "is_lvalue (CoreTm_Quantifier q v ty body) = False"
-  "is_lvalue (CoreTm_Allocated ty tm) = False"
+  "is_lvalue (CoreTm_Allocated tm) = False"
   "is_lvalue (CoreTm_Sizeof tm) = False"
   "is_lvalue (CoreTm_Default ty) = False"
   by (simp_all add: is_lvalue_def)
@@ -161,9 +161,8 @@ datatype CoreStatement =
   (* Use: specify a witness for an existential variable in a proof. *)
   | CoreStmt_Use CoreTerm
   
-  (* Assignment. Rhs must be a pure term; lhs must be an lvalue. The type is
-     the (common) type of the lhs and rhs. *)
-  | CoreStmt_Assign GhostOrNot CoreType CoreTerm CoreTerm
+  (* Assignment. Rhs must be a pure term; lhs must be an lvalue. *)
+  | CoreStmt_Assign GhostOrNot CoreTerm CoreTerm
   
   (* Assignment whose rhs is an impure function call.
      assignGhost, lhs (must be lvalue), optional cast type for the return value,

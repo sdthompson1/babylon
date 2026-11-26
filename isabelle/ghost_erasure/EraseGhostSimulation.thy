@@ -551,7 +551,7 @@ next
         note sE = sub[OF W1 s]
         show ?thesis using s sE by (simp add: CoreTm_Sizeof)
       next
-        case (CoreTm_Allocated argTy arg)
+        case (CoreTm_Allocated arg)
         with W show ?thesis by simp
       next
         case (CoreTm_Default dty)
@@ -975,7 +975,7 @@ next
         case (CoreStmt_Use witnessTm)
         with E show ?thesis by simp
       next
-        case (CoreStmt_Assign g ty lhsLv rhsTm)
+        case (CoreStmt_Assign g lhsLv rhsTm)
         show ?thesis
         proof (cases g)
           case Ghost
@@ -984,13 +984,13 @@ next
           case NotGhost
           note CoreStmt_Assign = CoreStmt_Assign[unfolded NotGhost]
           from E CoreStmt_Assign NotGhost
-          have stmt'_eq: "stmt' = CoreStmt_Assign NotGhost ty (?er lhsLv) (?er rhsTm)" by auto
+          have stmt'_eq: "stmt' = CoreStmt_Assign NotGhost (?er lhsLv) (?er rhsTm)" by auto
           from T CoreStmt_Assign NotGhost
           have lW: "notghost_typed env lhsLv"
             and rW: "notghost_typed env rhsTm"
-            by (auto simp: notghost_typed_def split: if_splits)
+            by (auto simp: notghost_typed_def split: if_splits option.splits)
           from T CoreStmt_Assign have env'_eq: "env' = env"
-            by (auto split: if_splits)
+            by (auto split: if_splits option.splits)
           from H CoreStmt_Assign obtain addr path where
             wl: "interp_writable_lvalue d fuel ?fX lhsLv = Inr (addr, path)"
             by (auto split: sum.splits)

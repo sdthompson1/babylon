@@ -704,11 +704,11 @@ next
     by (simp add: env'_eq)
 next
   \<comment> \<open>Assign: env unchanged.\<close>
-  case (4 env ghost assignGhost lhsTy lhsTm rhsTm)
+  case (4 env ghost assignGhost lhsTm rhsTm)
   let ?ext = "\<lambda>e :: CoreTyEnv.
                 e \<lparr> TE_TypeVars := TE_TypeVars e |\<union>| extraTV,
                     TE_RuntimeTypeVars := TE_RuntimeTypeVars e |\<union>| extraRT \<rparr>"
-  from "4.prems" have
+  from "4.prems" obtain lhsTy where
     wl: "is_writable_lvalue env lhsTm" and
     gh: "ghost = Ghost \<longrightarrow> assignGhost = Ghost" and
     glv: "ghost_lvalue_ok env assignGhost lhsTm" and
@@ -716,7 +716,7 @@ next
     cp: "assignGhost = NotGhost \<longrightarrow> is_complete_type lhsTy" and
     rhs: "core_term_type env assignGhost rhsTm = Some lhsTy" and
     env'_eq: "env' = env"
-    by (auto split: if_splits)
+    by (auto split: if_splits option.splits)
   let ?env1 = "?ext env"
   have lhs': "core_term_type ?env1 assignGhost lhsTm = Some lhsTy"
     using lhs core_term_type_irrelevant_tyvar by blast

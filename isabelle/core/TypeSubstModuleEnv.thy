@@ -1815,14 +1815,14 @@ next
     using cond_ok is_lvalue_apply_subst_to_term[of tm subst] by blast
   show ?case using inner_subst cond_ok_subst ty_eq by simp
 next
-  case (CoreTm_Allocated innerTy tm)
+  case (CoreTm_Allocated tm)
   show ?case
   proof (cases ghost)
     case NotGhost
     with CoreTm_Allocated.prems(1) show ?thesis by simp
   next
     case Ghost
-    with CoreTm_Allocated.prems(1) have
+    with CoreTm_Allocated.prems(1) obtain innerTy where
       inner: "core_term_type env Ghost tm = Some innerTy" and
       inner_cp: "is_complete_type innerTy" and
       ty_eq: "ty = CoreTy_Bool"
@@ -2277,9 +2277,9 @@ next
     using gh wk_subst rt_subst lv glv init_subst out_subst_eq wl_eq by simp
 next
   \<comment> \<open>Assign: env unchanged.\<close>
-  case (4 env ghost assignGhost lhsTy lhsTm rhsTm)
+  case (4 env ghost assignGhost lhsTm rhsTm)
   note wf = "4.prems"(2) and ok = "4.prems"(3)
-  from "4.prems"(1) have
+  from "4.prems"(1) obtain lhsTy where
     gh: "ghost = Ghost \<longrightarrow> assignGhost = Ghost" and
     wl: "is_writable_lvalue env lhsTm" and
     glv: "ghost_lvalue_ok env assignGhost lhsTm" and
@@ -2287,7 +2287,7 @@ next
     cpl: "assignGhost = NotGhost \<longrightarrow> is_complete_type lhsTy" and
     rhs: "core_term_type env assignGhost rhsTm = Some lhsTy" and
     out_eq: "envOut = env"
-    by (auto split: if_splits)
+    by (auto split: if_splits option.splits)
   let ?me = "apply_subst_to_module_env subst targetEnv env"
   have ok_rt_a: "assignGhost = NotGhost \<longrightarrow> module_env_subst_runtime_ok subst targetEnv env"
     using ghost_cond_weaken[OF gh "4.prems"(4)] .

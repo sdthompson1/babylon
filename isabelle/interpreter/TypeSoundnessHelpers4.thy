@@ -589,7 +589,7 @@ next
         then show ?thesis
           using "1.prems"(1,2) Suc.IH(1) type_soundness_sizeof typing by blast
       next
-        case (CoreTm_Allocated x181 x182)
+        case (CoreTm_Allocated x182)
         then show ?thesis
           using "1.prems"(1,2) Suc.IH(1) type_soundness_allocated typing by blast
       next
@@ -1471,17 +1471,17 @@ next
             qed
           qed
       next
-        case (CoreStmt_Assign assignGhost lhsTy lhsTm rhsTm)
+        case (CoreStmt_Assign assignGhost lhsTm rhsTm)
           \<comment> \<open>Assign (ghost or not): rhs is an ordinary (pure) term. Evaluate lhs
               lvalue and rhs term (the rhs is in a value position, so its value
               is checked by value_position), then update the store.
               (Impure-call rhs's are handled by CoreStmt_AssignCall.)\<close>
-          from typing CoreStmt_Assign have
+          from typing CoreStmt_Assign obtain lhsTy where
             lhs_writable: "is_writable_lvalue env lhsTm" and
             lhs_ty0: "core_term_type env assignGhost lhsTm = Some lhsTy" and
             rhs_ty0: "core_term_type env assignGhost rhsTm = Some lhsTy" and
             env'_eq: "env' = env"
-            by (auto split: if_splits)
+            by (auto split: if_splits option.splits)
           have lhs_ty: "core_term_type env Ghost lhsTm = Some lhsTy"
             by (rule core_term_type_NotGhost_imp_Ghost[OF lhs_ty0])
           have rhs_ty: "core_term_type env Ghost rhsTm = Some lhsTy"
@@ -1516,7 +1516,7 @@ next
               case (Inl err)
               with rhs_sound have err_sound: "sound_error_result err" by simp
               have interp_err: "interp_statement d (Suc fuel) state
-                  (CoreStmt_Assign assignGhost lhsTy lhsTm rhsTm) = Inl err"
+                  (CoreStmt_Assign assignGhost lhsTm rhsTm) = Inl err"
                 using Inl \<open>interp_writable_lvalue d fuel (raise_mode state assignGhost) lhsTm = Inr addrPath\<close> ap_eq by simp
               with err_sound CoreStmt_Assign show ?thesis by simp
             next
@@ -1534,7 +1534,7 @@ next
                 from update_value_at_path_error_is_runtime[OF old_slot_typed path_ty Inl rhs_typed]
                 have err_eq: "err = RuntimeError" .
                 have interp_err: "interp_statement d (Suc fuel) state
-                    (CoreStmt_Assign assignGhost lhsTy lhsTm rhsTm) = Inl RuntimeError"
+                    (CoreStmt_Assign assignGhost lhsTm rhsTm) = Inl RuntimeError"
                   using Inl rhs_eval \<open>interp_writable_lvalue d fuel (raise_mode state assignGhost) lhsTm = Inr addrPath\<close>
                         ap_eq err_eq by simp
                 with CoreStmt_Assign show ?thesis by simp
@@ -1544,7 +1544,7 @@ next
                 have new_slot_typed: "value_has_type env newVal (storeTyping ! addr)" .
                 let ?state' = "state \<lparr> IS_Store := (IS_Store state)[addr := newVal] \<rparr>"
                 have interp_eq: "interp_statement d (Suc fuel) state
-                    (CoreStmt_Assign assignGhost lhsTy lhsTm rhsTm) = Inr (Continue ?state')"
+                    (CoreStmt_Assign assignGhost lhsTm rhsTm) = Inr (Continue ?state')"
                   using Inr rhs_eval
                     \<open>interp_writable_lvalue d fuel (raise_mode state assignGhost) lhsTm = Inr addrPath\<close> ap_eq by simp
                 from state_matches_env_update_store[OF "4.prems"(1) addr_valid

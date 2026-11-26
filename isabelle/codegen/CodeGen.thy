@@ -176,9 +176,10 @@ where
     cg_return (Sc @ Scast @ [decl] @ init, cg_bind_var cg env' x rep)
    }"
 
-| "lower_stmt cg (CoreStmt_Assign Ghost _ _ _) = cg_fail (CGE_Ghost (CG_Fun cg))"
+| "lower_stmt cg (CoreStmt_Assign Ghost _ _) = cg_fail (CGE_Ghost (CG_Fun cg))"
 
-| "lower_stmt cg (CoreStmt_Assign NotGhost ty lv t) = do {
+| "lower_stmt cg (CoreStmt_Assign NotGhost lv t) = do {
+    ty \<leftarrow> ty_of cg lv;
     (S, e) \<leftarrow> lower_term cg t;
     Ss \<leftarrow> lower_store cg lv ty e;
     cg_return (S @ Ss, cg)

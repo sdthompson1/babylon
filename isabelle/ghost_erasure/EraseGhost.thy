@@ -69,7 +69,7 @@ fun erase_ghost_term :: "(string, FunInfo) fmap \<Rightarrow> CoreTerm \<Rightar
     CoreTm_Match (erase_ghost_term funs tm)
                  (map (\<lambda>(pat, tm). (pat, erase_ghost_term funs tm)) cases)"
 | "erase_ghost_term funs (CoreTm_Sizeof tm) = CoreTm_Sizeof (erase_ghost_term funs tm)"
-| "erase_ghost_term funs (CoreTm_Allocated ty tm) = CoreTm_Allocated ty tm"
+| "erase_ghost_term funs (CoreTm_Allocated tm) = CoreTm_Allocated tm"
 | "erase_ghost_term funs (CoreTm_Default ty) = CoreTm_Default ty"
 
 (* Erasure keeps the shape of an lvalue. *)
@@ -112,9 +112,9 @@ and erase_ghost_statement_list ::
     [CoreStmt_VarDeclCall NotGhost varName ty castOpt fnName tyArgs
        (erase_ghost_args funs fnName (map (erase_ghost_term funs) argTms))]"
 
-| "erase_ghost_statement funs (CoreStmt_Assign Ghost _ _ _) = []"
-| "erase_ghost_statement funs (CoreStmt_Assign NotGhost ty lhsTm rhsTm) =
-    [CoreStmt_Assign NotGhost ty (erase_ghost_term funs lhsTm) (erase_ghost_term funs rhsTm)]"
+| "erase_ghost_statement funs (CoreStmt_Assign Ghost _ _) = []"
+| "erase_ghost_statement funs (CoreStmt_Assign NotGhost lhsTm rhsTm) =
+    [CoreStmt_Assign NotGhost (erase_ghost_term funs lhsTm) (erase_ghost_term funs rhsTm)]"
 
 | "erase_ghost_statement funs (CoreStmt_AssignCall Ghost _ _ _ _ _) = []"
 | "erase_ghost_statement funs

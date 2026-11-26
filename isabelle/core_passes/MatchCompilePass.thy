@@ -163,7 +163,7 @@ fun match_compile_term :: "CoreTerm \<Rightarrow> CoreTerm" where
         then CoreTm_Match (match_compile_term scrut) arms'
         else compile_match_term (match_compile_term scrut) arms')"
 | "match_compile_term (CoreTm_Sizeof tm) = CoreTm_Sizeof (match_compile_term tm)"
-| "match_compile_term (CoreTm_Allocated ty tm) = CoreTm_Allocated ty (match_compile_term tm)"
+| "match_compile_term (CoreTm_Allocated tm) = CoreTm_Allocated (match_compile_term tm)"
 | "match_compile_term (CoreTm_Default ty) = CoreTm_Default ty"
 
 (* The pass keeps the shape of an lvalue, and (since a compiled match is
@@ -189,8 +189,8 @@ and match_compile_statement_list :: "CoreStatement list \<Rightarrow> CoreStatem
 | "match_compile_statement (CoreStmt_Obtain varName ty condTm) =
     [CoreStmt_Obtain varName ty (match_compile_term condTm)]"
 | "match_compile_statement (CoreStmt_Use tm) = [CoreStmt_Use (match_compile_term tm)]"
-| "match_compile_statement (CoreStmt_Assign g ty lhs rhs) =
-    [CoreStmt_Assign g ty (match_compile_term lhs) (match_compile_term rhs)]"
+| "match_compile_statement (CoreStmt_Assign g lhs rhs) =
+    [CoreStmt_Assign g (match_compile_term lhs) (match_compile_term rhs)]"
 | "match_compile_statement (CoreStmt_AssignCall g lhs castOpt fnName tyArgs argTms) =
     [CoreStmt_AssignCall g (match_compile_term lhs) castOpt fnName tyArgs
        (map match_compile_term argTms)]"
@@ -278,7 +278,7 @@ fun core_term_flat :: "CoreTerm \<Rightarrow> bool" where
     (core_term_flat scrut
      \<and> list_all (\<lambda>(p, body). flat_pattern p \<and> core_term_flat body) arms)"
 | "core_term_flat (CoreTm_Sizeof tm) = core_term_flat tm"
-| "core_term_flat (CoreTm_Allocated _ tm) = core_term_flat tm"
+| "core_term_flat (CoreTm_Allocated tm) = core_term_flat tm"
 | "core_term_flat (CoreTm_Default _) = True"
 
 fun core_statement_flat :: "CoreStatement \<Rightarrow> bool"
@@ -288,7 +288,7 @@ and core_statement_list_flat :: "CoreStatement list \<Rightarrow> bool" where
 | "core_statement_flat (CoreStmt_Fix _ _) = True"
 | "core_statement_flat (CoreStmt_Obtain _ _ condTm) = core_term_flat condTm"
 | "core_statement_flat (CoreStmt_Use tm) = core_term_flat tm"
-| "core_statement_flat (CoreStmt_Assign _ _ lhs rhs) = (core_term_flat lhs \<and> core_term_flat rhs)"
+| "core_statement_flat (CoreStmt_Assign _ lhs rhs) = (core_term_flat lhs \<and> core_term_flat rhs)"
 | "core_statement_flat (CoreStmt_AssignCall _ lhs _ _ _ argTms) =
     (core_term_flat lhs \<and> list_all core_term_flat argTms)"
 | "core_statement_flat (CoreStmt_Swap _ lhs rhs) = (core_term_flat lhs \<and> core_term_flat rhs)"
@@ -385,7 +385,7 @@ fun core_term_match_scrutinees_ok :: "CoreTerm \<Rightarrow> bool" where
      \<and> core_term_match_scrutinees_ok scrut
      \<and> list_all (\<lambda>(_, body). core_term_match_scrutinees_ok body) arms)"
 | "core_term_match_scrutinees_ok (CoreTm_Sizeof tm) = core_term_match_scrutinees_ok tm"
-| "core_term_match_scrutinees_ok (CoreTm_Allocated _ tm) = core_term_match_scrutinees_ok tm"
+| "core_term_match_scrutinees_ok (CoreTm_Allocated tm) = core_term_match_scrutinees_ok tm"
 | "core_term_match_scrutinees_ok (CoreTm_Default _) = True"
 
 fun core_statement_match_scrutinees_ok :: "CoreStatement \<Rightarrow> bool"
@@ -398,7 +398,7 @@ and core_statement_list_match_scrutinees_ok :: "CoreStatement list \<Rightarrow>
 | "core_statement_match_scrutinees_ok (CoreStmt_Obtain _ _ condTm) =
     core_term_match_scrutinees_ok condTm"
 | "core_statement_match_scrutinees_ok (CoreStmt_Use tm) = core_term_match_scrutinees_ok tm"
-| "core_statement_match_scrutinees_ok (CoreStmt_Assign _ _ lhs rhs) =
+| "core_statement_match_scrutinees_ok (CoreStmt_Assign _ lhs rhs) =
     (core_term_match_scrutinees_ok lhs \<and> core_term_match_scrutinees_ok rhs)"
 | "core_statement_match_scrutinees_ok (CoreStmt_AssignCall _ lhs _ _ _ argTms) =
     (core_term_match_scrutinees_ok lhs \<and> list_all core_term_match_scrutinees_ok argTms)"

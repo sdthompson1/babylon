@@ -382,7 +382,7 @@ next
       next
         case (CoreStmt_Use _) with H show ?thesis by simp
       next
-        case (CoreStmt_Assign ga ty lhsLv rhsTm)
+        case (CoreStmt_Assign ga lhsLv rhsTm)
         from H CoreStmt_Assign obtain addr path where
           wl: "interp_writable_lvalue d fuel (raise_mode state ga) lhsLv = Inr (addr, path)"
           by (auto split: sum.splits)

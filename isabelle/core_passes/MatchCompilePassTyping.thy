@@ -590,7 +590,7 @@ next
     using ok is_lvalue_match_compile_term by blast
   show ?case using t' ok' ty_eq by simp
 next
-  case (CoreTm_Allocated aty tm)
+  case (CoreTm_Allocated tm)
   from CoreTm_Allocated.prems(1) have g: "ghost = Ghost" by (cases ghost) simp_all
   from CoreTm_Allocated.prems(1) g obtain ty' where
     t: "core_term_type env Ghost tm = Some ty'"
@@ -784,12 +784,12 @@ next
   have t': "core_term_type env ghost (match_compile_term witnessTm) = Some qVarTy" by simp
   from goal t' g top env'_eq show ?case by simp
 next
-  case (CoreStmt_Assign assignGhost lhsTy lhsTm rhsTm)
-  from CoreStmt_Assign.prems(1) have
+  case (CoreStmt_Assign assignGhost lhsTm rhsTm)
+  from CoreStmt_Assign.prems(1) obtain lhsTy where
     w: "is_writable_lvalue env lhsTm" and
     l: "core_term_type env assignGhost lhsTm = Some lhsTy" and
     r: "core_term_type env assignGhost rhsTm = Some lhsTy"
-    by (auto split: if_splits)
+    by (auto split: if_splits option.splits)
   have lv: "is_lvalue lhsTm" by (rule is_writable_lvalue_is_lvalue[OF w])
   from match_compile_term_type[OF l CoreStmt_Assign.prems(2)] CoreStmt_Assign.prems(3)
   have l': "core_term_type env assignGhost (match_compile_term lhsTm) = Some lhsTy" by simp

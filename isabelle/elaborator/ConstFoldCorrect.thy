@@ -499,7 +499,7 @@ next
     unfolding v_eq ty_eq
     by (rule array_size_to_value_has_sizeof_type[OF sv smd])
 next
-  case (CoreTm_Allocated ty tm)
+  case (CoreTm_Allocated tm)
   then show ?case by simp
 next
   case (CoreTm_Default defTy)
@@ -1601,7 +1601,7 @@ next
       by (simp add: h)
   qed
 next
-  case (CoreTm_Allocated ty tm)
+  case (CoreTm_Allocated tm)
   then show ?case by simp
 next
   case (CoreTm_Default defTy)
