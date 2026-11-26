@@ -1,0 +1,3 @@
+src/SizeofNonLvalue.b:24:5: 'a' might still be allocated at return statement
+src/SizeofNonLvalue.b:24:5: Return value might be allocated
+src/SizeofNonLvalue.b:49:48: Can't copy, value might be allocated

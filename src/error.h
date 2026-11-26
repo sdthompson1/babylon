@@ -72,7 +72,6 @@ void report_cannot_swap(struct Term *term);
 void report_cannot_swap_readonly(struct Term *term);
 void report_cannot_take_ref(struct Location location);
 void report_cannot_take_ref_to_readonly(struct Location location);
-void report_cannot_take_sizeof(struct Term *term);
 void report_incomplete_array_type(struct Location loc);
 void report_cannot_infer_type(struct Location loc);
 void report_cannot_infer_type_arg_from_ghost_arg(struct Location loc);

@@ -1265,16 +1265,13 @@ where
                         finalize_match_term loc scrutTm dps coercedBodies
                           (apply_subst finalSubst (hd bodyTys)) mv2))))"
 
-  (* Sizeof: operand must be an array; allocatable dims require lvalue or ghost *)
+  (* Sizeof: operand must be an array *)
 | "elab_term env elabEnv ghost (BabTm_Sizeof loc tm) next_mv =
     (case elab_term env elabEnv ghost tm next_mv of
       Inl errs \<Rightarrow> Inl errs
     | Inr (newTm, tmTy, next_mv') \<Rightarrow>
         (case tmTy of
-          CoreTy_Array _ dims \<Rightarrow>
-            if list_ex (\<lambda>d. d = CoreDim_Allocatable) dims \<and> \<not> is_lvalue newTm \<and> ghost = NotGhost
-            then Inl [TyErr_SizeofRequiresLvalue loc]
-            else Inr (CoreTm_Sizeof newTm, sizeof_type dims, next_mv')
+          CoreTy_Array _ dims \<Rightarrow> Inr (CoreTm_Sizeof newTm, sizeof_type dims, next_mv')
         | _ \<Rightarrow> Inl [TyErr_NotAnArrayType loc tmTy]))"
 
   (* Allocated: ghost-only, operand must be of complete type, result is Bool. *)

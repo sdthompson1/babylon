@@ -46,7 +46,6 @@ datatype (plugins del: size "quickcheck" transfer lifting) TypeError =
   | TyErr_TupleIndexOutOfRange Location nat CoreType  (* index, tuple type *)
 
   (* Sizeof and Array errors *)
-  | TyErr_SizeofRequiresLvalue Location
   | TyErr_NotAnArrayType Location CoreType
   | TyErr_WrongNumberOfIndices Location nat nat  (* expected (= num dims), actual *)
   | TyErr_InvalidArrayDimension Location

@@ -295,8 +295,6 @@ definition type_error_to_string :: "TypeError \<Rightarrow> string" where
     | TyErr_TupleIndexOutOfRange loc idx ty \<Rightarrow>
         loc_prefix loc @ ''tuple index '' @ nat_to_string idx
           @ '' is out of range for type '' @ quote_type ty
-    | TyErr_SizeofRequiresLvalue loc \<Rightarrow>
-        loc_prefix loc @ quote ''sizeof'' @ '' requires an lvalue argument''
     | TyErr_NotAnArrayType loc ty \<Rightarrow>
         loc_prefix loc @ ''array type required, but found '' @ quote_type ty
     | TyErr_WrongNumberOfIndices loc expected actual \<Rightarrow>

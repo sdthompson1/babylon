@@ -3300,7 +3300,6 @@ next
     sub_ty_eq: "subTy = CoreTy_Array elemTy dims"
     by (auto split: CoreType.splits option.splits if_splits)
   from "17.prems"(1) elab_sub sub_ty_eq have
-    guard: "\<not> (list_ex (\<lambda>d. d = CoreDim_Allocatable) dims \<and> \<not> is_lvalue newSubTm \<and> ghost = NotGhost)" and
     newTm_eq: "newTm = CoreTm_Sizeof newSubTm" and
     ty_eq: "ty = sizeof_type dims" and
     next_mv_eq: "next_mv' = next_mv_sub"
@@ -3312,7 +3311,7 @@ next
 
   \<comment> \<open>Put it together\<close>
   show ?case
-    using newTm_eq ty_eq ih guard by simp
+    using newTm_eq ty_eq ih by simp
 next
   \<comment> \<open>Case: BabTm_Allocated\<close>
   case (18 env elabEnv ghost loc tm next_mv)

@@ -2921,19 +2921,6 @@ static void* typecheck_sizeof(void *context, struct Term *term, void *type_resul
         return NULL;
     }
 
-    if (array_type->tag == TY_ARRAY
-    && array_type->array_data.resizable
-    && !is_lvalue(tc_context, rhs, NULL, NULL)
-    && tc_context->executable) {
-        // In executable code, passing an rvalue (of allocatable type)
-        // to sizeof would "lose" the rvalue, so we would never be able
-        // to free it.
-        // In ghost code it is fine.
-        report_cannot_take_sizeof(rhs);
-        ++tc_context->num_errors;
-        return NULL;
-    }
-
     int ndim = array_type->array_data.ndim;
     if (ndim == 1) {
         term->type = make_int_type(g_no_location, false, 64);
