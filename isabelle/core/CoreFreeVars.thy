@@ -97,7 +97,7 @@ fun core_term_free_vars :: "CoreTerm \<Rightarrow> string fset" where
 | "core_term_free_vars (CoreTm_Match scrut arms) =
     core_term_free_vars scrut |\<union>| ffUnion (fset_of_list (map (core_term_free_vars \<circ> snd) arms))"
 | "core_term_free_vars (CoreTm_Sizeof tm) = core_term_free_vars tm"
-| "core_term_free_vars (CoreTm_Allocated _ tm) = core_term_free_vars tm"
+| "core_term_free_vars (CoreTm_Allocated tm) = core_term_free_vars tm"
 | "core_term_free_vars (CoreTm_Default _) = {||}"
 
 (* Membership in ffUnion (f |`| fset_of_list xs) reduces to a list quantifier
@@ -147,8 +147,7 @@ fun core_term_free_tyvars :: "CoreTerm \<Rightarrow> string set" where
 | "core_term_free_tyvars (CoreTm_Match scrut arms) =
     core_term_free_tyvars scrut \<union> \<Union>(set (map (core_term_free_tyvars \<circ> snd) arms))"
 | "core_term_free_tyvars (CoreTm_Sizeof tm) = core_term_free_tyvars tm"
-| "core_term_free_tyvars (CoreTm_Allocated ty tm) =
-    type_tyvars ty \<union> core_term_free_tyvars tm"
+| "core_term_free_tyvars (CoreTm_Allocated tm) = core_term_free_tyvars tm"
 | "core_term_free_tyvars (CoreTm_Default ty) = type_tyvars ty"
 
 (* Executable version of core_term_free_tyvars, returning a list (possibly with duplicates). *)
@@ -180,8 +179,7 @@ fun core_term_free_tyvars_list :: "CoreTerm \<Rightarrow> string list" where
 | "core_term_free_tyvars_list (CoreTm_Match scrut arms) =
     core_term_free_tyvars_list scrut @ concat (map (core_term_free_tyvars_list \<circ> snd) arms)"
 | "core_term_free_tyvars_list (CoreTm_Sizeof tm) = core_term_free_tyvars_list tm"
-| "core_term_free_tyvars_list (CoreTm_Allocated ty tm) =
-    type_tyvars_list ty @ core_term_free_tyvars_list tm"
+| "core_term_free_tyvars_list (CoreTm_Allocated tm) = core_term_free_tyvars_list tm"
 | "core_term_free_tyvars_list (CoreTm_Default ty) = type_tyvars_list ty"
 
 (* core_term_free_tyvars_list collects the same set as core_term_free_tyvars. *)
@@ -217,7 +215,7 @@ and core_statement_list_free_vars :: "CoreStatement list \<Rightarrow> string fs
 | "core_statement_free_vars (CoreStmt_Obtain varName _ condTm) =
     core_term_free_vars condTm |-| {|varName|}"
 | "core_statement_free_vars (CoreStmt_Use witnessTm) = core_term_free_vars witnessTm"
-| "core_statement_free_vars (CoreStmt_Assign _ _ lhsTm rhsTm) =
+| "core_statement_free_vars (CoreStmt_Assign _ lhsTm rhsTm) =
     core_term_free_vars lhsTm |\<union>| core_term_free_vars rhsTm"
 | "core_statement_free_vars (CoreStmt_AssignCall _ lhsTm _ _ _ argTms) =
     core_term_free_vars lhsTm |\<union>| ffUnion (fset_of_list (map core_term_free_vars argTms))"

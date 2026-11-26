@@ -72,8 +72,8 @@ proof -
 qed
 
 lemma stmt_fits_Assign:
-  assumes "stmt_fits env (CoreStmt_Assign g ty lhs rhs)"
-  shows "fits env ty" and "term_fits env lhs" and "term_fits env rhs"
+  assumes "stmt_fits env (CoreStmt_Assign g lhs rhs)"
+  shows "term_fits env lhs" and "term_fits env rhs"
   using assms unfolding stmt_fits_def term_fits_def by (auto split: option.splits)
 
 lemma stmt_fits_AssignCall:
@@ -726,7 +726,7 @@ lemma lss_okD:
 (* The ghost statements and the ghost-flagged forms are rejected. *)
 lemma ls_fail:
   "ls_ok prog cg (CoreStmt_VarDecl Ghost a b c d)" "ls_ok prog cg (CoreStmt_VarDeclCall Ghost a1 b1 c1 d1 e1 f1)"
-  "ls_ok prog cg (CoreStmt_Assign Ghost a2 b2 c2)" "ls_ok prog cg (CoreStmt_AssignCall Ghost a3 b3 c3 d3 e3)"
+  "ls_ok prog cg (CoreStmt_Assign Ghost a2 b2)" "ls_ok prog cg (CoreStmt_AssignCall Ghost a3 b3 c3 d3 e3)"
   "ls_ok prog cg (CoreStmt_Swap Ghost a4 b4)" "ls_ok prog cg (CoreStmt_While Ghost a5 b5 c5 d5)"
   "ls_ok prog cg (CoreStmt_Match Ghost a6 b6)" "ls_ok prog cg (CoreStmt_Fix a7 b7)" "ls_ok prog cg (CoreStmt_Obtain a8 b8 c8)"
   "ls_ok prog cg (CoreStmt_Use a9)" "ls_ok prog cg (CoreStmt_Assert a10 b10)" "ls_ok prog cg (CoreStmt_Assume a11)"
@@ -945,27 +945,34 @@ proof (intro allI impI)
     using lo okd unfolding cg' by (auto simp: cg_bind_var_def)
 qed
 
-lemma ls_Assign: "ls_ok prog cg (CoreStmt_Assign NotGhost ty lv t)"
+lemma ls_Assign: "ls_ok prog cg (CoreStmt_Assign NotGhost lv t)"
   unfolding ls_ok_def
 proof (intro allI impI)
   fix E ds st S cg' st' env'
-  assume l: "lower_stmt cg (CoreStmt_Assign NotGhost ty lv t) st = Inr ((S, cg'), st')" and ok: "cg_ok prog E cg"
-    and sc: "scope_ok prog (E, ds) st" and sf: "stmt_fits (CG_TyEnv cg) (CoreStmt_Assign NotGhost ty lv t)"
-    and ct: "core_statement_type (CG_TyEnv cg) NotGhost (CoreStmt_Assign NotGhost ty lv t) = Some env'"
+  assume l: "lower_stmt cg (CoreStmt_Assign NotGhost lv t) st = Inr ((S, cg'), st')" and ok: "cg_ok prog E cg"
+    and sc: "scope_ok prog (E, ds) st" and sf: "stmt_fits (CG_TyEnv cg) (CoreStmt_Assign NotGhost lv t)"
+    and ct: "core_statement_type (CG_TyEnv cg) NotGhost (CoreStmt_Assign NotGhost lv t) = Some env'"
   let ?env = "CG_TyEnv cg"
   let ?rt = "rk_cty (CG_Ret cg)"
-  from ct have tl: "core_term_type ?env NotGhost lv = Some ty" and tt: "core_term_type ?env NotGhost t = Some ty" and env': "env' = ?env"
-    by (auto split: if_splits)
+  from ct obtain ty where tl: "core_term_type ?env NotGhost lv = Some ty" and tt: "core_term_type ?env NotGhost t = Some ty"
+    and env': "env' = ?env"
+    by (auto split: if_splits option.splits)
   note sfs = stmt_fits_Assign[OF sf]
-  from l obtain S1 e st1 Ss where lt: "lower_term cg t st = Inr ((S1, e), st1)" and ls: "lower_store cg lv ty e st1 = Inr (Ss, st')"
+  have fty: "fits ?env ty" using term_fits_ty[OF sfs(1) tl] .
+  have unf: "lower_stmt cg (CoreStmt_Assign NotGhost lv t) st =
+      cg_bind (lower_term cg t) (\<lambda>(S, e).
+      cg_bind (lower_store cg lv ty e) (\<lambda>Ss.
+      cg_return (S @ Ss, cg))) st"
+    unfolding lower_stmt.simps by (simp add: cg_bind_def ty_of_Some[OF tl] cg_return_def)
+  from l[unfolded unf] obtain S1 e st1 Ss where lt: "lower_term cg t st = Inr ((S1, e), st1)" and ls: "lower_store cg lv ty e st1 = Inr (Ss, st')"
     and S: "S = S1 @ Ss" and cg': "cg' = cg"
-    by (auto simp: lower_stmt.simps cg_return_def split: prod.splits elim!: cg_bind_InrE)
+    by (auto simp: cg_return_def split: prod.splits elim!: cg_bind_InrE)
   obtain E1 ds1 ty1 where ty1: "core_term_type ?env NotGhost t = Some ty1"
     and lo1: "lowered_ok prog ?rt (E, ds) st S1 st1 (E1, ds1)" and e: "expr_ok E1 e (res_cty ty1)"
-    by (rule lower_term_ok[OF lt ok sc sfs(3)])
+    by (rule lower_term_ok[OF lt ok sc sfs(2)])
   have ty1: "ty1 = ty" using ty1 tt by simp
   obtain E2 ds2 where lo2: "lowered_ok prog ?rt (E1, ds1) st1 Ss st' (E2, ds2)"
-    using lower_store_ok[OF ls cg_ok_mono[OF lowered_ok_env_le'[OF lo1] ok] lowered_ok_scope[OF lo1] sfs(2) tl e[unfolded ty1] sfs(1)] by blast
+    using lower_store_ok[OF ls cg_ok_mono[OF lowered_ok_env_le'[OF lo1] ok] lowered_ok_scope[OF lo1] sfs(1) tl e[unfolded ty1] fty] by blast
   show "\<exists>E' ds'. lowered_ok prog ?rt (E, ds) st S st' (E', ds') \<and> cg_ok prog E' cg' \<and> CG_TyEnv cg' = env' \<and> CG_Ret cg' = CG_Ret cg"
     unfolding S cg' env' using lowered_ok_append[OF lo1 lo2] cg_ok_mono[OF lowered_ok_env_le'[OF lowered_ok_append[OF lo1 lo2]] ok] by blast
 qed

@@ -61,7 +61,7 @@ fun term_calls :: "CoreTerm \<Rightarrow> (string \<times> CoreType list) list" 
 | "term_calls (CoreTm_ArrayProj arr idxs) = term_calls arr @ concat (map term_calls idxs)"
 | "term_calls (CoreTm_Match scrut arms) = term_calls scrut @ concat (map (term_calls \<circ> snd) arms)"
 | "term_calls (CoreTm_Sizeof tm) = term_calls tm"
-| "term_calls (CoreTm_Allocated _ tm) = term_calls tm"
+| "term_calls (CoreTm_Allocated tm) = term_calls tm"
 | "term_calls _ = []"
 
 fun stmt_calls :: "CoreStatement \<Rightarrow> (string \<times> CoreType list) list"
@@ -71,7 +71,7 @@ and stmts_calls :: "CoreStatement list \<Rightarrow> (string \<times> CoreType l
 | "stmt_calls (CoreStmt_Fix _ _) = []"
 | "stmt_calls (CoreStmt_Obtain _ _ tm) = term_calls tm"
 | "stmt_calls (CoreStmt_Use tm) = term_calls tm"
-| "stmt_calls (CoreStmt_Assign _ _ lhs rhs) = term_calls lhs @ term_calls rhs"
+| "stmt_calls (CoreStmt_Assign _ lhs rhs) = term_calls lhs @ term_calls rhs"
 | "stmt_calls (CoreStmt_AssignCall _ lhs _ f tys args) = (f, tys) # term_calls lhs @ concat (map term_calls args)"
 | "stmt_calls (CoreStmt_Swap _ lhs rhs) = term_calls lhs @ term_calls rhs"
 | "stmt_calls (CoreStmt_Return tm) = term_calls tm"
@@ -559,9 +559,9 @@ and stmts_types :: "CoreTyEnv \<Rightarrow> CoreStatement list \<Rightarrow> Cor
      | Some retTy \<Rightarrow>
          map_option (\<lambda>ls. ty # retTy # (case castOpt of None \<Rightarrow> [] | Some t \<Rightarrow> [t]) @ tys @ concat ls)
                     (those (map (term_types env) args)))"
-| "stmt_types env (CoreStmt_Assign _ ty lhs rhs) =
+| "stmt_types env (CoreStmt_Assign _ lhs rhs) =
     (case (term_types env lhs, term_types env rhs) of
-       (Some l1, Some l2) \<Rightarrow> Some (ty # l1 @ l2) | _ \<Rightarrow> None)"
+       (Some l1, Some l2) \<Rightarrow> Some (l1 @ l2) | _ \<Rightarrow> None)"
 | "stmt_types env (CoreStmt_AssignCall _ lhs castOpt f tys args) =
     (case core_impure_call_type env NotGhost f tys args of
        None \<Rightarrow> None

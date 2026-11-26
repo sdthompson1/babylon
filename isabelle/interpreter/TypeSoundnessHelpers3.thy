@@ -3879,27 +3879,27 @@ lemma type_soundness_allocated:
   assumes state_env: "state_matches_env (state :: 'w InterpState) env storeTyping"
     and IH: "\<And>tm' ty'. core_term_type env (IS_Ghost state) tm' = Some ty' \<Longrightarrow>
                         sound_term_result state env ty' (interp_term d fuel state tm')"
-    and typing: "core_term_type env (IS_Ghost state) (CoreTm_Allocated annTy tm) = Some ty"
-  shows "sound_term_result state env ty (interp_term d (Suc fuel) state (CoreTm_Allocated annTy tm))"
+    and typing: "core_term_type env (IS_Ghost state) (CoreTm_Allocated tm) = Some ty"
+  shows "sound_term_result state env ty (interp_term d (Suc fuel) state (CoreTm_Allocated tm))"
 proof -
   \<comment> \<open>Allocated is typed in Ghost mode only.\<close>
   from typing have gm: "IS_Ghost state = Ghost" by (cases "IS_Ghost state") simp_all
-  from typing have
-    tm_typing: "core_term_type env (IS_Ghost state) tm = Some annTy" and
+  from typing obtain opTy where
+    tm_typing: "core_term_type env (IS_Ghost state) tm = Some opTy" and
     ty_eq: "ty = CoreTy_Bool"
     by (auto simp: gm split: option.splits if_splits)
   from IH[OF tm_typing]
-  have tm_sound: "sound_term_result state env annTy (interp_term d fuel state tm)" .
+  have tm_sound: "sound_term_result state env opTy (interp_term d fuel state tm)" .
   from state_env have dc: "IS_DataCtors state = TE_DataCtors env"
     unfolding state_matches_env_def tables_match_def by simp
   show ?thesis
   proof (cases "interp_term d fuel state tm")
     case (Inl err)
-    then have "interp_term d (Suc fuel) state (CoreTm_Allocated annTy tm) = Inl err" by simp
+    then have "interp_term d (Suc fuel) state (CoreTm_Allocated tm) = Inl err" by simp
     with tm_sound Inl show ?thesis by simp
   next
     case (Inr val)
-    have "interp_term d (Suc fuel) state (CoreTm_Allocated annTy tm)
+    have "interp_term d (Suc fuel) state (CoreTm_Allocated tm)
             = Inr (CV_Bool (is_allocated (IS_ExternAlloc state) val))"
       using Inr by simp
     with ty_eq show ?thesis by simp

@@ -2062,7 +2062,7 @@ lemma notghost_typedI:
 (* Quantifiers and `allocated` are ghost only. *)
 lemma notghost_typed_ghost_only [simp]:
   "\<not> notghost_typed env (CoreTm_Quantifier q var varTy body)"
-  "\<not> notghost_typed env (CoreTm_Allocated ty tm)"
+  "\<not> notghost_typed env (CoreTm_Allocated tm)"
   by (simp_all add: notghost_typed_def)
 
 lemma notghost_typed_Var:

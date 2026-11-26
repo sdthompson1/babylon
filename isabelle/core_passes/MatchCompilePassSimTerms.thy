@@ -339,7 +339,7 @@ qed
 lemma sim_Quantifier: "term_sim fuel (CoreTm_Quantifier q x ty body)"
   by (rule term_simI) simp
 
-lemma sim_Allocated: "term_sim fuel (CoreTm_Allocated ty tm)"
+lemma sim_Allocated: "term_sim fuel (CoreTm_Allocated tm)"
   by (rule term_simI) simp
 
 

@@ -440,7 +440,7 @@ where
      | _ \<Rightarrow> internal cg ''sizeof of a non-array'')
    }"
 
-| "lower_term cg (CoreTm_Allocated _ _) = cg_fail (CGE_Ghost (CG_Fun cg))"
+| "lower_term cg (CoreTm_Allocated _) = cg_fail (CGE_Ghost (CG_Fun cg))"
 
 | "lower_term cg (CoreTm_Default ty) =
     (case scalar_ty ty of
@@ -553,7 +553,7 @@ where
        (tmp, decl) \<leftarrow> temp_for cg ''tmp'' ty;
        cg_return (S @ [decl, MS_Assign tmp e], ME_AddrOf tmp) }
      else cg_return (S, e)) }"
-| "lower_addr cg (CoreTm_Allocated ty t) = cg_fail (CGE_Ghost (CG_Fun cg))"
+| "lower_addr cg (CoreTm_Allocated t) = cg_fail (CGE_Ghost (CG_Fun cg))"
 | "lower_addr cg (CoreTm_Default ty) = do {
     (S, e) \<leftarrow> lower_term cg (CoreTm_Default ty);
     (if is_scalar ty then do {

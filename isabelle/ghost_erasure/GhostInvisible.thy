@@ -1071,14 +1071,14 @@ next
       next
         case (CoreStmt_Use _) with H show ?thesis by simp
       next
-        case (CoreStmt_Assign g ty lhsLv rhsTm)
+        case (CoreStmt_Assign g lhsLv rhsTm)
         from T CoreStmt_Assign have g_eq: "g = Ghost" by (auto split: if_splits)
         have vpg [simp]: "value_position (raise_mode full g) r = r" for r
           using g_eq by simp
         from T CoreStmt_Assign g_eq
         have glv: "ghost_lvalue_ok env Ghost lhsLv" by (auto split: if_splits)
         from T CoreStmt_Assign have env'_eq: "env' = env"
-          by (auto split: if_splits)
+          by (auto split: if_splits option.splits)
         from H CoreStmt_Assign obtain addr path where
           wl: "interp_writable_lvalue d fuel (raise_mode full g) lhsLv = Inr (addr, path)"
           by (auto split: sum.splits)
@@ -1500,7 +1500,7 @@ next
   with T show ?thesis
     by (auto split: option.splits CoreTerm.splits Quantifier.splits if_splits)
 next
-  case (CoreStmt_Assign g ty lhsTm rhsTm)
+  case (CoreStmt_Assign g lhsTm rhsTm)
   with er have g_eq: "g = Ghost" by (cases g) simp_all
   from T show ?thesis unfolding CoreStmt_Assign g_eq by simp
 next

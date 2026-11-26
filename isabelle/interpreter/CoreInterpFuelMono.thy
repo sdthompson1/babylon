@@ -1236,21 +1236,21 @@ next
   qed
 next
   (* Allocated: evaluates the operand, then a fuel-free check on the value *)
-  case (20 d fuel state ty tm)
+  case (20 d fuel state tm)
   then show ?case
   proof (intro allI impI)
     fix f' assume "f' \<ge> Suc fuel"
     then obtain f'' where f'_eq: "f' = Suc f''" and f''_ge: "f'' \<ge> fuel"
       using Suc_le_D by auto
-    assume noFuel: "interp_term d (Suc fuel) state (CoreTm_Allocated ty tm) \<noteq> Inl InsufficientFuel"
+    assume noFuel: "interp_term d (Suc fuel) state (CoreTm_Allocated tm) \<noteq> Inl InsufficientFuel"
     hence sub_noFuel: "interp_term d fuel state tm \<noteq> Inl InsufficientFuel"
       by (cases "interp_term d fuel state tm") simp_all
     hence IH: "\<forall>f'\<ge>fuel. interp_term d f' state tm = interp_term d fuel state tm"
       using "20.IH" by blast
     from IH f''_ge have "interp_term d f'' state tm = interp_term d fuel state tm"
       by metis
-    with f'_eq show "interp_term d f' state (CoreTm_Allocated ty tm)
-                       = interp_term d (Suc fuel) state (CoreTm_Allocated ty tm)"
+    with f'_eq show "interp_term d f' state (CoreTm_Allocated tm)
+                       = interp_term d (Suc fuel) state (CoreTm_Allocated tm)"
       by simp
   qed
 next
@@ -1379,7 +1379,7 @@ next
       case (CoreTm_Quantifier x1 x2 x3 x4)
       thus ?thesis using f'_eq by simp
     next
-      case (CoreTm_Allocated xty x)
+      case (CoreTm_Allocated x)
       thus ?thesis using f'_eq by simp
     next
       case (CoreTm_Default x)
@@ -1531,21 +1531,21 @@ next
 next
   (* Assign.
      The rhs is an ordinary (pure) term: resolve the lhs, then interp_term. *)
-  case (31 d fuel state assignGhost ty lhsLvalue rhsTm)
+  case (31 d fuel state assignGhost lhsLvalue rhsTm)
   then show ?case
   proof (intro allI impI)
     fix f' assume "f' \<ge> Suc fuel"
     then obtain f'' where f'_eq: "f' = Suc f''" and f''_ge: "f'' \<ge> fuel"
       using Suc_le_D by auto
-    assume noFuel: "interp_statement d (Suc fuel) state (CoreStmt_Assign assignGhost ty lhsLvalue rhsTm)
+    assume noFuel: "interp_statement d (Suc fuel) state (CoreStmt_Assign assignGhost lhsLvalue rhsTm)
                       \<noteq> Inl InsufficientFuel"
     hence lhs_noFuel: "interp_writable_lvalue d fuel (raise_mode state assignGhost) lhsLvalue \<noteq> Inl InsufficientFuel"
       by (auto split: sum.splits)
     hence IH_lhs: "\<forall>f'\<ge>fuel. interp_writable_lvalue d f' (raise_mode state assignGhost) lhsLvalue
                                = interp_writable_lvalue d fuel (raise_mode state assignGhost) lhsLvalue"
       using "31.IH"(1) by blast
-    show "interp_statement d f' state (CoreStmt_Assign assignGhost ty lhsLvalue rhsTm) =
-          interp_statement d (Suc fuel) state (CoreStmt_Assign assignGhost ty lhsLvalue rhsTm)"
+    show "interp_statement d f' state (CoreStmt_Assign assignGhost lhsLvalue rhsTm) =
+          interp_statement d (Suc fuel) state (CoreStmt_Assign assignGhost lhsLvalue rhsTm)"
     proof (cases "interp_writable_lvalue d fuel (raise_mode state assignGhost) lhsLvalue")
       case (Inl err)
       hence "interp_writable_lvalue d f'' (raise_mode state assignGhost) lhsLvalue = Inl err" using IH_lhs f''_ge by metis
@@ -2775,7 +2775,7 @@ next
   qed
 next
   (* Allocated: evaluates the operand; is_allocated does not take a depth *)
-  case (20 d fuel state ty tm)
+  case (20 d fuel state tm)
   show ?case
   proof (intro allI impI)
     fix d' assume d'_ge: "d' \<ge> d"
@@ -2783,8 +2783,8 @@ next
       using "20.prems" by (auto split: sum.splits)
     hence "interp_term d' fuel state tm = interp_term d fuel state tm"
       using "20.IH" d'_ge by blast
-    thus "interp_term d' (Suc fuel) state (CoreTm_Allocated ty tm)
-            = interp_term d (Suc fuel) state (CoreTm_Allocated ty tm)"
+    thus "interp_term d' (Suc fuel) state (CoreTm_Allocated tm)
+            = interp_term d (Suc fuel) state (CoreTm_Allocated tm)"
       by simp
   qed
 next
@@ -2954,7 +2954,7 @@ next
   qed
 next
   (* Assign *)
-  case (31 d fuel state assignGhost ty lhsLvalue rhsTm)
+  case (31 d fuel state assignGhost lhsLvalue rhsTm)
   show ?case
   proof (intro allI impI)
     fix d' assume d'_ge: "d' \<ge> d"
@@ -2963,8 +2963,8 @@ next
     hence lhs_eq: "interp_writable_lvalue d' fuel (raise_mode state assignGhost) lhsLvalue
                      = interp_writable_lvalue d fuel (raise_mode state assignGhost) lhsLvalue"
       using "31.IH"(1) d'_ge by blast
-    show "interp_statement d' (Suc fuel) state (CoreStmt_Assign assignGhost ty lhsLvalue rhsTm) =
-          interp_statement d (Suc fuel) state (CoreStmt_Assign assignGhost ty lhsLvalue rhsTm)"
+    show "interp_statement d' (Suc fuel) state (CoreStmt_Assign assignGhost lhsLvalue rhsTm) =
+          interp_statement d (Suc fuel) state (CoreStmt_Assign assignGhost lhsLvalue rhsTm)"
     proof (cases "interp_writable_lvalue d fuel (raise_mode state assignGhost) lhsLvalue")
       case (Inl err)
       thus ?thesis using lhs_eq by simp

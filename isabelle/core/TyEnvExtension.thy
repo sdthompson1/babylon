@@ -592,18 +592,18 @@ next
   show ?case using CoreTm_Sizeof.prems(3) tm_ty tm_ty'
     by (auto split: option.splits CoreType.splits if_splits)
 next
-  case (CoreTm_Allocated annTy tm)
+  case (CoreTm_Allocated tm)
   show ?case
   proof (cases ghost)
     case NotGhost
     with CoreTm_Allocated.prems(3) show ?thesis by simp
   next
     case Ghost
-    with CoreTm_Allocated.prems(3) have
-      tm_ty: "core_term_type env Ghost tm = Some annTy" and
-      cp: "is_complete_type annTy" and ty_eq: "ty = CoreTy_Bool"
+    with CoreTm_Allocated.prems(3) obtain opTy where
+      tm_ty: "core_term_type env Ghost tm = Some opTy" and
+      cp: "is_complete_type opTy" and ty_eq: "ty = CoreTy_Bool"
       by (auto split: option.splits if_splits)
-    have tm_ty': "core_term_type env' Ghost tm = Some annTy"
+    have tm_ty': "core_term_type env' Ghost tm = Some opTy"
       using CoreTm_Allocated.IH[OF CoreTm_Allocated.prems(1,2) tm_ty] .
     show ?thesis using Ghost tm_ty' cp ty_eq by simp
   qed
@@ -959,9 +959,9 @@ next
   from res ext_out show ?case by blast
 next
   \<comment> \<open>Assign: env unchanged.\<close>
-  case (4 env ghost assignGhost lhsTy lhsTm rhsTm)
+  case (4 env ghost assignGhost lhsTm rhsTm)
   note ext = "4.prems"(2) and cons = "4.prems"(3)
-  from "4.prems"(1) have
+  from "4.prems"(1) obtain lhsTy where
     gh: "ghost = Ghost \<longrightarrow> assignGhost = Ghost" and
     wl: "is_writable_lvalue env lhsTm" and
     glv: "ghost_lvalue_ok env assignGhost lhsTm" and
@@ -969,7 +969,7 @@ next
     cp: "assignGhost = NotGhost \<longrightarrow> is_complete_type lhsTy" and
     rhs: "core_term_type env assignGhost rhsTm = Some lhsTy" and
     out_eq: "envOut = env"
-    by (auto split: if_splits)
+    by (auto split: if_splits option.splits)
   have wl2: "is_writable_lvalue env2 lhsTm"
     using wl is_writable_lvalue_tyenv_extends[OF ext] by simp
   have glv2: "ghost_lvalue_ok env2 assignGhost lhsTm"
@@ -978,7 +978,7 @@ next
     using core_term_type_tyenv_extends[OF ext cons lhs] .
   have rhs2: "core_term_type env2 assignGhost rhsTm = Some lhsTy"
     using core_term_type_tyenv_extends[OF ext cons rhs] .
-  have res: "core_statement_type env2 ghost (CoreStmt_Assign assignGhost lhsTy lhsTm rhsTm) = Some env2"
+  have res: "core_statement_type env2 ghost (CoreStmt_Assign assignGhost lhsTm rhsTm) = Some env2"
     using gh wl2 glv2 lhs2 cp rhs2 by simp
   from res ext show ?case using out_eq by blast
 next

@@ -1945,7 +1945,7 @@ where
 
   (* Allocated: evaluate the operand, then delegate to is_allocated. The operand is
      in a place position. *)
-| "interp_term d (Suc fuel) state (CoreTm_Allocated _ tm) =
+| "interp_term d (Suc fuel) state (CoreTm_Allocated tm) =
     (case interp_term d fuel state tm of
       Inl err \<Rightarrow> Inl err
     | Inr v \<Rightarrow> Inr (CV_Bool (is_allocated (IS_ExternAlloc state) v)))"
@@ -2082,7 +2082,7 @@ where
     | None \<Rightarrow> Inl TypeError)"
 
   (* Assignment *)
-| "interp_statement d (Suc fuel) state (CoreStmt_Assign assignGhost _ lhsLvalue rhsTm) =
+| "interp_statement d (Suc fuel) state (CoreStmt_Assign assignGhost lhsLvalue rhsTm) =
     \<comment> \<open>Resolve the lhs to an address and path; the rhs is an ordinary (pure)
         term (impure-call rhs's use CoreStmt_AssignCall). State is unchanged by
         evaluating it. Both sides are evaluated in the mode raised by the assignment's

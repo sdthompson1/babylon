@@ -363,12 +363,12 @@ function core_term_type :: "CoreTyEnv \<Rightarrow> GhostOrNot \<Rightarrow> Cor
         else Some (sizeof_type dims)
     | _ \<Rightarrow> None)"
 
-  (* Allocated: Ghost only. The annotation must be exactly the operand's type,
-     and must be a complete type; the result is bool. *)
-| "core_term_type env NotGhost (CoreTm_Allocated _ _) = None"
-| "core_term_type env Ghost (CoreTm_Allocated ty tm) =
+  (* Allocated: Ghost only. The operand must have a complete type; the result
+     is bool. *)
+| "core_term_type env NotGhost (CoreTm_Allocated _) = None"
+| "core_term_type env Ghost (CoreTm_Allocated tm) =
     (case core_term_type env Ghost tm of
-      Some ty' \<Rightarrow> if ty' = ty \<and> is_complete_type ty then Some CoreTy_Bool else None
+      Some ty \<Rightarrow> if is_complete_type ty then Some CoreTy_Bool else None
     | None \<Rightarrow> None)"
 
   (* Default value of a type. Type must be well-kinded; in NotGhost mode it
@@ -512,8 +512,8 @@ next
 next
   \<comment> \<open>CoreTm_Allocated - tm is smaller\<close>
   fix env :: CoreTyEnv
-  fix ty tm
-  show "((env, Ghost, tm), env, Ghost, CoreTm_Allocated ty tm)
+  fix tm
+  show "((env, Ghost, tm), env, Ghost, CoreTm_Allocated tm)
         \<in> measure (\<lambda>(env, ghost, tm). size tm)"
     by simp
 next

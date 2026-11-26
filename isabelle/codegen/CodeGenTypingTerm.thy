@@ -803,10 +803,10 @@ proof (intro allI impI)
     unfolding e using tyl e2 by blast
 qed
 
-lemma lt_Ghost: "lt_ok prog rt cg (CoreTm_Quantifier q x ty t)" "lt_ok prog rt cg (CoreTm_Allocated ty' t')"
+lemma lt_Ghost: "lt_ok prog rt cg (CoreTm_Quantifier q x ty t)" "lt_ok prog rt cg (CoreTm_Allocated t')"
   by (simp_all add: lt_ok_def lower_term.simps cg_fail_def)
 
-lemma la_Ghost: "la_ok prog rt cg (CoreTm_Quantifier q x ty t)" "la_ok prog rt cg (CoreTm_Allocated ty' t')"
+lemma la_Ghost: "la_ok prog rt cg (CoreTm_Quantifier q x ty t)" "la_ok prog rt cg (CoreTm_Allocated t')"
   by (simp_all add: la_ok_def lower_addr.simps cg_fail_def)
 
 lemma scalar_ty_not_CharPtr: "scalar_ty ty \<noteq> Some CTy_CharPtr"
