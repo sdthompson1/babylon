@@ -396,7 +396,9 @@ turns into a message in the user's terms. The lowering functions are
 `CodeGenTerm.thy`; `lower_addr` gives the address of a term: of the lvalue
 for an lvalue, the place for a non-lvalue aggregate, and a fresh temporary
 holding the value for a non-lvalue scalar, which is how a scalar is passed
-to a parameter of type-variable type), `freeze_lvalue`,
+to a parameter of type-variable type; for a term that is not an lvalue the
+address is never inside the storage of a variable, see the note on `Let`
+in the list below), `freeze_lvalue`,
 `lower_stmt`/`lower_stmts`, `init_value`, `lower_globals`,
 `lower_function`, `lower_functions` and `codegen_module` (`CodeGen.thy`).
 Everything is structurally recursive (nothing is fuelled) and the whole
@@ -607,6 +609,19 @@ is its value, an aggregate's its place), with these refinements:
   order of the statements (the typing proof threads the state).
 - A `Let` of a scalar binds `VR_Scalar x cty`, of an aggregate `VR_Ptr x`
   (the place; section 3.5).
+- The result of a `Let`, when its address is wanted (`lower_addr`), is
+  copied into a fresh temporary, whether it is a scalar or an aggregate
+  (`temp_store`). The place that `lower_term` gives for an aggregate `Let`
+  is the place of its body, which may be a variable, and
+  `f(a, let n = 1 in a)` with a `ref` first parameter would otherwise pass
+  the address of `a` twice: Core's aliasing check accepts the call, because
+  the second argument is not an lvalue, and the callee's write through the
+  first would show through the second (`test/cases/codegen/NonLvalueArg.b`).
+  Every other form that is not an lvalue already has storage of its own (a
+  literal's, constructor's or `Match` result's temporary, a return buffer),
+  and a projection or cast of such a term stays inside it. The copy is made
+  for every aggregate `Let`, also where sharing would be harmless, such as
+  `(let n = 1 in a).x`.
 - A pure call of a `void` function used as a term of the unit type gets a
   one-byte dummy buffer as its place.
 - The arms of a `Match` are each an `MS_Block` (or the branch of an
@@ -1759,7 +1774,9 @@ result. Non-termination, `TypeError`, `RuntimeError` and
    aggregate arguments, which passes the place of an lvalue argument
    without a copy) must keep this property. Stage 5: `lower_addr`
    materialises every non-lvalue argument in a temporary by construction
-   (section 3.4), so the generator keeps it.
+   (section 3.4), so the generator keeps it. (This was not true of an
+   aggregate `Let` until `lower_addr` was changed to copy its result; see
+   section 3.3.)
 2. **Size overflow in generic code** (section 3.2). The `uint64_t` size
    arithmetic of a generic function could wrap for an instantiation at a
    huge type. Mitigation: the static bound `core_module_sizeable`, checked

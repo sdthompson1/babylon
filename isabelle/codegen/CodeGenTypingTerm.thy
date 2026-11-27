@@ -275,13 +275,27 @@ proof -
   then show ?thesis using lk assms(3) by (auto simp: expr_ok_def)
 qed
 
-(* The same with temp_store (the numeric cast in lower_addr). *)
+(* Materialising a result of any type (a value or a place) in a temporary
+   with temp_store: an assignment for a scalar, a copy into the buffer for
+   an aggregate (lower_addr of a numeric cast and of a Let). *)
 lemma materialise_store_ok:
-  assumes "lowered_ok prog rt (E, ds) st S st1 (E1, ds1)" and "expr_ok E1 e (res_cty ty)" and "scalar_ty ty = Some cty"
+  assumes "lowered_ok prog rt (E, ds) st S st1 (E1, ds1)" and "expr_ok E1 e (res_cty ty)"
     and "temp_for cg hint ty st1 = Inr ((tmp, decl), st2)" and "cg_ok prog E1 cg"
     and "is_well_kinded (CG_TyEnv cg) ty" and "fits (CG_TyEnv cg) ty"
   shows "\<exists>E' ds'. lowered_ok prog rt (E, ds) st (S @ [decl, temp_store cg ty tmp e]) st2 (E', ds') \<and> expr_ok E' (ME_AddrOf tmp) CTy_CharPtr"
-  using materialise_ok[OF assms] assms(3) by (simp add: temp_store_def)
+proof -
+  from temp_for_ok[OF assms(3,4) lowered_ok_scope[OF assms(1)] assms(5,6)] obtain E2 where
+    d: "lowered_ok prog rt (E1, ds1) st1 [decl] st2 (E2, tmp # ds1)" and
+    lk: "fmlookup E2 tmp = Some (case scalar_ty ty of Some cty \<Rightarrow> VT_Scalar cty | None \<Rightarrow> VT_Buf)" by blast
+  have le: "env_le E1 E2" by (rule lowered_ok_env_le'[OF d])
+  have e2: "expr_ok E2 e (res_cty ty)" by (rule expr_ok_mono[OF le assms(2)])
+  have sz: "u64_ok E2 (cg_size cg ty)" by (rule cg_size_ok[OF cg_ok_mono[OF le assms(4)] assms(5,6)])
+  have a: "lowered_ok prog rt (E2, tmp # ds1) st2 [temp_store cg ty tmp e] st2 (E2, tmp # ds1)"
+    by (rule temp_store_ok[OF lowered_ok_scope[OF d] lk e2 sz])
+  have "lowered_ok prog rt (E, ds) st (S @ [decl, temp_store cg ty tmp e]) st2 (E2, tmp # ds1)"
+    using lowered_ok_append[OF assms(1) lowered_ok_append[OF d a]] by simp
+  then show ?thesis using lk by (auto simp: expr_ok_def split: option.splits)
+qed
 
 
 section \<open>The Let environment\<close>
@@ -2038,11 +2052,8 @@ proof (intro allI impI)
     have tfr: "temp_for cg ''tmp'' ty st1 = Inr ((tmp, decl), st2)" using tfr' r2 by simp
     from k2 have S: "S = S1 @ [decl, temp_store cg ty tmp e1]" and a: "a = ME_AddrOf tmp" and st': "st' = st2"
       unfolding r2 by (auto simp: cg_return_def)
-    have num: "is_numeric_type ty" using co False by (cases ty) (auto simp: cast_ok_def)
-    obtain s b where tyb: "ty = CoreTy_FiniteInt s b" by (rule runtime_numeric_finite[OF num rtt])
-    have sty: "scalar_ty ty = Some (CTy_Int s b)" by (simp add: tyb)
     show ?thesis unfolding S a st'
-      by (rule materialise_store_ok[OF lo1 e1[unfolded ty1] sty tfr cg_ok_mono[OF lowered_ok_env_le'[OF lo1] ok]
+      by (rule materialise_store_ok[OF lo1 e1[unfolded ty1] tfr cg_ok_mono[OF lowered_ok_env_le'[OF lo1] ok]
                                       term_type_wk(1)[OF ok tyc, unfolded ty'] fc[unfolded ty']])
   qed
 qed
@@ -2121,8 +2132,7 @@ proof (intro allI impI)
     by (rule la_temp[OF IH[OF ty_of_Some[OF tyt]] l[unfolded unf] ok sc tf tyt sty])
 qed
 
-(* The forms whose address is the value in a temporary if scalar, else the
-   value's place: Let, FunctionCall, Match, Sizeof, Default. *)
+(* Let: its result, of either kind, copied into a temporary. *)
 lemma la_Let:
   assumes IH: "\<And>xa st st'. ty_of cg (CoreTm_Let x t1 t2) st = Inr (xa, st') \<Longrightarrow> lt_ok prog rt cg (CoreTm_Let x t1 t2)"
   shows "la_ok prog rt cg (CoreTm_Let x t1 t2)"
@@ -2134,13 +2144,33 @@ proof (intro allI impI)
   from term_fits_type[OF tf] obtain ty where tyt: "core_term_type (CG_TyEnv cg) NotGhost (CoreTm_Let x t1 t2) = Some ty" by blast
   have unf: "lower_addr cg (CoreTm_Let x t1 t2) st =
       cg_bind (lower_term cg (CoreTm_Let x t1 t2))
-        (\<lambda>(S, e). if is_scalar ty
-           then cg_bind (temp_for cg ''tmp'' ty) (\<lambda>(tmp, decl). cg_return (S @ [decl, MS_Assign tmp e], ME_AddrOf tmp))
-           else cg_return (S, e)) st"
+        (\<lambda>(S, e). cg_bind (temp_for cg ''tmp'' ty) (\<lambda>(tmp, decl). cg_return (S @ [decl, temp_store cg ty tmp e], ME_AddrOf tmp))) st"
     unfolding lower_addr.simps by (simp add: cg_bind_def ty_of_Some[OF tyt])
+  from l[unfolded unf] obtain r1 st1 where l1': "lower_term cg (CoreTm_Let x t1 t2) st = Inr (r1, st1)"
+    and k1: "(\<lambda>(S, e). cg_bind (temp_for cg ''tmp'' ty) (\<lambda>(tmp, decl). cg_return (S @ [decl, temp_store cg ty tmp e], ME_AddrOf tmp))) r1 st1
+             = Inr ((S, a), st')"
+    by (rule cg_bind_InrE)
+  obtain S1 e1 where r1: "r1 = (S1, e1)" by (cases r1)
+  have l1: "lower_term cg (CoreTm_Let x t1 t2) st = Inr ((S1, e1), st1)" using l1' r1 by simp
+  obtain E1 ds1 ty1 where ty1: "core_term_type (CG_TyEnv cg) NotGhost (CoreTm_Let x t1 t2) = Some ty1"
+    and lo1: "lowered_ok prog rt (E, ds) st S1 st1 (E1, ds1)" and e1: "expr_ok E1 e1 (res_cty ty1)"
+    by (rule lt_okD[OF IH[OF ty_of_Some[OF tyt]] l1 ok sc tf])
+  have ty1: "ty1 = ty" using ty1 tyt by simp
+  from k1[unfolded r1 case_prod_conv] obtain r2 st2 where tfr': "temp_for cg ''tmp'' ty st1 = Inr (r2, st2)"
+    and k2: "(\<lambda>(tmp, decl). cg_return (S1 @ [decl, temp_store cg ty tmp e1], ME_AddrOf tmp)) r2 st2 = Inr ((S, a), st')"
+    by (rule cg_bind_InrE)
+  obtain tmp decl where r2: "r2 = (tmp, decl)" by (cases r2)
+  have tfr: "temp_for cg ''tmp'' ty st1 = Inr ((tmp, decl), st2)" using tfr' r2 by simp
+  from k2 have S: "S = S1 @ [decl, temp_store cg ty tmp e1]" and a: "a = ME_AddrOf tmp" and st': "st' = st2"
+    unfolding r2 by (auto simp: cg_return_def)
   show "\<exists>E' ds'. lowered_ok prog rt (E, ds) st S st' (E', ds') \<and> expr_ok E' a CTy_CharPtr"
-    by (rule la_value[OF IH[OF ty_of_Some[OF tyt]] l[unfolded unf] ok sc tf tyt])
+    unfolding S a st'
+    by (rule materialise_store_ok[OF lo1 e1[unfolded ty1] tfr cg_ok_mono[OF lowered_ok_env_le'[OF lo1] ok]
+                                    term_type_wk(1)[OF ok tyt] term_fits_ty[OF tf tyt]])
 qed
+
+(* The forms whose address is the value in a temporary if scalar, else the
+   value's place: FunctionCall, Match, Sizeof, Default. *)
 
 lemma la_FunctionCall:
   assumes IH: "\<And>x st st'. ty_of cg (CoreTm_FunctionCall f tys args) st = Inr (x, st') \<Longrightarrow> lt_ok prog rt cg (CoreTm_FunctionCall f tys args)"

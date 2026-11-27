@@ -15,7 +15,17 @@ begin
    non-lvalue aggregate its place; for a non-lvalue scalar the address of a
    temporary holding its value (used to pass an argument to a parameter of
    type-variable type, which the callee reads through a pointer). The two
-   are mutually recursive with lower_call, the call of section 3.4. *)
+   are mutually recursive with lower_call, the call of section 3.4.
+
+   The address that lower_addr gives for a term that is not an lvalue is
+   never inside the storage of a variable: it is in a temporary, a return
+   buffer, or the storage of a subterm that is not an lvalue either. A call
+   relies on this (section 3.4): it passes a by-value aggregate argument as
+   the address that lower_addr gives, the callee may write through a ref
+   argument, and Core's aliasing check (call_args_alias) only keeps a ref
+   argument apart from the other arguments that are lvalues. The one form
+   that needs a copy for this is Let, whose place (as lower_term gives it)
+   is the place of its body, which may be a variable. *)
 
 
 section \<open>Small helpers\<close>
@@ -523,12 +533,14 @@ where
     (tmp, decl) \<leftarrow> temp_for cg ''tmp'' ty;
     cg_return (S @ [decl, MS_Assign tmp e], ME_AddrOf tmp) }"
 | "lower_addr cg (CoreTm_Let x t1 t2) = do {
+    \<comment> \<open>the result of a Let is a value of its own, of either kind: it is
+        copied into a temporary. (The place of an aggregate Let is the place
+        of its body, and `f(a, let n = 1 in a)` must not pass the address
+        of a twice.)\<close>
     ty \<leftarrow> ty_of cg (CoreTm_Let x t1 t2);
     (S, e) \<leftarrow> lower_term cg (CoreTm_Let x t1 t2);
-    (if is_scalar ty then do {
-       (tmp, decl) \<leftarrow> temp_for cg ''tmp'' ty;
-       cg_return (S @ [decl, MS_Assign tmp e], ME_AddrOf tmp) }
-     else cg_return (S, e)) }"
+    (tmp, decl) \<leftarrow> temp_for cg ''tmp'' ty;
+    cg_return (S @ [decl, temp_store cg ty tmp e], ME_AddrOf tmp) }"
 | "lower_addr cg (CoreTm_Quantifier q x ty t) = cg_fail (CGE_Ghost (CG_Fun cg))"
 | "lower_addr cg (CoreTm_FunctionCall f tys args) = do {
     ty \<leftarrow> ty_of cg (CoreTm_FunctionCall f tys args);
