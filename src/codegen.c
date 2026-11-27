@@ -1727,9 +1727,8 @@ static void codegen_let(struct CGContext *cxt,
                         enum TermMode mode,
                         struct Term *term)
 {
-    char temp_name[TEMP_NAME_LEN];
-    get_temp_name(cxt, temp_name);
-
+    // Bind the name. The right-hand side is not copied: for an aggregate,
+    // the name is a pointer to wherever the right-hand side is.
     begin_item(cxt->pr);
     codegen_type(cxt, term->let.rhs->type);
     char *mangled_name = mangle_name(term->let.name);
@@ -1741,7 +1740,26 @@ static void codegen_let(struct CGContext *cxt,
     new_line(cxt->pr);
     end_item(cxt->pr);
 
-    codegen_term(cxt, pri, mode, term->let.body);
+    if (is_scalar_type(cxt, term->type)) {
+        // (mode is always MODE_VALUE here, because a 'let' is not an lvalue;
+        // see codegen_term.)
+        codegen_term(cxt, pri, mode, term->let.body);
+
+    } else {
+        // The result of a 'let' is a value of its own, not a name for
+        // whatever its body is. So an aggregate result is copied into a
+        // temporary, as codegen_if and codegen_match do with their results.
+        //
+        // Without the copy, `f(p, let n = 1 in p)` would pass the address
+        // of p twice. If f takes its first argument by 'ref', then a write
+        // through it would show through the second argument, which is
+        // supposed to be a copy. (The aliasing rule does not exclude such a
+        // call, because the second argument is not an lvalue.)
+        char result_name[TEMP_NAME_LEN];
+        make_temporary(cxt, result_name, term->type);
+        copy_term_to_variable(cxt, result_name, false, term->let.body);
+        print_token(cxt->pr, result_name);
+    }
 }
 
 static const char * get_function_name(struct Term *term)
