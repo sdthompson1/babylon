@@ -21,7 +21,7 @@ function f()
     var t: u64 = sizeof(b);    // Error, type mismatch
     var u: {u64,u64} = sizeof(b);    // OK
     
-    var v = sizeof(make_array());         // OK, sizeof of a non-lvalue is allowed
+    var v = sizeof(make_array());         // OK, sizeof of a non-lvalue is now allowed
     ghost var g2 = sizeof(make_array());  // ... in ghost code too
     var w = sizeof(100);             // Error, sizeof can only be used on arrays
     var x = sizeof(1+true);          // Error, type mismatch. (sizeof a "bad" term)
