@@ -1,0 +1,5 @@
+src/MatchNoTests.b:42:14: Aliasing rules violated: argument 1 aliases argument 2
+src/MatchNoTests.b:81:5: Assert might not hold
+src/MatchNoTests.b:90:43: Can't copy, value might be allocated
+src/MatchNoTests.b:95:48: Can't copy, value might be allocated
+src/MatchNoTests.b:101:33: Can't copy, value might be allocated
