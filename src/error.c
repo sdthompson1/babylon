@@ -539,12 +539,6 @@ void report_cannot_take_ref_to_readonly(struct Location location)
     print_error("Can't take reference (expression is read-only)\n");
 }
 
-void report_cannot_take_sizeof(struct Term *term)
-{
-    print_location(term->location);
-    print_error("Can't use sizeof on this expression (not an lvalue)\n");
-}
-
 void report_incomplete_array_type(struct Location loc)
 {
     print_location(loc);

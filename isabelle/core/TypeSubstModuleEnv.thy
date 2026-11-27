@@ -1801,7 +1801,6 @@ next
   case (CoreTm_Sizeof tm)
   from CoreTm_Sizeof.prems(1) obtain elemTy dims where
     inner: "core_term_type env ghost tm = Some (CoreTy_Array elemTy dims)" and
-    cond_ok: "\<not> (list_ex (\<lambda>d. d = CoreDim_Allocatable) dims \<and> \<not> is_lvalue tm \<and> ghost = NotGhost)" and
     ty_eq: "ty = sizeof_type dims"
     by (auto split: CoreType.splits option.splits if_splits)
   from CoreTm_Sizeof.IH[OF inner CoreTm_Sizeof.prems(2,3,4,5)]
@@ -1809,11 +1808,7 @@ next
     "core_term_type (apply_subst_to_module_env subst targetEnv env) ghost
                     (apply_subst_to_term subst tm)
        = Some (CoreTy_Array (apply_subst subst elemTy) dims)" by simp
-  have cond_ok_subst:
-    "\<not> (list_ex (\<lambda>d. d = CoreDim_Allocatable) dims
-         \<and> \<not> is_lvalue (apply_subst_to_term subst tm) \<and> ghost = NotGhost)"
-    using cond_ok is_lvalue_apply_subst_to_term[of tm subst] by blast
-  show ?case using inner_subst cond_ok_subst ty_eq by simp
+  show ?case using inner_subst ty_eq by simp
 next
   case (CoreTm_Allocated tm)
   show ?case

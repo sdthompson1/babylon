@@ -577,18 +577,12 @@ next
   case (CoreTm_Sizeof tm)
   from CoreTm_Sizeof.prems(1) obtain elemTy dims where
     t: "core_term_type env ghost tm = Some (CoreTy_Array elemTy dims)" and
-    ok: "\<not> (list_ex (\<lambda>d. d = CoreDim_Allocatable) dims \<and> \<not> is_lvalue tm \<and> ghost = NotGhost)" and
     ty_eq: "ty = sizeof_type dims"
     by (auto split: option.splits CoreType.splits if_splits)
   from CoreTm_Sizeof.IH[OF t CoreTm_Sizeof.prems(2)] CoreTm_Sizeof.prems(3)
   have t': "core_term_type env ghost (match_compile_term tm) = Some (CoreTy_Array elemTy dims)"
     by simp
-  \<comment> \<open>An lvalue stays an lvalue, so the compiled Sizeof is accepted whenever the
-     original was.\<close>
-  have ok': "\<not> (list_ex (\<lambda>d. d = CoreDim_Allocatable) dims \<and> \<not> is_lvalue (match_compile_term tm)
-                \<and> ghost = NotGhost)"
-    using ok is_lvalue_match_compile_term by blast
-  show ?case using t' ok' ty_eq by simp
+  show ?case using t' ty_eq by simp
 next
   case (CoreTm_Allocated tm)
   from CoreTm_Allocated.prems(1) have g: "ghost = Ghost" by (cases ghost) simp_all

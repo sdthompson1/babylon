@@ -357,10 +357,7 @@ function core_term_type :: "CoreTyEnv \<Rightarrow> GhostOrNot \<Rightarrow> Cor
   (* Get size of an array *)
 | "core_term_type env ghost (CoreTm_Sizeof tm) =
     (case core_term_type env ghost tm of
-      Some (CoreTy_Array _ dims) \<Rightarrow>
-        if list_ex (\<lambda>d. d = CoreDim_Allocatable) dims \<and> \<not> is_lvalue tm \<and> ghost = NotGhost
-        then None
-        else Some (sizeof_type dims)
+      Some (CoreTy_Array _ dims) \<Rightarrow> Some (sizeof_type dims)
     | _ \<Rightarrow> None)"
 
   (* Allocated: Ghost only. The operand must have a complete type; the result
