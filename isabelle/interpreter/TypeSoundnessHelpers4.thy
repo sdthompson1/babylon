@@ -1291,28 +1291,44 @@ next
                 with err_sound CoreStmt_VarDecl Ref show ?thesis by simp
               next
                 case (Inr addrPath)
+                note lv_ok = Inr
                 obtain addr path where ap_eq: "addrPath = (addr, path)"
                   by (cases addrPath) auto
-                from lv_sound Inr ap_eq have
+                from lv_sound lv_ok ap_eq have
                   addr_valid: "addr < length (IS_Store state)" and
                   path_ty: "type_at_path env (storeTyping ! addr) path
                               = Some (apply_subst (IS_TyArgs state) varTy)"
                   by auto
-                let ?state' = "state \<lparr> IS_Locals := fmdrop varName (IS_Locals state),
-                                       IS_Refs := fmupd varName (addr, path) (IS_Refs state),
-                                       IS_ConstLocals := fminus (IS_ConstLocals state) {|varName|} \<rparr>"
-                have interp_eq: "interp_statement d (Suc fuel) state
-                    (CoreStmt_VarDecl declGhost varName Ref varTy initTm) = Inr (Continue ?state')"
-                  using Inr ap_eq base_eq base_not_const base_in_state by auto
-                let ?envW = "env \<lparr> TE_LocalVars := fmupd varName varTy (TE_LocalVars env),
-                                   TE_ConstLocals := fminus (TE_ConstLocals env) {|varName|} \<rparr>"
-                have sme_W: "state_matches_env ?state' ?envW storeTyping"
-                  using state_matches_env_add_ref[OF old_sme addr_valid path_ty refl refl] .
-                have new_sme: "state_matches_env ?state' env' storeTyping"
-                  by (rule state_matches_env_transfer[OF sme_W])
-                     (simp_all add: env'_eq writable)
-                from new_sme interp_eq CoreStmt_VarDecl Ref
-                show ?thesis using storeTyping_extends_refl by auto
+                \<comment> \<open>The term is evaluated as an rvalue as well (the check that the
+                    reference is valid): by IH_term that gives a value or a sound error. \<close>
+                from IH_term[OF "4.prems"(1,2) init_ty0]
+                have init_sound: "sound_term_result state env varTy (interp_term d fuel (raise_mode state declGhost) initTm)" .
+                show ?thesis
+                proof (cases "interp_term d fuel (raise_mode state declGhost) initTm")
+                  case (Inl err)
+                  with init_sound have err_sound: "sound_error_result err" by simp
+                  have interp_err: "interp_statement d (Suc fuel) state
+                      (CoreStmt_VarDecl declGhost varName Ref varTy initTm) = Inl err"
+                    using Inl lv_ok base_eq base_not_const base_in_state by auto
+                  with err_sound CoreStmt_VarDecl Ref show ?thesis by simp
+                next
+                  case (Inr initVal)
+                  let ?state' = "state \<lparr> IS_Locals := fmdrop varName (IS_Locals state),
+                                         IS_Refs := fmupd varName (addr, path) (IS_Refs state),
+                                         IS_ConstLocals := fminus (IS_ConstLocals state) {|varName|} \<rparr>"
+                  have interp_eq: "interp_statement d (Suc fuel) state
+                      (CoreStmt_VarDecl declGhost varName Ref varTy initTm) = Inr (Continue ?state')"
+                    using Inr lv_ok ap_eq base_eq base_not_const base_in_state by auto
+                  let ?envW = "env \<lparr> TE_LocalVars := fmupd varName varTy (TE_LocalVars env),
+                                     TE_ConstLocals := fminus (TE_ConstLocals env) {|varName|} \<rparr>"
+                  have sme_W: "state_matches_env ?state' ?envW storeTyping"
+                    using state_matches_env_add_ref[OF old_sme addr_valid path_ty refl refl] .
+                  have new_sme: "state_matches_env ?state' env' storeTyping"
+                    by (rule state_matches_env_transfer[OF sme_W])
+                       (simp_all add: env'_eq writable)
+                  from new_sme interp_eq CoreStmt_VarDecl Ref
+                  show ?thesis using storeTyping_extends_refl by auto
+                qed
               qed
             next
               case readonly: False

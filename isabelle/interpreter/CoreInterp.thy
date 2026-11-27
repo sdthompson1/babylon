@@ -2075,9 +2075,17 @@ where
           | Inr val \<Rightarrow> Inr (Continue (bind_const_local varName val state)))
         else
           \<comment> \<open>Base variable is writable: use interp_lvalue (in writable mode) to
-             get the address and path, and store those in IS_Refs. \<close>
+             get the address and path, and store those in IS_Refs.
+
+             Also call interp_term, throwing away the result, but propagating any error
+             it returns -- this ensures that a bad reference, such as `a[10]` where 10
+             is out of bounds for the array, fails immediately, rather than when it is
+             first used.\<close>
           (case interp_lvalue d fuel True (raise_mode state declGhost) lvalueTm of
-            Inr addrAndPath \<Rightarrow> Inr (Continue (bind_ref varName addrAndPath state))
+            Inr addrAndPath \<Rightarrow>
+              (case interp_term d fuel (raise_mode state declGhost) lvalueTm of
+                Inr _ \<Rightarrow> Inr (Continue (bind_ref varName addrAndPath state))
+              | Inl err \<Rightarrow> Inl err)
           | Inl err \<Rightarrow> Inl err)
     | None \<Rightarrow> Inl TypeError)"
 

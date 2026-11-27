@@ -1522,9 +1522,23 @@ next
                                   = interp_writable_lvalue d fuel (raise_mode state declGhost) lvalueTm"
           using "30.IH" Some False lv_noFuel by blast
         from IH_lv f''_ge
-        have "interp_writable_lvalue d f'' (raise_mode state declGhost) lvalueTm = interp_writable_lvalue d fuel (raise_mode state declGhost) lvalueTm"
+        have lv_eq: "interp_writable_lvalue d f'' (raise_mode state declGhost) lvalueTm = interp_writable_lvalue d fuel (raise_mode state declGhost) lvalueTm"
           by metis
-        then show ?thesis using f'_eq Some False by (auto split: sum.splits)
+        show ?thesis
+        proof (cases "interp_writable_lvalue d fuel (raise_mode state declGhost) lvalueTm")
+          case (Inl err)
+          then show ?thesis using lv_eq f'_eq Some False by (auto split: sum.splits)
+        next
+          case (Inr addrPath)
+          (* The lvalue resolved: both sides evaluate the term as an rvalue as well *)
+          have tm_noFuel: "interp_term d fuel (raise_mode state declGhost) lvalueTm \<noteq> Inl InsufficientFuel"
+            using noFuel Some False Inr by (auto split: sum.splits)
+          have IH_tm: "\<forall>f'\<ge>fuel. interp_term d f' (raise_mode state declGhost) lvalueTm = interp_term d fuel (raise_mode state declGhost) lvalueTm"
+            using "30.IH"(3) Some False Inr tm_noFuel by blast
+          from IH_tm f''_ge
+          have "interp_term d f'' (raise_mode state declGhost) lvalueTm = interp_term d fuel (raise_mode state declGhost) lvalueTm" by metis
+          then show ?thesis using lv_eq f'_eq Some False Inr by (auto split: sum.splits)
+        qed
       qed
     qed
   qed
@@ -2946,9 +2960,23 @@ next
                                 = interp_writable_lvalue d fuel (raise_mode state declGhost) lvalueTm"
           using "30.IH" Some False lv_noFuel by blast
         from IH_lv d'_ge
-        have "interp_writable_lvalue d' fuel (raise_mode state declGhost) lvalueTm = interp_writable_lvalue d fuel (raise_mode state declGhost) lvalueTm"
+        have lv_eq: "interp_writable_lvalue d' fuel (raise_mode state declGhost) lvalueTm = interp_writable_lvalue d fuel (raise_mode state declGhost) lvalueTm"
           by metis
-        then show ?thesis using Some False by (auto split: sum.splits)
+        show ?thesis
+        proof (cases "interp_writable_lvalue d fuel (raise_mode state declGhost) lvalueTm")
+          case (Inl err)
+          then show ?thesis using lv_eq Some False by (auto split: sum.splits)
+        next
+          case (Inr addrPath)
+          (* The lvalue resolved: both sides evaluate the term as an rvalue as well *)
+          have tm_noFuel: "interp_term d fuel (raise_mode state declGhost) lvalueTm \<noteq> Inl InsufficientFuel"
+            using "30.prems" Some False Inr by (auto split: sum.splits)
+          have IH_tm: "\<forall>d'\<ge>d. interp_term d' fuel (raise_mode state declGhost) lvalueTm = interp_term d fuel (raise_mode state declGhost) lvalueTm"
+            using "30.IH"(3) Some False Inr tm_noFuel by blast
+          from IH_tm d'_ge
+          have "interp_term d' fuel (raise_mode state declGhost) lvalueTm = interp_term d fuel (raise_mode state declGhost) lvalueTm" by metis
+          then show ?thesis using lv_eq Some False Inr by (auto split: sum.splits)
+        qed
       qed
     qed
   qed

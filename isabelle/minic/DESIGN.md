@@ -859,6 +859,28 @@ during `r`'s lifetime, Core raises `RuntimeError` on the next use, so no
 correspondence is required; if it is overwritten with the same constructor,
 both sides read the new payload.
 
+*A `ref` local is valid where it is declared.* The non-lazy lowering
+computes the address at the declaration (`lower_addr`), and pointer
+arithmetic that leaves the block is undefined in MiniC (`ptr_add`, section
+2.5) even if the pointer is never used. So Core must not accept a
+declaration whose path does not resolve. `interp_lvalue` alone does not say
+so: it evaluates the indices but does not look at the value the path leads
+into, so `ref r = a[20]` resolves for an `a` of ten elements. The `VarDecl
+Ref` equation of `interp_statement` therefore evaluates the term as an
+rvalue as well (`interp_term`, in the same state and mode) and requires
+that to succeed; the value is not used, and the term stays in a place
+position (no `value_position` check, so a `ref` to an allocated element is
+legal). An out-of-bounds index, a projection of the wrong constructor or
+an array cast to the wrong size is thus a `RuntimeError` at the
+declaration, whether or not the reference is used later. This is the rule
+a `ref` *argument* already had (`process_one_arg` requires both results,
+section 3.4), and a `ref` to a read-only base had it too, because that
+branch copies the value. It holds for a lazy reference as well, although
+the lazy lowering computes no address at the declaration. The check is
+about the declaration only: a reference can still stop resolving later
+(the variant is re-tagged, or the array is reallocated to a smaller
+size), and that is an error at the next use, as described above.
+
 *A `ref` to a read-only base* (a const local or a global): Core copies the
 value (`bind_const_local`) instead of aliasing. The generated code aliases
 (a pointer into the base). The two agree because neither the base nor the
@@ -1987,7 +2009,8 @@ could not change in that stage) and fixed afterwards:
 
 Fixed between stages 5 and 6 (before the simulation proof, so that the
 interpreter is the semantics we want and both compilers implement it; the
-first and the third are changes to Core's semantics, the second is not):
+first, the third and the fourth are changes to Core's semantics, the
+second is not):
 
 - **An assignment from a call evaluates the right-hand side first.** For
   `lv = f(args);` where the call has side effects (in Core,
@@ -2081,6 +2104,28 @@ first and the third are changes to Core's semantics, the second is not):
   `test/cases/typechecker/ConstModOverflow.b`, and
   `test/cases/codegen/ModBoundary.b` for the operand pairs next to the
   forbidden one, at run time.
+- **A `ref` declaration checks that the reference is valid.** For `ref r
+  = a[i];` with `a` writable, `i` out of bounds and `r` never used,
+  `interp_statement` bound the reference without looking at the path (an
+  invalid path was an error only where `r` was used), so the run was
+  normal; the non-lazy lowering computes `a + |T| * i` at the declaration,
+  which is undefined in MiniC (`ptr_add`) and in C. The verifier rejects
+  the declaration ("Array index might be out of bounds"; `f4` of
+  `test/cases/verifier/Ref.b`), so no verified program was affected, but
+  the simulation theorem is about every normal Core run. The rule, decided
+  by the project owner on 2026-11-27, is the verifier's: the reference
+  must be valid where it is declared. The `VarDecl Ref` equation now
+  evaluates the term as an rvalue too, in its writable-base branch
+  (section 3.5); `ref` arguments and `ref`s to a read-only base already
+  did. The change only turns normal runs into `RuntimeError`s, so the
+  generator is unchanged. No theorem statement changed: fuel and depth
+  monotonicity, type soundness, the frame, static-parts and world lemmas,
+  ghost invisibility, the erasure simulation and the match-compiler
+  simulation were re-proved with the extra evaluation. Nothing the
+  elaborator produces is affected except the declaration above: the
+  `ref`s it makes for the scrutinee and the pattern variables of a `match`
+  statement are read at once, or are projections that the pattern has
+  already tested.
 
 Still proposed / deferred:
 
