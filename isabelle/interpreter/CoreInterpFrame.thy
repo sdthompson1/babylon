@@ -782,15 +782,16 @@ next
             show ?thesis by (rule frame_step_bind_fresh[OF store' locals' refs'])
           next
             case False
-            with Ref H CoreStmt_VarDecl base obtain addrPath where
-              lv: "interp_writable_lvalue d fuel (raise_mode state g) initTm = Inr addrPath"
+            with Ref H CoreStmt_VarDecl base obtain addrPath tmVal where
+              lv: "interp_writable_lvalue d fuel (raise_mode state g) initTm = Inr addrPath" and
+              tv: "interp_term d fuel (raise_mode state g) initTm = Inr tmVal"
               by (auto split: sum.splits)
             obtain addr path where ap: "addrPath = (addr, path)" by (cases addrPath)
             from lv ap have lv': "interp_writable_lvalue d fuel (raise_mode state g) initTm = Inr (addr, path)"
               by simp
             have addr_in: "addr \<in> frame_addrs state"
               using interp_writable_lvalue_in_frame[OF lv'] by simp
-            from Ref H[symmetric] CoreStmt_VarDecl base False lv' have
+            from Ref H[symmetric] CoreStmt_VarDecl base False lv' tv have
               store': "IS_Store (result_state res) = IS_Store state" and
               locals': "IS_Locals (result_state res) = fmdrop varName (IS_Locals state)" and
               refs': "IS_Refs (result_state res) = fmupd varName (addr, path) (IS_Refs state)"

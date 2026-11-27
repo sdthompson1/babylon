@@ -852,9 +852,13 @@ next
                               \<or> (fmlookup (IS_Locals erased) baseName = None
                                  \<and> fmlookup (IS_Refs erased) baseName = None))"
                 unfolding condEq by (rule False)
-              from Ref H CoreStmt_VarDecl base False obtain addrPath where
-                lv0: "interp_writable_lvalue d fuel ?fX initTm = Inr addrPath"
+              from Ref H CoreStmt_VarDecl base False obtain addrPath tmVal where
+                lv0: "interp_writable_lvalue d fuel ?fX initTm = Inr addrPath" and
+                tv: "interp_term d fuel ?fX initTm = Inr tmVal"
                 by (auto split: sum.splits)
+              \<comment> \<open>The term evaluates as an rvalue too (the check that the
+                  reference is valid), and so does the erased term. \<close>
+              note tvE = subX[OF iW tv]
               obtain addr path where ap: "addrPath = (addr, path)" by (cases addrPath)
               from lv0 ap
               have wl: "interp_writable_lvalue d fuel ?fX initTm = Inr (addr, path)"
@@ -863,17 +867,17 @@ next
                 wlE: "interp_writable_lvalue d fuel ?eX (?er initTm) = Inr (i, path)" and
                 i_lt: "i < length emb" and ei: "emb ! i = addr"
                 by blast
-              from Ref H[symmetric] CoreStmt_VarDecl base False wl
+              from Ref H[symmetric] CoreStmt_VarDecl base False wl tv
               have cF: "is_continue res"
                 and stepF: "ref_binding_step varName addr path full (result_state res)"
                 and ncF: "varName |\<notin>| IS_ConstLocals (result_state res)"
                 by (simp_all add: ref_binding_step_def static_parts_eq_def)
               have "\<exists>resE. interp_statement d (Suc fuel) erased stmt' = Inr resE"
-                using base condE wlE by (auto simp: stmt'_eq Ref)
+                using base condE wlE tvE by (auto simp: stmt'_eq Ref)
               then obtain resE where
                 HE: "interp_statement d (Suc fuel) erased stmt' = Inr resE"
                 by blast
-              from Ref HE[symmetric] stmt'_eq base condE wlE
+              from Ref HE[symmetric] stmt'_eq base condE wlE tvE
               have cE: "is_continue resE"
                 and stepE: "ref_binding_step varName i path erased (result_state resE)"
                 and ncE: "varName |\<notin>| IS_ConstLocals (result_state resE)"

@@ -971,15 +971,16 @@ next
             show ?thesis by (rule conjI[OF c rel'])
           next
             case False
-            with Ref H CoreStmt_VarDecl base obtain addrPath where
-              lv: "interp_writable_lvalue d fuel (raise_mode full g) initTm = Inr addrPath"
+            with Ref H CoreStmt_VarDecl base obtain addrPath tmVal where
+              lv: "interp_writable_lvalue d fuel (raise_mode full g) initTm = Inr addrPath" and
+              tv: "interp_term d fuel (raise_mode full g) initTm = Inr tmVal"
               by (auto split: sum.splits)
             obtain addr path where ap: "addrPath = (addr, path)" by (cases addrPath)
             from lv ap have wl: "interp_writable_lvalue d fuel (raise_mode full g) initTm = Inr (addr, path)"
               by simp
             \<comment> \<open>The new ref points into the cell of a ghost variable. \<close>
             note sep = ghost_lvalue_addr_separate[OF ghg glv wl, simplified]
-            from Ref H[symmetric] CoreStmt_VarDecl base False wl have
+            from Ref H[symmetric] CoreStmt_VarDecl base False wl tv have
               c: "is_continue res" and
               world: "IS_World (result_state res) = IS_World full" and
               store': "IS_Store (result_state res) = IS_Store full" and

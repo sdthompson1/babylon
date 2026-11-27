@@ -1968,7 +1968,9 @@ where
      writable), but it is something to keep in mind.
 
      This function also doesn't check for "bad paths" (e.g. an incorrect field name, or an
-     array index out of range); that happens later, when the path is used. It does, however,
+     array index out of range); that happens later, when the path is used. (A Ref declaration
+     and a Ref argument of a call evaluate the term as an rvalue as well, which finds a bad
+     path at the point where the reference is made.) It does, however,
      check whether the base variable name exists (in IS_Locals or IS_Refs) and whether any
      array indices can be successfully evaluated. The index terms are in value
      positions. *)
@@ -2075,9 +2077,18 @@ where
           | Inr val \<Rightarrow> Inr (Continue (bind_const_local varName val state)))
         else
           \<comment> \<open>Base variable is writable: use interp_lvalue (in writable mode) to
-             get the address and path, and store those in IS_Refs. \<close>
+             get the address and path, and store those in IS_Refs.
+
+             The term must evaluate as an rvalue too, although the value is not
+             used. This is the check that the reference is valid where it is made:
+             `a[10]` resolves as an lvalue even if 10 is out of bounds for the
+             array, but fails as an rvalue. (A Ref argument of a call is treated
+             in the same way: see interp_function_call and process_one_arg.) \<close>
           (case interp_lvalue d fuel True (raise_mode state declGhost) lvalueTm of
-            Inr addrAndPath \<Rightarrow> Inr (Continue (bind_ref varName addrAndPath state))
+            Inr addrAndPath \<Rightarrow>
+              (case interp_term d fuel (raise_mode state declGhost) lvalueTm of
+                Inr _ \<Rightarrow> Inr (Continue (bind_ref varName addrAndPath state))
+              | Inl err \<Rightarrow> Inl err)
           | Inl err \<Rightarrow> Inl err)
     | None \<Rightarrow> Inl TypeError)"
 

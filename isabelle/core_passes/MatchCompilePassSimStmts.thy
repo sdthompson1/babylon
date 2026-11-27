@@ -285,14 +285,24 @@ next
   next
     case False
     \<comment> \<open>A writable base: the ref aliases it.\<close>
-    from ev base False obtain ap where ap: "interp_writable_lvalue d fuel full initTm = Inr ap"
+    from ev base False obtain ap v where ap: "interp_writable_lvalue d fuel full initTm = Inr ap"
+      and v: "interp_term d fuel full initTm = Inr v"
       and res_eq: "res = Continue (bind_ref x ap full)"
       by (auto split: sum.splits)
     from lvalue_simD[OF IHl fe fs sme wf gm t ok' ap] obtain f1 where
       f1: "interp_writable_lvalue d f1 (mc_state full) ?init' = Inr ap" by auto
-    have "interp_statement d (Suc f1) (mc_state full) (CoreStmt_VarDecl g x Ref ty ?init')
+    \<comment> \<open>The term evaluates as an rvalue too (the check that the reference is
+        valid), in both runs.\<close>
+    from term_simD[OF IH fe fs sme wf gm t ok' v] obtain f2 where
+      f2: "interp_term d f2 (mc_state full) ?init' = Inr v" by auto
+    let ?F = "max f1 f2"
+    have f1': "interp_writable_lvalue d ?F (mc_state full) ?init' = Inr ap"
+      by (rule interp_writable_lvalue_Inr_more_fuel[OF f1]) simp
+    have f2': "interp_term d ?F (mc_state full) ?init' = Inr v"
+      by (rule interp_term_Inr_more_fuel[OF f2]) simp
+    have "interp_statement d (Suc ?F) (mc_state full) (CoreStmt_VarDecl g x Ref ty ?init')
             = Inr (mc_result res)"
-      using f1 res_eq base' False by auto
+      using f1' f2' res_eq base' False by auto
     thus ?thesis by blast
   qed
 qed

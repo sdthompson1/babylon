@@ -314,10 +314,11 @@ next
               by (simp add: static_parts_eq_def Let_def)
           next
             case False
-            with Ref H CoreStmt_VarDecl base obtain addrPath where
-              lv: "interp_writable_lvalue d fuel (raise_mode state g) initTm = Inr addrPath"
+            with Ref H CoreStmt_VarDecl base obtain addrPath tmVal where
+              lv: "interp_writable_lvalue d fuel (raise_mode state g) initTm = Inr addrPath" and
+              tv: "interp_term d fuel (raise_mode state g) initTm = Inr tmVal"
               by (auto split: sum.splits)
-            from Ref H[symmetric] CoreStmt_VarDecl base False lv show ?thesis
+            from Ref H[symmetric] CoreStmt_VarDecl base False lv tv show ?thesis
               by (simp add: static_parts_eq_def)
           qed
         qed
