@@ -1727,9 +1727,8 @@ static void codegen_let(struct CGContext *cxt,
                         enum TermMode mode,
                         struct Term *term)
 {
-    char temp_name[TEMP_NAME_LEN];
-    get_temp_name(cxt, temp_name);
-
+    // Bind the name. The right-hand side does not need to be copied
+    // (as it will outlive the body).
     begin_item(cxt->pr);
     codegen_type(cxt, term->let.rhs->type);
     char *mangled_name = mangle_name(term->let.name);
@@ -1741,7 +1740,23 @@ static void codegen_let(struct CGContext *cxt,
     new_line(cxt->pr);
     end_item(cxt->pr);
 
-    codegen_term(cxt, pri, mode, term->let.body);
+    if (is_scalar_type(cxt, term->type)) {
+        // mode is always MODE_VALUE here (see codegen_term)
+        codegen_term(cxt, pri, mode, term->let.body);
+
+    } else {
+        // An aggregate let body is always copied to a temporary - it would not
+        // be sound, in general, to do otherwise. (E.g. consider `f(p, let n=1 in p)`
+        // where the first arg is `ref` and `p` has an aggregate type. If
+        // `let n=1 in p` just evaluated to the address of `p`, this would alias
+        // the other `p` argument, which would create problems.)
+        // Perhaps, in some cases, it would be possible to optimize away the copy,
+        // but we do not attempt that here.
+        char result_name[TEMP_NAME_LEN];
+        make_temporary(cxt, result_name, term->type);
+        copy_term_to_variable(cxt, result_name, false, term->let.body);
+        print_token(cxt->pr, result_name);
+    }
 }
 
 static const char * get_function_name(struct Term *term)

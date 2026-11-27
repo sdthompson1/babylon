@@ -1148,11 +1148,26 @@ static struct Term * compile_match_term(uint64_t *name_counter, struct Term *ter
     struct MC_Output *output = compile_clauses(clauses, name_counter, free_term_aux, copy_term_aux);
     post_process(output, free_term_aux);
 
+    // If the match is "trivial" (just compiles to its rhs), as in `match c { case _ => p }`
+    // for example, then we compile to `let match@@N = c in p`, rather than just `p`.
+    // This ensures that the match compiler always preserves whether or not a term is an
+    // lvalue, which is important for some things (e.g. the verifier's aliasing check).
+    bool output_is_bare_rhs = output && output->tag == MC_RHS && output->lets == NULL;
+    if (output_is_bare_rhs && !scrut_temp_name) {
+        char buf[40];
+        sprintf(buf, "match@@%" PRIu64, (*name_counter)++);
+        scrut_temp_name = copy_string(buf);
+    }
+
     struct Term *result = output_to_term(output, &term->location, term->type);
-    result->location = term->location;
+
+    // Set a better location for error messages. Purely cosmetic.
+    if (!output_is_bare_rhs) {
+        result->location = term->location;
+    }
 
     if (scrut_temp_name) {
-        struct Term *let = make_term(result->location, TM_LET);
+        struct Term *let = make_term(term->location, TM_LET);
         let->type = copy_type(result->type);
         let->let.name = scrut_temp_name;
         let->let.rhs = copy_term(term->match.scrutinee);
