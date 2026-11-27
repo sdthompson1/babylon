@@ -1148,30 +1148,10 @@ static struct Term * compile_match_term(uint64_t *name_counter, struct Term *ter
     struct MC_Output *output = compile_clauses(clauses, name_counter, free_term_aux, copy_term_aux);
     post_process(output, free_term_aux);
 
-    // A match term is never an lvalue, and its arms are value positions
-    // (the result of the match is a copy of the chosen arm). The compiled
-    // term must keep both properties, because the passes that run after
-    // this one rely on them: the verifier's aliasing check looks only at
-    // arguments that are lvalues, and its "Can't copy" check looks only at
-    // value positions.
-    //
-    // Most outputs are fine as they are: the compiled term is a TM_MATCH,
-    // TM_IF or TM_LET with the arms in its value positions. The exception
-    // is a match that needs no tests and binds no variables, such as
-    // `match c { case _ => p }` or `match r { case {_, _} => p }`. Its
-    // output is just the right-hand side of the first arm, which might be
-    // an lvalue (`p`), and which would then sit in whatever position the
-    // match was in.
-    //
-    // In that case we bind the scrutinee to a temporary name even though it
-    // is already a variable, giving `let match@@N = c in p`. This is the
-    // same shape that a non-variable scrutinee gives.
-    //
-    // (The Isabelle compiler has the same rule; see compile_match_term in
-    // isabelle/core_passes/MatchCompilePass.thy. There, the arm is wrapped
-    // in a match with a single wildcard arm. We cannot do that here because
-    // the later passes of this compiler expect the scrutinee of a TM_MATCH
-    // to be a variant.)
+    // If the match is "trivial" (just compiles to its rhs), as in `match c { case _ => p }`
+    // for example, then we compile to `let match@@N = c in p`, rather than just `p`.
+    // This ensures that the match compiler always preserves whether or not a term is an
+    // lvalue, which is important for some things (e.g. the verifier's aliasing check).
     bool output_is_bare_rhs = output && output->tag == MC_RHS && output->lets == NULL;
     if (output_is_bare_rhs && !scrut_temp_name) {
         char buf[40];
@@ -1181,9 +1161,7 @@ static struct Term * compile_match_term(uint64_t *name_counter, struct Term *ter
 
     struct Term *result = output_to_term(output, &term->location, term->type);
 
-    // The compiled term takes the location of the original match. (A bare
-    // right-hand side keeps its own location; the 'let' made below is the
-    // compiled term in that case.)
+    // Set a better location for error messages. Purely cosmetic.
     if (!output_is_bare_rhs) {
         result->location = term->location;
     }

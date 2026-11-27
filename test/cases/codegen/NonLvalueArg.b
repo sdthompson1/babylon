@@ -17,10 +17,6 @@ module NonLvalueArg
 // passes the address of the variable instead, then the callee's write shows
 // through the by-value argument, and the program prints 5 where the verifier
 // proved 0.
-//
-// (The calls marked "shares" below are the ones that printed 5 from the C
-// compiler when this test was written. The Isabelle compiler printed 5 at
-// those of them that are written with 'let', and 0 at the 'match' ones.)
 
 interface { function main(); }
 
@@ -73,45 +69,48 @@ function main()
     var r: {i32, i32} = {1, 2};
 
 
-    // 'let' expressions
+    // 'let' expressions. The code generator must copy the let body ("p") into new
+    // storage, so as not to alias the first argument (another instance of "p", passed
+    // by reference).
 
     var p: P = {x = 0, y = 0};
 
-    var v1 = f(p, let n = 1 in p);                    // shares
+    var v1 = f(p, let n = 1 in p);
     assert v1 == 0;
     print_i32(v1);
     p.x = 0;
 
-    var v2 = f(p, let q = p in q);                    // shares
+    var v2 = f(p, let q = p in q);
     assert v2 == 0;
     print_i32(v2);
     p.x = 0;
 
-    var v3 = f(p, let n = 1 in let k = 2 in p);       // shares
+    var v3 = f(p, let n = 1 in let k = 2 in p);
     assert v3 == 0;
     print_i32(v3);
     p.x = 0;
 
 
-    // 'match' expressions that need no test. (The match compiler turns
-    // these into 'let' expressions.)
+    // "Trivial" match expressions (i.e. those that need no test). The code generator
+    // must be careful to copy the match body ("p") into new storage, so as not to
+    // alias the other instance of "p".
 
-    var v4 = f(p, match c { case _ => p });           // shares
+    var v4 = f(p, match c { case _ => p });
     assert v4 == 0;
     print_i32(v4);
     p.x = 0;
 
-    var v5 = f(p, match true { case _ => p });        // shares
+    var v5 = f(p, match true { case _ => p });
     assert v5 == 0;
     print_i32(v5);
     p.x = 0;
 
-    var v6 = f(p, match p { case q => q });           // shares
+    var v6 = f(p, match p { case q => q });
     assert v6 == 0;
     print_i32(v6);
     p.x = 0;
 
-    var v7 = f(p, match r { case {_, _} => p });      // shares
+    var v7 = f(p, match r { case {_, _} => p });
     assert v7 == 0;
     print_i32(v7);
     p.x = 0;
@@ -144,29 +143,29 @@ function main()
 
     var q: Q = {p = {x = 0, y = 0}, n = 0};
 
-    var w1 = f_field(q, (let n = 1 in q).p);          // shares
+    var w1 = f_field(q, (let n = 1 in q).p);
     assert w1 == 0;
     print_i32(w1);
     q.p.x = 0;
 
-    var w2 = f_field(q, let n = 1 in q.p);            // shares
+    var w2 = f_field(q, let n = 1 in q.p);
     assert w2 == 0;
     print_i32(w2);
     q.p.x = 0;
 
-    var w3 = f_field(q, (match c { case _ => q }).p); // shares
+    var w3 = f_field(q, (match c { case _ => q }).p);
     assert w3 == 0;
     print_i32(w3);
     q.p.x = 0;
 
     var ps: P[3];
 
-    var u1 = f_elem(ps, (let n = 1 in ps)[1]);        // shares
+    var u1 = f_elem(ps, (let n = 1 in ps)[1]);
     assert u1 == 0;
     print_i32(u1);
     ps[1].x = 0;
 
-    var u2 = f_elem(ps, let n = 1 in ps[1]);          // shares
+    var u2 = f_elem(ps, let n = 1 in ps[1]);
     assert u2 == 0;
     print_i32(u2);
     ps[1].x = 0;
@@ -177,17 +176,17 @@ function main()
 
     var xs: i32[3];
 
-    var t1 = f_array(xs, let n = 1 in xs);            // shares
+    var t1 = f_array(xs, let n = 1 in xs);
     assert t1 == 0;
     print_i32(t1);
     xs[0] = 0;
 
-    var t2 = f_array(xs, match c { case _ => xs });   // shares
+    var t2 = f_array(xs, match c { case _ => xs });
     assert t2 == 0;
     print_i32(t2);
     xs[0] = 0;
 
-    var t3 = f_incomplete(xs, let n = 1 in xs);       // shares
+    var t3 = f_incomplete(xs, let n = 1 in xs);
     assert t3 == 0;
     print_i32(t3);
     xs[0] = 0;

@@ -1727,8 +1727,8 @@ static void codegen_let(struct CGContext *cxt,
                         enum TermMode mode,
                         struct Term *term)
 {
-    // Bind the name. The right-hand side is not copied: for an aggregate,
-    // the name is a pointer to wherever the right-hand side is.
+    // Bind the name. The right-hand side does not need to be copied
+    // (as it will outlive the body).
     begin_item(cxt->pr);
     codegen_type(cxt, term->let.rhs->type);
     char *mangled_name = mangle_name(term->let.name);
@@ -1741,20 +1741,17 @@ static void codegen_let(struct CGContext *cxt,
     end_item(cxt->pr);
 
     if (is_scalar_type(cxt, term->type)) {
-        // (mode is always MODE_VALUE here, because a 'let' is not an lvalue;
-        // see codegen_term.)
+        // mode is always MODE_VALUE here (see codegen_term)
         codegen_term(cxt, pri, mode, term->let.body);
 
     } else {
-        // The result of a 'let' is a value of its own, not a name for
-        // whatever its body is. So an aggregate result is copied into a
-        // temporary, as codegen_if and codegen_match do with their results.
-        //
-        // Without the copy, `f(p, let n = 1 in p)` would pass the address
-        // of p twice. If f takes its first argument by 'ref', then a write
-        // through it would show through the second argument, which is
-        // supposed to be a copy. (The aliasing rule does not exclude such a
-        // call, because the second argument is not an lvalue.)
+        // An aggregate let body is always copied to a temporary - it would not
+        // be sound, in general, to do otherwise. (E.g. consider `f(p, let n=1 in p)`
+        // where the first arg is `ref` and `p` has an aggregate type. If
+        // `let n=1 in p` just evaluated to the address of `p`, this would alias
+        // the other `p` argument, which would create problems.)
+        // Perhaps, in some cases, it would be possible to optimize away the copy,
+        // but we do not attempt that here.
         char result_name[TEMP_NAME_LEN];
         make_temporary(cxt, result_name, term->type);
         copy_term_to_variable(cxt, result_name, false, term->let.body);

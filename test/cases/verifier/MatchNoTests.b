@@ -1,19 +1,18 @@
 module MatchNoTests
 
-// A 'match' expression that needs no test, such as `match c { case _ => p }`,
-// is still a 'match' expression as far as the verifier is concerned:
+// A "trivial" match (one that needs no test), such as `match c { case _ => p }`,
+// must still be treated as a match expression by the verifier -- i.e. it must
+// not be simplified down to its body, "p", even though this might seem like a
+// reasonable thing to do:
 //
-//  - It is not an lvalue, so it never aliases anything. (The match compiler
-//    used to reduce such a match to the bare variable 'p', and the verifier
-//    then reported an aliasing violation where there was none.)
+//  - `match c { case _ => p }` is not an lvalue, so it never aliases anything;
+//    but `p` is an lvalue, so it could trigger an aliasing violation.
 //
-//  - Its arm is a value position, so the arm must not be allocated in
-//    executable code. (With the match reduced to 'p', the variable was
-//    wrongly treated as being in the position of the whole match, which
-//    might be a place position, and the check was skipped.)
+//  - The `p` in `match c { case _ => p }` is in a value position, so it cannot
+//    be allocated in executable code; if the expression was reduced to `p` then
+//    this check might be skipped (if the match itself was in a place position).
 //
-// See also ValuePosAlloc.b, and codegen/NonLvalueArg.b for what the accepted
-// calls must do at run time.
+// See also ValuePosAlloc.b and codegen/NonLvalueArg.b.
 
 interface {}
 
@@ -62,8 +61,8 @@ function alias_field(c: bool, ref q: {p: P, n: i32}): i32
     return f(q.p, (match c { case _ => q }).p);       // OK
 }
 
-// These were not reduced to a bare variable even before, and are here for
-// comparison.
+
+// Other forms, for comparison.
 function alias_other_forms(c: bool, ref p: P): i32
 {
     var v1 = f(p, match true { case _ => p });        // OK
